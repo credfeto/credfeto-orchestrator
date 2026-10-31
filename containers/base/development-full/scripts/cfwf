@@ -352,8 +352,12 @@ Commands:
   issue label-history      Print when each label was added to or removed from an issue or PR, and by whom (exit 9 when not found)
   issue edit               Change an issue's title or body, or assign the agent (exit 8 when refused, 9 when not found)
   issue reopen             Reopen a closed issue, with an optional comment first (exit 8 when refused, 9 when not found)
+  issue close              Close an issue with a reason, with an optional comment first (exit 8 when refused, 9 when not found)
   issue comments           Print an issue's or PR's top-level comments with their bodies, oldest first (exit 9 when not found)
   issue add-sub-issue      Link an issue to a parent issue as its sub-issue (exit 8 when refused, 9 when not found)
+  label add                Add standard labels to an issue or PR, one gh call a label (exit 8 when refused, 9 when not found)
+  label remove             Remove labels from an issue or PR: never On Hold, Blocked only when the agent added it (exit 8 refused, 9 not found)
+  label list               List a repository's label names, one a line
   body check               Check a body for leaks without posting it (exit 8 when refused)
   repo view                Print a repository's default branch, visibility, merge methods and description
   repo collaborators       List a repository's collaborators and their roles, sorted by login in the C locale
@@ -746,6 +750,43 @@ request's.
 USAGE
 }
 
+usage_issue_close() {
+    cat << USAGE
+Usage: cfwf issue close --repo <owner/repo> --issue <n> --reason <completed|not-planned> [--body-file <file|->]
+
+Closes an open issue with a reason, then prints its URL and the reason.
+
+--repo       Always required; never taken from the current directory.
+--issue      Always required: the issue's number, above 0. A pull request's number is refused (use
+             'cfwf pr close').
+--reason     Always required: completed (the work is done) or not-planned (it will not be done).
+             There is no duplicate: use not-planned and name the other issue in the comment.
+--body-file  Optional: why it is closed, a regular file, or - to read it from stdin. It is posted as
+             a comment before the issue is closed, so the reason is there first. It is checked as
+             'cfwf comment add' checks a body: for leaks (see 'cfwf help body') and for the
+             plan-approval keywords. There is no --body or --comment.
+
+Everything is checked before anything is written: the body first, then the issue, read once, then
+the state of each pull request that references it with a closing keyword. The close is refused,
+with nothing written, when:
+  the issue carries On Hold         a human has put it on hold
+  an open pull request closes it    a pull request that references it with a closing keyword is
+                                    still open, and closes it when it merges
+An issue that is already closed is left alone, the comment included, and prints "<url> already
+closed".
+
+The pre-closure decision check also forbids closing an issue while an open question flagged in its
+plan is unresolved. That is a judgement this command cannot make: make it before running it.
+
+Output, one line: "<url> closed (<reason>)", or "<url> already closed".
+
+Exit codes: 0 closed, or already closed; 1 a runtime failure, such as a gh or network error,
+prefixed "cfwf:" (when the comment was posted and the close then failed, the message says so); 2 a
+usage error; ${POLICY_REFUSED_EXIT} refused, with "cfwf: close refused: <rule>" (or "cfwf: body refused: <rule>") on
+stderr and nothing written; ${ISSUE_NOT_FOUND_EXIT} the issue does not exist, or the number is a pull request's.
+USAGE
+}
+
 usage_issue_comments() {
     cat << USAGE
 Usage: cfwf issue comments --repo <owner/repo> --issue <n> [--since <time>] [--author <login>]
@@ -847,6 +888,8 @@ usage_issue() {
     printf '\n'
     usage_issue_reopen
     printf '\n'
+    usage_issue_close
+    printf '\n'
     usage_issue_comments
     printf '\n'
     usage_issue_add_sub_issue
@@ -887,6 +930,111 @@ was refused by the leak check; 1 a runtime failure, such as a gh or network erro
 that was not found, prefixed "cfwf:"; 2 a usage error, a colour that is not six hexadecimal digits
 included.
 USAGE
+}
+
+# The usage of label add ($1 add) or label remove ($1 remove).
+usage_label_change() {
+    local change="$1"
+    cat << USAGE
+Usage: cfwf label ${change} --repo <owner/repo> (--issue <n> | --pr <n>) --label <name> [--label <name> ...]
+
+USAGE
+    if [ "${change}" = add ]; then
+        cat << 'USAGE'
+Adds labels to an issue or a pull request, one gh call a label, then prints what changed and the
+labels the item now carries.
+USAGE
+    else
+        cat << 'USAGE'
+Removes labels from an issue or a pull request, one gh call a label, then prints what changed and
+the labels the item now carries.
+USAGE
+    fi
+    cat << USAGE
+
+--repo   Always required; never taken from the current directory.
+--issue  The issue's number, above 0; or
+--pr     the pull request's number, above 0. Exactly one of --issue and --pr.
+--label  Always required, and repeatable: one label a --label, never a comma-joined list. Each must
+         be one of the standard labels (as .github/labels.yml has them), matched without regard to
+         case and written in its standard spelling; a label given twice is changed once. A
+         priority label (${PRIORITY_LIST}) is refused: label add and
+         label remove never change an item's priority.
+--json, --jq and --web are not options.
+
+USAGE
+    if [ "${change}" = add ]; then
+        cat << 'USAGE'
+Every label must already exist in the repository: label add creates none, and refuses one the
+repository does not have. A label the item was read to carry prints "present"; it is added either
+way, which GitHub treats as no change, so running it again changes nothing.
+USAGE
+    else
+        cat << 'USAGE'
+Two labels belong to a human:
+  On Hold  is never removed: a human sets it and lifts it, so a --label On Hold is refused before
+           gh is called.
+  Blocked  is removed only when the last time it was added to the item (its timeline, as
+           'cfwf issue label-history' reads it) it was added by the agent's own login. A Blocked a
+           human added is lifted by that human. This is checked whatever the item was read to
+           carry, so a read that lags behind a write can never let it through.
+A label the item was read not to carry prints "absent"; it is removed either way (GitHub treats
+that as no change), unless the repository has no such label or the timeline shows Blocked was
+never added. Running it again changes nothing.
+USAGE
+    fi
+    cat << USAGE
+
+Everything is checked before anything is written: each --label, then the item, read once, then the
+repository's labels, then (for a Blocked to remove) the agent's login and the item's timeline. A
+refusal writes nothing.
+
+Output: "url", a tab and the item's URL; then one line a --label, "${change}", a tab, the label, a
+tab and what the read before the write showed (added or present for add, removed or absent for
+remove); then one line a label the item now carries, "label", a tab and its name. The labels are
+worked out from those read and the changes made, not read again, because GitHub can lag behind a
+write.
+
+Exit codes: 0 done (nothing to change included); 1 a runtime failure, such as a gh or network error,
+prefixed "cfwf:" (when it fails part way, the message names the labels already changed); 2 a usage
+error; ${POLICY_REFUSED_EXIT} refused, with "cfwf: label refused: <rule>" on stderr and nothing written; ${ISSUE_NOT_FOUND_EXIT} the issue or
+pull request does not exist, or the number is of the other kind.
+USAGE
+}
+
+usage_label_add() {
+    usage_label_change add
+}
+
+usage_label_remove() {
+    usage_label_change remove
+}
+
+usage_label_list() {
+    cat << USAGE
+Usage: cfwf label list --repo <owner/repo>
+
+Lists a repository's label names, one a line, in the order GitHub gives them.
+
+--repo  Always required; never taken from the current directory. There is no other option: --json,
+        --jq, --limit and --search are not options.
+
+At most ${LABEL_LIMIT} labels are read; when a repository has that many, a warning on stderr says the list may
+be cut. Each name has its control characters printed as spaces.
+
+Exit codes: 0 listed (a repository with no label included); 1 a runtime failure, such as a gh or
+network error or a repository that is not found, prefixed "cfwf:"; 2 a usage error.
+USAGE
+}
+
+usage_label() {
+    usage_label_create
+    printf '\n'
+    usage_label_add
+    printf '\n'
+    usage_label_remove
+    printf '\n'
+    usage_label_list
 }
 
 usage_body() {
@@ -2231,6 +2379,7 @@ usage_for() {
         "issue label-history") usage_issue_label_history ;;
         "issue add-sub-issue") usage_issue_add_sub_issue ;;
         "issue reopen") usage_issue_reopen ;;
+        "issue close") usage_issue_close ;;
         "issue comments") usage_issue_comments ;;
         body | "body check") usage_body ;;
         repo) usage_repo ;;
@@ -2256,7 +2405,11 @@ usage_for() {
         "pr comments") usage_pr_comments ;;
         "pr reply") usage_pr_reply ;;
         comment | "comment add") usage_comment ;;
-        label | "label create") usage_label_create ;;
+        label) usage_label ;;
+        "label create") usage_label_create ;;
+        "label add") usage_label_add ;;
+        "label remove") usage_label_remove ;;
+        "label list") usage_label_list ;;
         release) usage_release ;;
         "release view") usage_release_view ;;
         "release list") usage_release_list ;;
@@ -3105,17 +3258,24 @@ collect_issue_labels() {
     done
 }
 
+# Sets REPO_LABEL_NAMES to the names of the labels of REPO, one a line, in one read of at most
+# LABEL_LIMIT labels. issue create, label add and label list all read the labels this way.
+REPO_LABEL_NAMES=""
+read_repository_label_names() {
+    REPO_LABEL_NAMES=$(gh label list --repo "${REPO}" --limit "${LABEL_LIMIT}" --json name --jq '.[].name') \
+        || die "could not read the labels of ${REPO}"
+}
+
 # Creates every label in ISSUE_LABELS that the repository does not have yet. A label that
 # turns up between the listing and the create ("already exists") is not an error.
 ensure_labels_exist() {
-    local existing_names label output
+    local label output
     local -a create
     local -A existing=()
-    existing_names=$(gh label list --repo "${REPO}" --limit "${LABEL_LIMIT}" --json name --jq '.[].name') \
-        || die "could not read the labels of ${REPO}"
+    read_repository_label_names
     while IFS= read -r label; do
         [ -n "${label}" ] && existing["${label,,}"]=1
-    done <<< "${existing_names}"
+    done <<< "${REPO_LABEL_NAMES}"
 
     for label in "${ISSUE_LABELS[@]}"; do
         [ -z "${existing["${label,,}"]:-}" ] || continue
@@ -3713,6 +3873,98 @@ issue_reopen() {
     printf '%s open\n' "${url}"
 }
 
+# issue close: the reason given, completed or not-planned, as --reason takes it.
+CLOSE_REASON=""
+# The most pull requests that reference an issue with a closing keyword issue close looks at.
+readonly CLOSING_PR_LIMIT=20
+
+assign_issue_close_option() {
+    local flag="$1" value="${2:-}"
+    case "${flag}" in
+        --reason)
+            assign_once CLOSE_REASON "${flag}"
+            case "${value}" in
+                completed | not-planned) CLOSE_REASON="${value}" ;;
+                *) usage_error "invalid value for --reason: it must be completed or not-planned" ;;
+            esac
+            ;;
+        *) assign_issue_edit_option "$@" ;;
+    esac
+}
+
+# Succeeds when the pull request $2 of the repository $1 (owner/name, as GitHub gives them) is open.
+# A pull request that cannot be read is a runtime failure, never taken as closed.
+closing_pull_request_is_open() {
+    local repository="$1" number="$2"
+    if ! matches_pattern "${repository}" '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' \
+        || ! matches_pattern "${number}" '^[1-9][0-9]*$'; then
+        die "gh returned an unexpected result for the pull requests that close ${REPO}#${ISSUE}"
+    fi
+    api_read "could not read the pull request ${repository}#${number}, which closes ${REPO}#${ISSUE}" \
+        "repos/${repository}/pulls/${number}" '.state // ""' \
+        || die "could not read the pull request ${repository}#${number}, which closes ${REPO}#${ISSUE}"
+    case "${GH_OUTPUT}" in
+        open) return 0 ;;
+        closed) return 1 ;;
+        *) die "gh returned an unexpected result for the pull request ${repository}#${number}" ;;
+    esac
+}
+
+# Closes ISSUE of REPO with CLOSE_REASON, posting the body first when one is given. The body is
+# checked first, then the issue is read once with read_issue (its URL, state, whether it carries On
+# Hold and the pull requests that reference it with a closing keyword), so a missing number, or one
+# that is a pull request's, exits ISSUE_NOT_FOUND_EXIT with nothing written. One already closed is
+# left alone, the comment included. On Hold, or a closing pull request that is still open, refuses
+# it before anything is written.
+issue_close() {
+    local url state on_hold line repository number reason
+    local -a lines closing=()
+    parse_command_options assign_issue_close_option "--repo --issue --reason --body-file" "" "$@"
+    require REPO --repo
+    require ISSUE --issue
+    require CLOSE_REASON --reason
+    require_gh
+    check_state_comment_body
+
+    read_issue state,labels,closedByPullRequestsReferences \
+        '.url, .state, ([.labels[]?.name | select(ascii_downcase == "on hold")] | length | tostring),
+         (.closedByPullRequestsReferences // [] | length | tostring),
+         (.closedByPullRequestsReferences // [] | .[] | "\(.repository.owner.login)/\(.repository.name)\t\(.number)")'
+    mapfile -t lines <<< "${GH_OUTPUT}"
+    [ "${#lines[@]}" -ge 4 ] || unexpected_issue_result
+    url="${lines[0]}"
+    state="${lines[1]}"
+    on_hold="${lines[2]}"
+    [[ "${url}" =~ ${REPOSITORY_URL_PATTERN}/issues/${ISSUE}$ ]] || unexpected_issue_result
+    [[ "${on_hold}" =~ ^[0-9]+$ ]] && [[ "${lines[3]}" =~ ^[0-9]+$ ]] || unexpected_issue_result
+    [ "$((${#lines[@]} - 4))" -eq "${lines[3]}" ] || unexpected_issue_result
+    closing=("${lines[@]:4}")
+    case "${state}" in
+        CLOSED)
+            printf '%s already closed\n' "${url}"
+            return 0
+            ;;
+        OPEN) ;;
+        *) unexpected_issue_result ;;
+    esac
+
+    [ "${on_hold}" -eq 0 ] || refuse_policy close "the issue carries On Hold"
+    [ "${#closing[@]}" -le "${CLOSING_PR_LIMIT}" ] \
+        || die "${REPO}#${ISSUE} is referenced by more than ${CLOSING_PR_LIMIT} closing pull requests, so it was not closed"
+    for line in "${closing[@]}"; do
+        repository="${line%%$'\t'*}"
+        number="${line#*$'\t'}"
+        ! closing_pull_request_is_open "${repository}" "${number}" \
+            || refuse_policy close "an open pull request references it with a closing keyword and closes it when it merges"
+    done
+
+    [ -z "${BODY_FILE}" ] || post_state_comment issue "${ISSUE}"
+    reason="${CLOSE_REASON/-/ }"
+    gh_capture issue close "${ISSUE}" --repo "${REPO}" --reason "${reason}" < /dev/null \
+        || die "could not close ${REPO}#${ISSUE}${BODY_FILE:+ (the comment was posted)}: $(gh_failure_text)"
+    printf '%s closed (%s)\n' "${url}" "${CLOSE_REASON}"
+}
+
 # pr close and pr reopen: the state of the pull request as read before any write, open or closed,
 # and whether it is merged.
 PR_STATE=""
@@ -4018,8 +4270,214 @@ issue_add_sub_issue() {
 cmd_issue() {
     dispatch_subcommand issue create issue_create edit issue_edit view issue_view plan-status issue_plan_status \
         list issue_list search issue_search \
-        label-history issue_label_history reopen issue_reopen comments issue_comments add-sub-issue issue_add_sub_issue -- "$@"
+        label-history issue_label_history reopen issue_reopen close issue_close comments issue_comments add-sub-issue issue_add_sub_issue -- "$@"
 }
+
+# label add and label remove: the item as read before any write, its URL and the labels it carries,
+# and the labels to change, each in its standard spelling.
+LABEL_TARGET_URL=""
+TARGET_LABELS=()
+CHANGE_LABELS=()
+
+assign_label_change_option() {
+    local flag="$1" value="${2:-}"
+    case "${flag}" in
+        --repo) assign_repository_option "${flag}" "${value}" ;;
+        --pr | --issue)
+            assign_issue_option "${flag}" "${value}"
+            require_number_above_zero "${flag}" "${PR}${ISSUE}"
+            ;;
+        --label) assign_issue_option "${flag}" "${value}" ;;
+    esac
+}
+
+# Sets CHANGE_LABELS to the --label values, each written in its standard spelling and a repeat (in
+# any case) dropped. A priority label, or one that is not a standard label, is refused before gh is
+# called; a label that is not standard is never echoed, so a value that is not a label never reaches
+# the output. Removing On Hold is refused here too: it belongs to a human.
+collect_change_labels() {
+    local change="$1" label canonical
+    local -A seen=()
+    CHANGE_LABELS=()
+    for label in "${LABELS[@]}"; do
+        if canonical=$(canonical_priority "${label}"); then
+            refuse_policy label "${canonical} is a priority label; label add and label remove never change a priority"
+        fi
+        standard_label "${label}" || refuse_policy label "a --label is not one of the standard labels"
+        label="${STANDARD_NAME}"
+        if [ "${change}" = remove ] && [ "${label}" = "On Hold" ]; then
+            refuse_policy label "On Hold is set and lifted by a human, never removed with cfwf"
+        fi
+        [ -z "${seen["${label,,}"]:-}" ] || continue
+        seen["${label,,}"]=1
+        CHANGE_LABELS+=("${label}")
+    done
+}
+
+# Reads TARGET_NUMBER of REPO through the issues endpoint, which answers for an issue and a pull
+# request alike, in one read, setting LABEL_TARGET_URL and TARGET_LABELS. A number that is not
+# there, or that is of the other kind than TARGET_TYPE, exits 9; a repository that is not there is
+# a failed read.
+read_label_target() {
+    local kind url count end row tag name
+    local -a rows
+    api_read "could not read ${REPO}#${TARGET_NUMBER}" "repos/${REPO}/issues/${TARGET_NUMBER}" \
+        "${FIELDS_ROW_DEF} ([(if .pull_request == null then \"issue\" else \"pull\" end), .html_url, (.labels | length), \"end\"] | fields_row),
+         (.labels[] | [\"label\", .name, \"end\"] | fields_row)" \
+        || not_found_in_repository "${ISSUE_NOT_FOUND_EXIT}" "${REPO}#${TARGET_NUMBER} was not found"
+    mapfile -t rows <<< "${GH_OUTPUT}"
+    IFS="${ROW_SEPARATOR}" read -r kind url count end <<< "${rows[0]}"
+    if [[ ! "${kind}" =~ ^(issue|pull)$ ]] || [ "${end}" != end ] || [[ ! "${count}" =~ ^[0-9]+$ ]]; then
+        die "gh returned an unexpected result for ${REPO}#${TARGET_NUMBER}"
+    fi
+    if [ "${TARGET_TYPE}" = PullRequest ]; then
+        [ "${kind}" = pull ] || pr_not_found "the pull request ${REPO}#${TARGET_NUMBER} was not found"
+    else
+        [ "${kind}" = issue ] || issue_not_found "${REPO}#${TARGET_NUMBER} is a pull request, not an issue"
+    fi
+    [[ "${url}" =~ ${REPOSITORY_URL_PATTERN}/${TARGET_URL_KIND}/${TARGET_NUMBER}$ ]] \
+        || die "gh returned an unexpected result for ${REPO}#${TARGET_NUMBER}"
+    [ "$((${#rows[@]} - 1))" -eq "${count}" ] || die "gh returned an unexpected result for ${REPO}#${TARGET_NUMBER}"
+    TARGET_LABELS=()
+    for row in "${rows[@]:1}"; do
+        IFS="${ROW_SEPARATOR}" read -r tag name end <<< "${row}"
+        [ "${tag}" = label ] && [ "${end}" = end ] && [ -n "${name}" ] \
+            || die "gh returned an unexpected result for ${REPO}#${TARGET_NUMBER}"
+        TARGET_LABELS+=("${name}")
+    done
+    LABEL_TARGET_URL="${url}"
+}
+
+# Succeeds when the label $1 is one of TARGET_LABELS, without regard to case: GitHub keeps label
+# names unique regardless of case.
+target_carries_label() {
+    local label
+    for label in "${TARGET_LABELS[@]}"; do
+        [ "${label,,}" != "${1,,}" ] || return 0
+    done
+    return 1
+}
+
+# Reads who last added Blocked to TARGET_NUMBER (the last labeled event of its timeline for the label
+# Blocked, matched without regard to case), setting BLOCKED_ADDED_BY to that login (empty for an
+# event with no actor) and BLOCKED_EVER_ADDED to 1 when there is such an event. The timeline is read
+# whole, oldest first, so the last such event is the most recent.
+BLOCKED_ADDED_BY=""
+BLOCKED_EVER_ADDED=""
+read_blocked_added_by() {
+    local row actor label end
+    local -a rows=()
+    read_timeline 'select(.event == "labeled") | [.actor.login, .label.name, "end"] | fields_row'
+    [ -z "${GH_OUTPUT}" ] || mapfile -t rows <<< "${GH_OUTPUT}"
+    [ "${#rows[@]}" -le "${LABEL_EVENT_LIMIT}" ] \
+        || die "${REPO}#${TARGET_NUMBER} has more than ${LABEL_EVENT_LIMIT} label events, so who added Blocked could not be read"
+    for row in "${rows[@]}"; do
+        IFS="${ROW_SEPARATOR}" read -r actor label end <<< "${row}"
+        [ "${end}" = end ] || unexpected_timeline_result
+        [ -z "${actor}" ] || matches_pattern "${actor}" "${LOGIN_PATTERN}" || unexpected_timeline_result
+        if [ "${label,,}" = blocked ]; then
+            BLOCKED_EVER_ADDED=1
+            BLOCKED_ADDED_BY="${actor}"
+        fi
+    done
+}
+
+# Adds ($1 add) or removes ($1 remove) each label in CHANGE_LABELS on TARGET_NUMBER of REPO, one gh
+# issue edit or gh pr edit call a label, after every check has passed, then prints the item's URL,
+# each change and the labels the item now carries. Each write is made whatever the item was read to
+# carry, because a read can lag behind an earlier write and GitHub's own add and remove are
+# idempotent; the result only says what the read showed. A remove is not written for a label the
+# repository does not have (no item can carry it, and gh cannot remove it), nor for Blocked when the
+# item's timeline shows it was never added.
+label_change() {
+    local change="$1" label kind result carried done_labels=""
+    local -a results=() now=()
+    local -A existing=()
+    shift
+    parse_command_options assign_label_change_option "--repo --issue --pr --label" "" "$@"
+    require REPO --repo
+    require_target
+    [ "${#LABELS[@]}" -gt 0 ] || usage_error "missing required option --label"
+    collect_change_labels "${change}"
+    require_gh
+    read_label_target
+    read_repository_label_names
+    while IFS= read -r label; do
+        [ -n "${label}" ] && existing["${label,,}"]=1
+    done <<< "${REPO_LABEL_NAMES}"
+
+    if [ "${change}" = add ]; then
+        for label in "${CHANGE_LABELS[@]}"; do
+            [ -n "${existing["${label,,}"]:-}" ] || refuse_policy label "${REPO} has no label ${label}; it must be created first"
+        done
+    elif is_one_of Blocked "${CHANGE_LABELS[@]}"; then
+        # Checked whatever the item was read to carry: a read that lags must never let a Blocked a
+        # human added be removed.
+        read_agent_login
+        read_blocked_added_by
+        if [ -n "${BLOCKED_EVER_ADDED}" ] && { [ -z "${BLOCKED_ADDED_BY}" ] || [ "${BLOCKED_ADDED_BY,,}" != "${AGENT_LOGIN,,}" ]; }; then
+            refuse_policy label "Blocked was last added by someone other than the agent, so only a human can remove it"
+        fi
+    fi
+
+    kind=issue
+    [ "${TARGET_TYPE}" != PullRequest ] || kind="pr"
+    for label in "${CHANGE_LABELS[@]}"; do
+        if [ "${change}" = add ]; then
+            result=added
+            ! target_carries_label "${label}" || result=present
+            gh_capture "${kind}" edit "${TARGET_NUMBER}" --repo "${REPO}" --add-label "${label}" < /dev/null \
+                || die "could not add the label ${label} to ${REPO}#${TARGET_NUMBER}${done_labels:+ (already changed: ${done_labels})}: $(gh_failure_text)"
+            target_carries_label "${label}" || TARGET_LABELS+=("${label}")
+        else
+            result=removed
+            target_carries_label "${label}" || result=absent
+            if [ -n "${existing["${label,,}"]:-}" ] && { [ "${label}" != Blocked ] || [ -n "${BLOCKED_EVER_ADDED}" ]; }; then
+                gh_capture "${kind}" edit "${TARGET_NUMBER}" --repo "${REPO}" --remove-label "${label}" < /dev/null \
+                    || die "could not remove the label ${label} from ${REPO}#${TARGET_NUMBER}${done_labels:+ (already changed: ${done_labels})}: $(gh_failure_text)"
+            fi
+            now=()
+            for carried in "${TARGET_LABELS[@]}"; do
+                [ "${carried,,}" = "${label,,}" ] || now+=("${carried}")
+            done
+            TARGET_LABELS=("${now[@]}")
+        fi
+        done_labels+="${done_labels:+, }${label}"
+        results+=("${change}"$'\t'"${label}"$'\t'"${result}")
+    done
+
+    printf 'url\t%s\n' "${LABEL_TARGET_URL}"
+    printf '%s\n' "${results[@]}"
+    for label in "${TARGET_LABELS[@]}"; do
+        printf 'label\t%s\n' "${label}"
+    done
+}
+
+label_add() {
+    label_change add "$@"
+}
+
+label_remove() {
+    label_change remove "$@"
+}
+
+# Prints the names of the labels of REPO, one a line, with their control characters printed as
+# spaces, warning when as many as LABEL_LIMIT were read, because then the list may be cut.
+label_list() {
+    local count=0 name
+    parse_command_options assign_repository_option "--repo" "" "$@"
+    require REPO --repo
+    require_gh
+    read_repository_label_names
+    while IFS= read -r name; do
+        [ -n "${name}" ] || continue
+        count=$((count + 1))
+        printf '%s\n' "${name//[[:cntrl:]]/ }"
+    done <<< "${REPO_LABEL_NAMES}"
+    [ "${count}" -lt "${LABEL_LIMIT}" ] \
+        || printf 'cfwf: warning: %s has at least %s labels; only the first %s are listed\n' "${REPO}" "${LABEL_LIMIT}" "${LABEL_LIMIT}" >&2
+}
+
 
 body_check() {
     parse_body_options "$@"
@@ -6458,7 +6916,7 @@ label_create() {
 }
 
 cmd_label() {
-    dispatch_subcommand label create label_create -- "$@"
+    dispatch_subcommand label create label_create add label_add remove label_remove list label_list -- "$@"
 }
 
 cmd_comment() {

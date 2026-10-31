@@ -50,7 +50,7 @@ setup() {
         '  "pr comment" | "issue comment") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/comment-body.txt"; prev="${arg}"; done; readlink /proc/self/fd/0 > "${GH_FIXTURES}/comment-stdin.txt"; [ -f "${GH_FIXTURES}/comment.fail" ] && { echo "boom" >&2; exit 1; }; cat "${GH_FIXTURES}/comment.out" ;;' \
         '  "api user" | "api rate_limit") f="${GH_FIXTURES}/api-$2"; [ -f "${f}.fail" ] && { [ -f "${f}.failout" ] && cat "${f}.failout"; cat "${f}.fail" >&2; exit 1; }; emit "${f}.json" ;;' \
         '  "--version ") f="${GH_FIXTURES}/gh-version"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; cat "${f}.out" ;;' \
-        '  "issue reopen" | "pr close" | "pr reopen") [ -f "${GH_FIXTURES}/state-change.fail" ] && { cat "${GH_FIXTURES}/state-change.fail" >&2; exit 1; }; exit 0 ;;' \
+        '  "issue reopen" | "issue close" | "pr close" | "pr reopen") [ -f "${GH_FIXTURES}/state-change.fail" ] && { cat "${GH_FIXTURES}/state-change.fail" >&2; exit 1; }; exit 0 ;;' \
         '  "run rerun") [ -f "${GH_FIXTURES}/run-rerun.fail" ] && { cat "${GH_FIXTURES}/run-rerun.fail" >&2; exit 1; }; echo "stub: requested a rerun"; exit 0 ;;' \
         '  "pr edit") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/edit-body.txt"; prev="${arg}"; done; [ -f "${GH_FIXTURES}/pr-edit.fail" ] && { cat "${GH_FIXTURES}/pr-edit.fail" >&2; exit 1; }; echo "https://github.com/credfeto/credfeto-orchestrator/pull/0" ;;' \
         '  "issue edit") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/edit-body.txt"; prev="${arg}"; done; [ -f "${GH_FIXTURES}/issue-edit.fail" ] && { cat "${GH_FIXTURES}/issue-edit.fail" >&2; exit 1; }; echo "https://github.com/credfeto/credfeto-orchestrator/issues/0" ;;' \
@@ -2010,7 +2010,7 @@ assert_nothing_created() {
 @test "issue needs a subcommand, and an unknown one is refused" {
     run "${SCRIPT}" issue
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"issue needs a subcommand (create, edit, view, plan-status, list, search, label-history, reopen, comments, add-sub-issue)"* ]]
+    [[ "${output}" == *"issue needs a subcommand (create, edit, view, plan-status, list, search, label-history, reopen, close, comments, add-sub-issue)"* ]]
 
     run "${SCRIPT}" issue frobnicate
     [ "${status}" -eq 2 ]
@@ -14297,7 +14297,7 @@ write_label() {
     run --separate-stderr "${SCRIPT}" label
     [ "${status}" -eq 2 ]
     [ -z "${output}" ]
-    [[ "${stderr}" == "cfwf: label needs a subcommand (create)"$'\n\n'"${LABEL_CREATE_USAGE}"$'\n'* ]]
+    [[ "${stderr}" == "cfwf: label needs a subcommand (create, add, remove, list)"$'\n\n'"${LABEL_CREATE_USAGE}"$'\n'* ]]
     [ ! -f "${GH_LOG}" ]
 }
 
@@ -14604,4 +14604,485 @@ $(tab_row result exists-different)" ]
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
     [ "${stderr}" = "cfwf: ${REPO}#8 has more than 1000 auto-merge events, so none is printed" ]
+}
+
+# --- label add, label remove and label list (#1593, #1595) ----------------------
+
+LABEL_ISSUE=1346
+LABEL_ISSUE_URL="https://github.com/${REPO}/issues/${LABEL_ISSUE}"
+LABEL_PR=1701
+LABEL_PR_URL="https://github.com/${REPO}/pull/${LABEL_PR}"
+LABEL_HUMAN=credfeto
+
+# Writes the number $1 as the issues endpoint gives it, an issue or a pull request ($2, issue or
+# pull), carrying the labels given as the further arguments.
+write_label_target() {
+    local number="$1" kind="$2" url
+    shift 2
+    url="https://github.com/${REPO}/issues/${number}"
+    [ "${kind}" = issue ] || url="https://github.com/${REPO}/pull/${number}"
+    jq -n --argjson n "${number}" --arg kind "${kind}" --arg url "${url}" --args \
+        '{number: $n, html_url: $url, state: "open", created_at: "2026-10-01T09:00:00Z",
+          labels: ($ARGS.positional | map({id: 1, name: ., color: "ffffff"}))}
+         + (if $kind == "pull" then {pull_request: {url: "https://api.github.com/repos/x/y/pulls/\($n)", merged_at: null}} else {} end)' \
+        "$@" | write_api "repos/${REPO}/issues/${number}"
+}
+
+# Writes the repository's labels, as gh label list --json name answers it: each argument a name.
+write_repository_labels() {
+    jq -n --args '$ARGS.positional | map({name: .})' "$@" > "${GH_FIXTURES}/label-list.json"
+}
+
+write_agent_login() {
+    jq -n --arg login "${AGENT}" '{login: $login}' > "${GH_FIXTURES}/api-user.json"
+}
+
+# The repository has every label these tests use.
+prepare_labels() {
+    write_repository_labels AI-Work Blocked Bug "On Hold" High Enhancement "Tech Debt"
+    write_agent_login
+}
+
+run_label() {
+    run --separate-stderr "${SCRIPT}" label "$@"
+}
+
+@test "label add, label remove and label list help, from -h, --help and help, describe the rules and none calls gh; the general help lists all three" {
+    local invocation
+    for invocation in "label add -h" "label add --help" "help label add"; do
+        # shellcheck disable=SC2086  # each invocation is several words on purpose
+        run "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == "Usage: cfwf label add --repo <owner/repo> (--issue <n> | --pr <n>) --label <name> [--label <name> ...]"* ]]
+        [[ "${output}" == *"label add creates none"* ]]
+    done
+    run "${SCRIPT}" help label remove
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == "Usage: cfwf label remove --repo <owner/repo> (--issue <n> | --pr <n>) --label <name> [--label <name> ...]"* ]]
+    [[ "${output}" == *"On Hold  is never removed"* ]]
+    [[ "${output}" == *"added by the agent's own login"* ]]
+    run "${SCRIPT}" label list --help
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == "Usage: cfwf label list --repo <owner/repo>"* ]]
+    run "${SCRIPT}" help label
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"cfwf label add"*"cfwf label remove"*"cfwf label list"* ]]
+    run "${SCRIPT}" help
+    [[ "${output}" == *$'\n'"  label add                Add standard labels to an issue or PR, one gh call a label (exit 8 when refused, 9 when not found)"$'\n'* ]]
+    [[ "${output}" == *$'\n'"  label remove             Remove labels from an issue or PR: never On Hold, Blocked only when the agent added it (exit 8 refused, 9 not found)"$'\n'* ]]
+    [[ "${output}" == *$'\n'"  label list               List a repository's label names, one a line"$'\n'* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "label needs a subcommand, and an unknown one is refused" {
+    run --separate-stderr "${SCRIPT}" label
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: label needs a subcommand (create, add, remove, list)"* ]]
+    run --separate-stderr "${SCRIPT}" label frobnicate
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" != *frobnicate* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "label add adds each label to an issue with one gh issue edit --add-label a label, in its standard spelling and once, then prints the URL, the changes and the labels" {
+    prepare_labels
+    write_label_target "${LABEL_ISSUE}" issue AI-Work
+    run_label add --repo "${REPO}" --issue "${LABEL_ISSUE}" --label blocked --label "tech debt" --label BLOCKED
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "url"$'\t'"${LABEL_ISSUE_URL}"$'\n'"add"$'\t'"Blocked"$'\t'"added"$'\n'"add"$'\t'"Tech Debt"$'\t'"added"$'\n'"label"$'\t'"AI-Work"$'\n'"label"$'\t'"Blocked"$'\n'"label"$'\t'"Tech Debt" ]
+    [ "$(gh_call_count "issue edit ${LABEL_ISSUE} --repo ${REPO} --add-label Blocked")" -eq 1 ]
+    [ "$(gh_call_count "issue edit ${LABEL_ISSUE} --repo ${REPO} --add-label Tech Debt")" -eq 1 ]
+    [ "$(gh_call_count "--add-label")" -eq 2 ]
+    [ "$(gh_call_count "--label")" -eq 0 ]
+}
+
+@test "label add on a pull request uses gh pr edit" {
+    prepare_labels
+    write_label_target "${LABEL_PR}" pull
+    run_label add --repo "${REPO}" --pr "${LABEL_PR}" --label Blocked
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == "url"$'\t'"${LABEL_PR_URL}"$'\n'"add"$'\t'"Blocked"$'\t'"added"$'\n'* ]]
+    [ "$(gh_call_count "pr edit ${LABEL_PR} --repo ${REPO} --add-label Blocked")" -eq 1 ]
+    [ "$(gh_call_count "issue edit")" -eq 0 ]
+}
+
+@test "label add is idempotent: a label the item was read to carry prints present and is still added, because a read can lag behind a write" {
+    prepare_labels
+    write_label_target "${LABEL_ISSUE}" issue Blocked
+    run_label add --repo "${REPO}" --issue "${LABEL_ISSUE}" --label Blocked
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "url"$'\t'"${LABEL_ISSUE_URL}"$'\n'"add"$'\t'"Blocked"$'\t'"present"$'\n'"label"$'\t'"Blocked" ]
+    [ "$(gh_call_count "--add-label Blocked")" -eq 1 ]
+}
+
+@test "label add and label remove refuse (exit 8) a priority label and one that is not standard, before any gh call, never echoing the non-standard name" {
+    local change
+    for change in add remove; do
+        run_label "${change}" --repo "${REPO}" --issue "${LABEL_ISSUE}" --label Blocked --label high
+        [ "${status}" -eq 8 ]
+        [ "${stderr}" = "cfwf: label refused: High is a priority label; label add and label remove never change a priority" ]
+        run_label "${change}" --repo "${REPO}" --issue "${LABEL_ISSUE}" --label urgent
+        [ "${status}" -eq 8 ]
+        run_label "${change}" --repo "${REPO}" --issue "${LABEL_ISSUE}" --label ghp_notalabel
+        [ "${status}" -eq 8 ]
+        [ "${stderr}" = "cfwf: label refused: a --label is not one of the standard labels" ]
+    done
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "label add and label remove refuse (exit 2) a comma-joined, blank or control-character --label, before any gh call" {
+    local bad
+    for bad in "AI-Work,Medium" "" "   " $'Blo\x01cked'; do
+        run_label add --repo "${REPO}" --issue "${LABEL_ISSUE}" --label "${bad}"
+        [ "${status}" -eq 2 ]
+    done
+    run_label remove --repo "${REPO}" --issue "${LABEL_ISSUE}" --label "Blocked,On Hold"
+    [ "${status}" -eq 2 ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "label add refuses (exit 8) a label the repository does not have, creating none and writing nothing" {
+    write_repository_labels AI-Work
+    write_label_target "${LABEL_ISSUE}" issue
+    run_label add --repo "${REPO}" --issue "${LABEL_ISSUE}" --label AI-Work --label Blocked
+    [ "${status}" -eq 8 ]
+    [ "${stderr}" = "cfwf: label refused: ${REPO} has no label Blocked; it must be created first" ]
+    [ "$(gh_call_count "edit")" -eq 0 ]
+    [ "$(gh_call_count "label create")" -eq 0 ]
+}
+
+@test "label remove refuses (exit 8) On Hold, in any case, before any gh call" {
+    run_label remove --repo "${REPO}" --issue "${LABEL_ISSUE}" --label Bug --label "on hold"
+    [ "${status}" -eq 8 ]
+    [ "${stderr}" = "cfwf: label refused: On Hold is set and lifted by a human, never removed with cfwf" ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "label add may add On Hold and Blocked: only their removal is a human's" {
+    prepare_labels
+    write_label_target "${LABEL_ISSUE}" issue
+    run_label add --repo "${REPO}" --issue "${LABEL_ISSUE}" --label "On Hold" --label Blocked
+    [ "${status}" -eq 0 ]
+    [ "$(gh_call_count "--add-label On Hold")" -eq 1 ]
+    [ "$(gh_call_count "--add-label Blocked")" -eq 1 ]
+}
+
+@test "label remove removes Blocked when the agent added it last, reading the agent's login and the item's timeline first" {
+    prepare_labels
+    write_label_target "${LABEL_ISSUE}" issue AI-Work Blocked
+    write_timeline "${LABEL_ISSUE}" \
+        "$(timeline_event labeled "${LABEL_HUMAN}" Blocked 2026-10-02T09:00:00Z)" \
+        "$(timeline_event unlabeled "${LABEL_HUMAN}" Blocked 2026-10-03T09:00:00Z)" \
+        "$(timeline_event labeled "${AGENT}" Blocked 2026-10-04T09:00:00Z)"
+    run_label remove --repo "${REPO}" --issue "${LABEL_ISSUE}" --label Blocked
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "url"$'\t'"${LABEL_ISSUE_URL}"$'\n'"remove"$'\t'"Blocked"$'\t'"removed"$'\n'"label"$'\t'"AI-Work" ]
+    [ "$(gh_call_count "issue edit ${LABEL_ISSUE} --repo ${REPO} --remove-label Blocked")" -eq 1 ]
+    [ "$(gh_line_of "api user")" -lt "$(gh_line_of "--remove-label")" ]
+    [ "$(gh_line_of "timeline")" -lt "$(gh_line_of "--remove-label")" ]
+}
+
+@test "label remove refuses (exit 8) Blocked a human added last, even when the agent added it before, and even when the item is read not to carry it" {
+    local carried
+    prepare_labels
+    write_timeline "${LABEL_ISSUE}" \
+        "$(timeline_event labeled "${AGENT}" Blocked 2026-10-02T09:00:00Z)" \
+        "$(timeline_event unlabeled "${AGENT}" Blocked 2026-10-03T09:00:00Z)" \
+        "$(timeline_event labeled "${LABEL_HUMAN}" blocked 2026-10-04T09:00:00Z)"
+    for carried in Blocked ""; do
+        # shellcheck disable=SC2086  # an empty label list on purpose
+        write_label_target "${LABEL_ISSUE}" issue AI-Work ${carried}
+        run_label remove --repo "${REPO}" --issue "${LABEL_ISSUE}" --label AI-Work --label Blocked
+        [ "${status}" -eq 8 ]
+        [ "${stderr}" = "cfwf: label refused: Blocked was last added by someone other than the agent, so only a human can remove it" ]
+        [ -z "${output}" ]
+    done
+    [ "$(gh_call_count "edit")" -eq 0 ]
+}
+
+@test "label remove refuses (exit 8) Blocked added last by a ghost, an actor GitHub gives as null" {
+    prepare_labels
+    write_label_target "${LABEL_ISSUE}" issue Blocked
+    write_timeline "${LABEL_ISSUE}" "$(timeline_event labeled none Blocked 2026-10-04T09:00:00Z)"
+    run_label remove --repo "${REPO}" --issue "${LABEL_ISSUE}" --label Blocked
+    [ "${status}" -eq 8 ]
+    [ "$(gh_call_count "edit")" -eq 0 ]
+}
+
+@test "label remove prints absent and writes nothing for Blocked the timeline shows was never added" {
+    prepare_labels
+    write_label_target "${LABEL_ISSUE}" issue AI-Work
+    write_timeline "${LABEL_ISSUE}" "$(timeline_event labeled "${LABEL_HUMAN}" AI-Work 2026-10-04T09:00:00Z)"
+    run_label remove --repo "${REPO}" --issue "${LABEL_ISSUE}" --label Blocked
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "url"$'\t'"${LABEL_ISSUE_URL}"$'\n'"remove"$'\t'"Blocked"$'\t'"absent"$'\n'"label"$'\t'"AI-Work" ]
+    [ "$(gh_call_count "edit")" -eq 0 ]
+}
+
+@test "label remove of another label needs no timeline read, prints absent for one the item was read not to carry and still removes it, and skips one the repository does not have" {
+    write_repository_labels AI-Work Bug
+    write_label_target "${LABEL_PR}" pull AI-Work
+    run_label remove --repo "${REPO}" --pr "${LABEL_PR}" --label Bug --label AI-Work --label Enhancement
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "url"$'\t'"${LABEL_PR_URL}"$'\n'"remove"$'\t'"Bug"$'\t'"absent"$'\n'"remove"$'\t'"AI-Work"$'\t'"removed"$'\n'"remove"$'\t'"Enhancement"$'\t'"absent" ]
+    [ "$(gh_call_count "pr edit ${LABEL_PR} --repo ${REPO} --remove-label Bug")" -eq 1 ]
+    [ "$(gh_call_count "pr edit ${LABEL_PR} --repo ${REPO} --remove-label AI-Work")" -eq 1 ]
+    [ "$(gh_call_count "--remove-label Enhancement")" -eq 0 ]
+    [ "$(gh_call_count "timeline")" -eq 0 ]
+    [ "$(gh_call_count "api user")" -eq 0 ]
+}
+
+@test "label add and label remove exit 9 for a number that is not there or is of the other kind, writing nothing" {
+    prepare_labels
+    write_this_repository
+    run_label add --repo "${REPO}" --issue "${LABEL_ISSUE}" --label Blocked
+    [ "${status}" -eq 9 ]
+    [ "${stderr}" = "cfwf: ${REPO}#${LABEL_ISSUE} was not found" ]
+    write_label_target "${LABEL_ISSUE}" pull
+    run_label add --repo "${REPO}" --issue "${LABEL_ISSUE}" --label Blocked
+    [ "${status}" -eq 9 ]
+    [ "${stderr}" = "cfwf: ${REPO}#${LABEL_ISSUE} is a pull request, not an issue" ]
+    write_label_target "${LABEL_PR}" issue
+    run_label remove --repo "${REPO}" --pr "${LABEL_PR}" --label Bug
+    [ "${status}" -eq 9 ]
+    [ "${stderr}" = "cfwf: the pull request ${REPO}#${LABEL_PR} was not found" ]
+    [ "$(gh_call_count "edit")" -eq 0 ]
+}
+
+@test "label add fails (exit 1) naming the labels already changed when a write fails part way" {
+    prepare_labels
+    write_label_target "${LABEL_ISSUE}" issue
+    echo "HTTP 502: Bad Gateway" > "${GH_FIXTURES}/issue-edit.fail"
+    run_label add --repo "${REPO}" --issue "${LABEL_ISSUE}" --label Bug
+    [ "${status}" -eq 1 ]
+    [[ "${stderr}" == "cfwf: could not add the label Bug to ${REPO}#${LABEL_ISSUE}: "* ]]
+    [ -z "${output}" ]
+}
+
+@test "label add and label remove fail (exit 1) for an item answer that is not of the shape asked for, writing nothing" {
+    prepare_labels
+    jq -n --arg url "https://github.com/${REPO}/issues/9999" '{number: 1346, html_url: $url, labels: []}' | write_api "repos/${REPO}/issues/${LABEL_ISSUE}"
+    run_label add --repo "${REPO}" --issue "${LABEL_ISSUE}" --label Bug
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: gh returned an unexpected result for ${REPO}#${LABEL_ISSUE}" ]
+    [ "$(gh_call_count "edit")" -eq 0 ]
+}
+
+@test "label add and label remove usage errors exit 2 before any gh call" {
+    run_label add --repo "${REPO}" --issue "${LABEL_ISSUE}"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == *"missing required option --label"* ]]
+    run_label add --repo "${REPO}" --label Bug
+    [ "${status}" -eq 2 ]
+    run_label add --repo "${REPO}" --issue 1 --pr 2 --label Bug
+    [ "${status}" -eq 2 ]
+    run_label remove --repo "${REPO}" --pr 0 --label Bug
+    [ "${status}" -eq 2 ]
+    run_label remove --issue 1 --label Bug
+    [ "${status}" -eq 2 ]
+    run_label add --repo "${REPO}" --issue 1 --label Bug --add-label Bug
+    [ "${status}" -eq 2 ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "label list prints each label name on its own line, asking gh for at most 1000 names" {
+    write_repository_labels AI-Work Blocked "On Hold"
+    run_label list --repo "${REPO}"
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "AI-Work"$'\n'"Blocked"$'\n'"On Hold" ]
+    grep -qF "label list --repo ${REPO} --limit 1000 --json name" "${GH_LOG}"
+}
+
+@test "label list prints nothing for a repository with no label, warns at 1000 labels, and fails (exit 1) on a failed read" {
+    write_repository_labels
+    run_label list --repo "${REPO}"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    jq -n '[range(1000) | {name: "label-\(.)"}]' > "${GH_FIXTURES}/label-list.json"
+    run_label list --repo "${REPO}"
+    [ "${status}" -eq 0 ]
+    [ "$(printf '%s\n' "${output}" | wc -l)" -eq 1000 ]
+    [ "${stderr}" = "cfwf: warning: ${REPO} has at least 1000 labels; only the first 1000 are listed" ]
+    touch "${GH_FIXTURES}/label-list.fail"
+    run_label list --repo "${REPO}"
+    [ "${status}" -eq 1 ]
+    [[ "${stderr}" == *"cfwf: could not read the labels of ${REPO}" ]]
+    [ -z "${output}" ]
+}
+
+@test "label list usage errors exit 2 before any gh call" {
+    run_label list
+    [ "${status}" -eq 2 ]
+    run_label list --repo "${REPO}" --limit 5
+    [ "${status}" -eq 2 ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+# --- issue close (#1597) ----------------------------------------------------------
+
+CLOSE_ISSUE=1346
+CLOSE_ISSUE_URL="https://github.com/${REPO}/issues/${CLOSE_ISSUE}"
+
+run_issue_close() {
+    run --separate-stderr "${SCRIPT}" issue close --repo "${REPO}" --issue "${CLOSE_ISSUE}" "$@"
+}
+
+# Writes the issue to close in the state $1 (OPEN by default) with the labels given as the further
+# arguments, and no pull request that closes it.
+prepare_issue_close() {
+    local state="${1:-OPEN}"
+    shift || true
+    write_issue "${CLOSE_ISSUE}" "fix: something" "${state}" "The body." "$@"
+    printf '%s#issuecomment-79\n' "${CLOSE_ISSUE_URL}" > "${GH_FIXTURES}/comment.out"
+    printf 'Done in the last release.\n' > "${TEST_TMP}/reason.md"
+}
+
+# Adds to the issue to close the pull requests given as owner/repo#number, each referencing it with
+# a closing keyword, as gh issue view --json closedByPullRequestsReferences gives them.
+write_closing_prs() {
+    local fixture ref
+    fixture="$(issue_fixture "${CLOSE_ISSUE}").json"
+    for ref in "$@"; do
+        jq --arg owner "${ref%%/*}" --arg name "$(printf '%s' "${ref#*/}" | cut -d'#' -f1)" --argjson n "${ref##*#}" \
+            '.closedByPullRequestsReferences += [{id: "PR_x", number: $n, url: "https://github.com/\($owner)/\($name)/pull/\($n)",
+              repository: {id: "R_x", name: $name, owner: {id: "U_x", login: $owner}}}]' "${fixture}" > "${fixture}.new"
+        mv "${fixture}.new" "${fixture}"
+    done
+}
+
+@test "issue close closes an open issue with the reason, prints its URL and the reason, and posts no comment without --body-file" {
+    prepare_issue_close
+    run_issue_close --reason completed
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "${CLOSE_ISSUE_URL} closed (completed)" ]
+    [ "$(gh_call_count "issue close ${CLOSE_ISSUE} --repo ${REPO} --reason completed")" -eq 1 ]
+    [ "$(gh_call_count "issue comment")" -eq 0 ]
+
+    run_issue_close --reason not-planned
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${CLOSE_ISSUE_URL} closed (not-planned)" ]
+    [ "$(gh_call_count "issue close ${CLOSE_ISSUE} --repo ${REPO} --reason not planned")" -eq 1 ]
+}
+
+@test "issue close posts the checked --body-file as a comment first, then closes" {
+    prepare_issue_close
+    run_issue_close --reason completed --body-file "${TEST_TMP}/reason.md"
+    [ "${status}" -eq 0 ]
+    cmp "${TEST_TMP}/reason.md" "${GH_FIXTURES}/comment-body.txt"
+    [ "$(gh_line_of "issue comment ${CLOSE_ISSUE}")" -lt "$(gh_line_of "issue close ${CLOSE_ISSUE}")" ]
+}
+
+@test "issue close leaves a closed issue alone, the comment included, and says so" {
+    prepare_issue_close CLOSED
+    run_issue_close --reason completed --body-file "${TEST_TMP}/reason.md"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${CLOSE_ISSUE_URL} already closed" ]
+    [ "$(gh_call_count "issue close")" -eq 0 ]
+    [ "$(gh_call_count "issue comment")" -eq 0 ]
+}
+
+@test "issue close refuses (exit 8) an issue that carries On Hold, in any case, writing nothing" {
+    prepare_issue_close OPEN AI-Work "on hold"
+    run_issue_close --reason not-planned --body-file "${TEST_TMP}/reason.md"
+    [ "${status}" -eq 8 ]
+    [ "${stderr}" = "cfwf: close refused: the issue carries On Hold" ]
+    [ "$(gh_call_count "issue close")" -eq 0 ]
+    [ "$(gh_call_count "issue comment")" -eq 0 ]
+}
+
+@test "issue close refuses (exit 8) when an open pull request references it with a closing keyword, and closes it when every such pull request is closed or merged" {
+    prepare_issue_close
+    write_closing_prs "credfeto/other-repo#5" "${REPO}#77"
+    jq -n '{number: 5, state: "closed", merged: true}' | write_api "repos/credfeto/other-repo/pulls/5"
+    jq -n '{number: 77, state: "open"}' | write_api "repos/${REPO}/pulls/77"
+    run_issue_close --reason completed --body-file "${TEST_TMP}/reason.md"
+    [ "${status}" -eq 8 ]
+    [ "${stderr}" = "cfwf: close refused: an open pull request references it with a closing keyword and closes it when it merges" ]
+    [ "$(gh_call_count "issue close")" -eq 0 ]
+    [ "$(gh_call_count "issue comment")" -eq 0 ]
+
+    jq -n '{number: 77, state: "closed"}' | write_api "repos/${REPO}/pulls/77"
+    run_issue_close --reason completed
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${CLOSE_ISSUE_URL} closed (completed)" ]
+}
+
+@test "issue close fails (exit 1) when a closing pull request cannot be read, writing nothing" {
+    prepare_issue_close
+    write_closing_prs "${REPO}#77"
+    fail_api "repos/${REPO}/pulls/77"
+    run_issue_close --reason completed
+    [ "${status}" -eq 1 ]
+    [[ "${stderr}" == "cfwf: could not read the pull request ${REPO}#77, which closes ${REPO}#${CLOSE_ISSUE}"* ]]
+    [ "$(gh_call_count "issue close")" -eq 0 ]
+}
+
+@test "issue close refuses (exit 8) a body with a leak or a plan-approval keyword before reading or writing anything" {
+    prepare_issue_close
+    write_leak_body "token ghp_$(printf 'a%.0s' {1..36})"
+    run_issue_close --reason completed --body-file "${TEST_TMP}/leak.md"
+    [ "${status}" -eq 8 ]
+    [[ "${stderr}" == "cfwf: body refused: "* ]]
+    printf 'Looks good, approved.\n' > "${TEST_TMP}/approved.md"
+    run_issue_close --reason completed --body-file "${TEST_TMP}/approved.md"
+    [ "${status}" -eq 8 ]
+    [[ "${stderr}" == "cfwf: body refused: approval keyword"* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue close exits 9 for a number that is no issue or is a pull request's, writing nothing" {
+    run_issue_close --reason completed
+    [ "${status}" -eq 9 ]
+    [ "${stderr}" = "cfwf: ${REPO}#${CLOSE_ISSUE} was not found" ]
+    jq -n --arg url "https://github.com/${REPO}/pull/${CLOSE_ISSUE}" '{url: $url, state: "OPEN", labels: []}' > "$(issue_fixture "${CLOSE_ISSUE}").json"
+    run_issue_close --reason completed
+    [ "${status}" -eq 9 ]
+    [ "${stderr}" = "cfwf: ${REPO}#${CLOSE_ISSUE} is a pull request, not an issue" ]
+    [ "$(gh_call_count "issue close")" -eq 0 ]
+}
+
+@test "issue close fails (exit 1) naming that the comment was posted when the close itself fails" {
+    prepare_issue_close
+    echo "HTTP 502: Bad Gateway" > "${GH_FIXTURES}/state-change.fail"
+    run_issue_close --reason completed --body-file "${TEST_TMP}/reason.md"
+    [ "${status}" -eq 1 ]
+    [[ "${stderr}" == "cfwf: could not close ${REPO}#${CLOSE_ISSUE} (the comment was posted): "* ]]
+    [ -z "${output}" ]
+}
+
+@test "issue close usage errors exit 2 before any gh call: a missing or unknown --reason, duplicate included, a missing --issue, and --comment" {
+    local reason
+    run --separate-stderr "${SCRIPT}" issue close --repo "${REPO}" --issue 1
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == *"missing required option --reason"* ]]
+    for reason in duplicate "not planned" COMPLETED ""; do
+        run --separate-stderr "${SCRIPT}" issue close --repo "${REPO}" --issue 1 --reason "${reason}"
+        [ "${status}" -eq 2 ]
+    done
+    run --separate-stderr "${SCRIPT}" issue close --repo "${REPO}" --reason completed
+    [ "${status}" -eq 2 ]
+    run --separate-stderr "${SCRIPT}" issue close --repo "${REPO}" --issue 1 --reason completed --comment x
+    [ "${status}" -eq 2 ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue close help, from -h and from help, describes the reasons, the refusals and the judgement it cannot make, and calls no gh; help issue and the general help include it" {
+    local invocation
+    for invocation in "issue close -h" "issue close --help" "help issue close"; do
+        # shellcheck disable=SC2086  # each invocation is several words on purpose
+        run "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == "Usage: cfwf issue close --repo <owner/repo> --issue <n> --reason <completed|not-planned> [--body-file <file|->]"* ]]
+        [[ "${output}" == *"There is no duplicate"* ]]
+        [[ "${output}" == *"the issue carries On Hold"* ]]
+        [[ "${output}" == *"That is a judgement this command cannot make"* ]]
+    done
+    run "${SCRIPT}" help issue
+    [[ "${output}" == *"Usage: cfwf issue close "* ]]
+    run "${SCRIPT}" help
+    [[ "${output}" == *$'\n'"  issue close              Close an issue with a reason, with an optional comment first (exit 8 when refused, 9 when not found)"$'\n'* ]]
+    [ ! -f "${GH_LOG}" ]
 }
