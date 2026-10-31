@@ -23,16 +23,12 @@ fail() {
 
 token_from_gh() {
     command -v gh >/dev/null 2>&1 || return 1
-    if [ -n "${GH_HOST:-}" ]; then
-        gh auth token --hostname "${GH_HOST}" 2>/dev/null
-    else
-        gh auth token 2>/dev/null
-    fi
+    gh auth token ${GH_HOST:+--hostname "${GH_HOST}"} 2>/dev/null
 }
 
 token="${GH_ENTERPRISE_TOKEN:-}"
 [ -n "${token}" ] || token="${GH_TOKEN:-}"
-[ -n "${token}" ] || token=$(token_from_gh) || token=""
+[ -n "${token}" ] || token=$(token_from_gh)
 [ -n "${token}" ] || fail "no GitHub token: set GH_ENTERPRISE_TOKEN or GH_TOKEN, or log in with gh auth login"
 
 # RFC 6750's token68 characters only, so a stray newline or header text in the
