@@ -273,6 +273,9 @@ CREATED_URL=""
 # What the EXIT trap says of CREATED_URL when a run fails after the item it names came to be.
 CREATED_NOTE="the issue was already created"
 BODY_PATH_TMP=""
+# pr hand-off: the --description-file as given, then the private copy it is read into.
+DESCRIPTION_FILE=""
+DESCRIPTION_PATH_TMP=""
 SCAN_TMP=""
 VALUE_TMP=""
 declare -gA REPOSITORY_VISIBILITY=()
@@ -298,7 +301,7 @@ cleanup() {
     if [ "${exit_status}" -ne 0 ] && [ -n "${TAKE_BACK_DONE:-}" ]; then
         printf 'cfwf: take-back steps done before the failure: %s\n' "${TAKE_BACK_DONE}" >&2
     fi
-    rm -f "${GH_ERR_FILE}" "${BODY_PATH_TMP}" "${SCAN_TMP}" "${VALUE_TMP}" "${HAND_OFF_RECORD_TMP:-}"
+    rm -f "${GH_ERR_FILE}" "${BODY_PATH_TMP}" "${DESCRIPTION_PATH_TMP}" "${SCAN_TMP}" "${VALUE_TMP}" "${HAND_OFF_RECORD_TMP:-}"
 }
 
 # Creates a temporary file on first use and stores its path in the global variable named by $1
@@ -336,7 +339,7 @@ Commands:
   pr checks-wait           Wait for a PR's required checks to finish, up to a time limit (exit 0, 3, 4, 5 or 6)
   pr comments              Print a PR's comments, reviews and review threads (exit 9 when not found)
   pr reply                 Reply to an inline review comment of a PR (exit 8 when the body is refused)
-  pr hand-off              Hand a PR to human review: board, ready, review record, then auto-merge (exit 7 deferred, 8 refused)
+  pr hand-off              Hand a PR to human review: title and description, board, ready, review record, then auto-merge (exit 7 deferred, 8 refused)
   pr take-back             Take a PR back from human review: auto-merge off, draft, board Development, then a comment (exit 8 refused)
   pr view                  Print a PR's state and metadata, one key and value a line (exit 9 when not found)
   pr ready-at              Print when a PR was last marked ready for review, or when it was created (exit 9 when not found)
@@ -1076,24 +1079,33 @@ USAGE
 
 usage_pr_hand_off() {
     cat << USAGE
-Usage: cfwf pr hand-off --repo <owner/repo> --pr <n> --body-file <file|->
+Usage: cfwf pr hand-off --repo <owner/repo> --pr <n> --title <title> --description-file <file|->
+                        --body-file <file|->
 
 Hands a pull request off to human review at the end of the AI review loop (Phase E), in one
-command and always in this order: moves it to Human Review on the Workflow board, marks it ready
-for review, posts the review record, then enables auto-merge.
+command and always in this order: sets its title and description, moves it to Human Review on the
+Workflow board, marks it ready for review, posts the review record, then enables auto-merge.
 
---repo       Always required; never taken from the current directory.
---pr         Always required: the pull request's number, above 0.
---body-file  Always required: extra text for the review record, a regular file, or - to read it
-             from stdin. cfwf writes the record's first line itself,
-             "${HAND_OFF_RECORD_PREFIX} <head SHA>", from the head it read at the start, so the
-             SHA can never be mistyped or stale. There is no --body.
+--repo              Always required; never taken from the current directory.
+--pr                Always required: the pull request's number, above 0.
+--title             Always required: the pull request's final title, a Conventional Commits title,
+                    <type>[(<scope>)][!]: <description>.
+--description-file  Always required: the pull request's final description, a regular file, or - to
+                    read it from stdin. It replaces whatever the description says now (such as the
+                    placeholder it was opened with). There is no --description.
+--body-file         Always required: extra text for the review record, a regular file, or - to
+                    read it from stdin. cfwf writes the record's first line itself,
+                    "${HAND_OFF_RECORD_PREFIX} <head SHA>", from the head it read at the start, so
+                    the SHA can never be mistyped or stale. There is no --body. Only one of
+                    --description-file and --body-file can be -.
 --json, --jq, --admin, --squash, --rebase and a merge method are not options: auto-merge always
 uses a merge commit, never --admin, and never merges at once.
 
 Everything is checked before anything is written, and a refusal writes nothing:
-  the body          is checked for leaks (see 'cfwf help body') and for the plan-approval
-                    keywords, as for comment add
+  the title         must be a Conventional Commits title, and is checked for leaks
+  the description   and
+  the body          are each checked for leaks (see 'cfwf help body') and for the plan-approval
+                    keywords, as for comment add, and must not be empty
   the pull request  must be open and carry neither Blocked nor On Hold
   the checks        the required checks on its head must all pass, judged as pr checks --pr
                     judges them; failed, pending or no checks at all is refused
@@ -1109,6 +1121,7 @@ was read stops the command before auto-merge. A repository that does not allow a
 the pull request ready for a human, and says so.
 
 Output, one line a step:
+  <url> title and description set
   <url> Human Review
   <url> ready
   <review record comment URL>
@@ -2194,37 +2207,45 @@ parse_body_options() {
     parse_command_options assign_issue_option "--repo --body-file" "" "$@"
 }
 
-# Copies the body (stdin when BODY_FILE is -) to a private temporary file, BODY_PATH_TMP, and
-# points BODY_FILE at that copy, refusing a missing, unreadable or blank body, then runs the leak
-# check on the copy for REPO. The copy is what gh is given, so a body file that is rewritten after
-# the check (by a writer that has not finished, or between the check and the post) can never be
-# posted unchecked.
-resolve_body() {
-    ensure_temp_file BODY_PATH_TMP
-    if [ "${BODY_FILE}" = "-" ]; then
-        cat > "${BODY_PATH_TMP}" || die "could not read the body from stdin"
+# Copies the text of the option $3 (the path $1, or stdin when it is -) to a private temporary
+# file, made on first use and named by the global variable $2, refusing a missing, unreadable or
+# blank text (called the $4 in each message), then runs the leak check on the copy for REPO. The
+# copy is what gh is given, so a file that is rewritten after the check (by a writer that has not
+# finished, or between the check and the post) can never be posted unchecked.
+copy_text_to_private_file() {
+    local source="$1" tmp_var="$2" flag="$3" noun="$4" copy
+    ensure_temp_file "${tmp_var}"
+    copy="${!tmp_var}"
+    if [ "${source}" = "-" ]; then
+        cat > "${copy}" || die "could not read the ${noun} from stdin"
     else
         # The path is never printed: it is usually a host path (a temporary or runtime directory),
         # which is what the leak check refuses to post.
-        if [ ! -f "${BODY_FILE}" ] || [ ! -r "${BODY_FILE}" ]; then
-            die "cannot read the --body-file"
+        if [ ! -f "${source}" ] || [ ! -r "${source}" ]; then
+            die "cannot read the ${flag}"
         fi
-        cat -- "${BODY_FILE}" > "${BODY_PATH_TMP}" || die "could not read the --body-file"
+        cat -- "${source}" > "${copy}" || die "could not read the ${flag}"
     fi
-    BODY_FILE="${BODY_PATH_TMP}"
-    LC_ALL=C grep -q '[^[:space:]]' "${BODY_FILE}" || die "the body is empty"
-    check_body_for_leaks "${BODY_FILE}" "${REPO}"
-    require_body_has_visible_text "${BODY_FILE}"
+    LC_ALL=C grep -q '[^[:space:]]' "${copy}" || die "the ${noun} is empty"
+    check_body_for_leaks "${copy}" "${REPO}"
+    require_body_has_visible_text "${copy}" "${noun}"
 }
 
-# Refuses (exit 1) the body file $1 when it holds only whitespace and INVISIBLE_CHARACTERS, such as
+# Copies the body (stdin when BODY_FILE is -) to a private temporary file, BODY_PATH_TMP, and
+# points BODY_FILE at that copy, as copy_text_to_private_file describes.
+resolve_body() {
+    copy_text_to_private_file "${BODY_FILE}" BODY_PATH_TMP --body-file body
+    BODY_FILE="${BODY_PATH_TMP}"
+}
+
+# Refuses (exit 1) the body file $1 (the text called $2, body by default) when it holds only whitespace and INVISIBLE_CHARACTERS, such as
 # U+3000 or U+00A0, which the byte check in resolve_body counts as text. It runs after the leak
 # check, so a body that is not valid UTF-8 is refused there (exit 8) and never called empty here.
 # bash cannot hold a NUL, so NULs are dropped from the text classed, never from the body posted.
 require_body_has_visible_text() {
-    local text
-    text=$(LC_ALL=C tr -d '\000' < "$1") || die "could not read the body"
-    has_visible_text "${text}" || die "the body is empty"
+    local text noun="${2:-body}"
+    text=$(LC_ALL=C tr -d '\000' < "$1") || die "could not read the ${noun}"
+    has_visible_text "${text}" || die "the ${noun} is empty"
 }
 
 # Refuses (exit POLICY_REFUSED_EXIT) the subject $1 under the rule $2, before anything is written.
@@ -4607,6 +4628,11 @@ assign_pr_hand_off_option() {
             assign_option "${flag}" "${value}"
             require_number_above_zero "${flag}" "${PR}"
             ;;
+        --description-file)
+            assign_once DESCRIPTION_FILE "${flag}"
+            validate "${value}" '^[^[:cntrl:]]+$' "${flag}" "it must not contain a control character"
+            DESCRIPTION_FILE="${value}"
+            ;;
         *) assign_issue_option "${flag}" "${value}" ;;
     esac
 }
@@ -4700,6 +4726,16 @@ hand_off_done() {
     HAND_OFF_DONE+="${HAND_OFF_DONE:+, }$1"
 }
 
+# Sets the title (TITLE) and description (the checked copy in DESCRIPTION_FILE) of PR in one
+# edit, the first write of a hand-off, so the pull request a human reviews always says what it
+# holds rather than the placeholder it was opened with.
+set_hand_off_title_and_description() {
+    gh_capture pr edit "${PR}" --repo "${REPO}" --title "${TITLE}" --body-file "${DESCRIPTION_FILE}" \
+        || die "could not set the title and description of ${REPO}#${PR}: $(gh_failure_text)"
+    printf '%s title and description set\n' "${HAND_OFF_URL}"
+    hand_off_done "title and description"
+}
+
 # Marks PR ready for review (#1590). Only pr hand-off calls it, after it has moved the board to
 # Human Review and found the pull request open and not Blocked or On Hold, so those rules hold here.
 # A pull request that is already ready is left as it is.
@@ -4762,12 +4798,22 @@ enable_pull_request_auto_merge() {
 }
 
 pr_hand_off() {
-    parse_command_options assign_pr_hand_off_option "--repo --pr --body-file" "" "$@"
+    parse_command_options assign_pr_hand_off_option "--repo --pr --title --description-file --body-file" "" "$@"
     require REPO --repo
     require PR --pr
+    require TITLE --title
+    require DESCRIPTION_FILE --description-file
     require BODY_FILE --body-file
+    if [ "${DESCRIPTION_FILE}" = "-" ] && [ "${BODY_FILE}" = "-" ]; then
+        usage_error "--description-file and --body-file cannot both read stdin (-)"
+    fi
+    validate_pull_request_title "${TITLE}" "${REPO}"
     require_target
     require_gh
+    check_value_for_leaks "${TITLE}" "${REPO}" title
+    copy_text_to_private_file "${DESCRIPTION_FILE}" DESCRIPTION_PATH_TMP --description-file description
+    DESCRIPTION_FILE="${DESCRIPTION_PATH_TMP}"
+    check_comment_for_approval_keywords "${DESCRIPTION_FILE}"
     resolve_body
     check_comment_for_approval_keywords "${BODY_FILE}"
     # Made before the checks are read, so each read in its subshell reuses it and the EXIT trap
@@ -4783,6 +4829,7 @@ pr_hand_off() {
     STATUS="Human Review"
     resolve_status
 
+    set_hand_off_title_and_description
     put_item_on_board "${HAND_OFF_URL}"
     printf '%s Human Review\n' "${HAND_OFF_URL}"
     hand_off_done "board Human Review"
