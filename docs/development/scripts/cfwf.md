@@ -24,6 +24,7 @@ cfwf issue list              --repo <owner/repo>
 cfwf issue search            --repo <owner/repo> --text <words> [--state open|closed|all] [--limit <n>]
 cfwf issue label-history     --repo <owner/repo> (--issue <n> | --pr <n>) [--label <name>]
 cfwf issue reopen            --repo <owner/repo> --issue <n> [--body-file <file|->]
+cfwf issue close             --repo <owner/repo> --issue <n> --reason <completed|not-planned> [--body-file <file|->]
 cfwf issue comments          --repo <owner/repo> --issue <n> [--since <YYYY-MM-DDTHH:MM:SSZ>] [--author <login>]
 cfwf body check              --repo <owner/repo> --body-file <file|->
 cfwf repo view               --repo <owner/repo>
@@ -48,6 +49,9 @@ cfwf pr reopen               --repo <owner/repo> --pr <n> [--body-file <file|->]
 cfwf pr comments             --repo <owner/repo> --pr <n>
 cfwf pr reply                --repo <owner/repo> --pr <n> --comment-id <id> --body-file <file|->
 cfwf comment add             --repo <owner/repo> (--pr <n> | --issue <n>) --body-file <file|->
+cfwf label add               --repo <owner/repo> (--issue <n> | --pr <n>) --label <name> [--label <name> ...]
+cfwf label remove            --repo <owner/repo> (--issue <n> | --pr <n>) --label <name> [--label <name> ...]
+cfwf label list              --repo <owner/repo>
 cfwf release view            --repo <owner/repo>
 cfwf release list            --repo <owner/repo>
 cfwf tag view                --repo <owner/repo> --tag <tag>
@@ -543,6 +547,28 @@ There is no ownership rule, unlike `pr edit`: the spec (#1596) refuses only on t
 4. For a pull request, the ownership rule of `pr edit` (`check_edit_ownership`, after `read_agent_login`), naming the command's own verb (`OWNERSHIP_SUBJECT`): `cfwf: close refused: ...` or `cfwf: reopen refused: ...`. An issue has no ownership rule, as for `issue edit`.
 
 Then the comment (when given), then `gh issue reopen`, `gh pr close` or `gh pr reopen`. `gh pr close` is run without `--delete-branch`, and closing never merges. The output is one line, `<url> open` or `<url> closed`. When the comment was posted and the state change then fails, the message says so (`could not close <repo>#<n> (the comment was posted): ...`, exit 1).
+
+### Closing an issue
+
+`issue close` (`issue_close`) closes an open issue with `--reason completed` or `--reason not-planned` (passed to `gh issue close --reason` as `completed` or `not planned`; there is no `duplicate`). It takes the same optional `--body-file` as `issue reopen`, checked first (`check_state_comment_body`, exit 8), and posted as a comment before the issue is closed. The issue is read once with `read_issue` (`gh issue view --json url,state,labels,closedByPullRequestsReferences`), so a missing number, or a pull request's, exits 9. An issue already closed prints `<url> already closed` and writes nothing. Then, before anything is written:
+
+- an issue that carries `On Hold` (any case) is refused: `cfwf: close refused: the issue carries On Hold`;
+- each pull request that references the issue with a closing keyword (`closedByPullRequestsReferences`, at most `CLOSING_PR_LIMIT`, 20) is read through REST (`repos/<owner>/<repo>/pulls/<n>`, `closing_pull_request_is_open`), because that list also holds merged pull requests; an open one refuses the close (`an open pull request references it with a closing keyword and closes it when it merges`), and one that cannot be read is a runtime failure, never taken as closed.
+
+The output is `<url> closed (<reason>)`. The pre-closure decision check's other rule, not closing while an open question flagged in the plan is unresolved, is a judgement the command cannot make, and its help says so.
+
+### Changing labels
+
+`label add` and `label remove` (`label_change`) add or remove labels on an issue (`gh issue edit`) or a pull request (`gh pr edit`), one `--add-label` or `--remove-label` call a label, never `--label` (which would replace them all). Everything is checked before the first write:
+
+1. Each `--label` (repeatable, no comma, no control character, at most 50 characters, as `issue create` takes it) is written in its standard spelling (`standard_label`); a repeat is dropped. A priority label (`canonical_priority`: Security, Urgent, High, Medium or Low) is refused, and so is a label that is not in `STANDARD_LABELS`, without echoing it (exit 8). For `label remove`, `On Hold` is refused outright: a human sets it and lifts it.
+2. The item, in one REST read of `repos/<repo>/issues/<n>` (`read_label_target`): its kind, `html_url` and labels, checked against `--issue` or `--pr` (exit 9 for a missing number or one of the other kind, once the repository has been read and found).
+3. The repository's labels (`read_repository_label_names`, the same `gh label list --limit 1000 --json name` read `issue create` makes). `label add` refuses a label the repository does not have: it creates none.
+4. For a `Blocked` to remove, the agent's login (`read_agent_login`) and every page of the item's timeline (`read_blocked_added_by`): the last `labeled` event for `Blocked` must be by the agent. One by anyone else, or by a deleted account, refuses it: `Blocked was last added by someone other than the agent, so only a human can remove it`. This runs whatever the item was read to carry, so a read that lags behind an earlier write can never let a human's `Blocked` through.
+
+Each write is made whatever the item was read to carry, because a read can lag behind a write (it was seen live: a label removed seconds before still showed in the read), and GitHub's add and remove are idempotent. The exceptions are a label the repository does not have (no item can carry it, and `gh` cannot remove it) and a `Blocked` the timeline shows was never added. The output is `url<TAB><url>`, then `<add|remove><TAB><label><TAB><result>` for each label, where the result says what the read showed (`added` or `present`, `removed` or `absent`), then `label<TAB><name>` for each label the item now carries, worked out from the read and the changes rather than read again. A write that fails part way names the labels already changed.
+
+`label list` (`label_list`) prints the repository's label names, one a line, from the same read, with control characters as spaces, and warns on stderr when it reads `LABEL_LIMIT` (1000) of them.
 
 ### Reading an issue's comments
 
