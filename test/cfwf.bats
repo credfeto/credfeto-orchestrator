@@ -56,6 +56,7 @@ setup() {
         '  "issue edit") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/edit-body.txt"; prev="${arg}"; done; [ -f "${GH_FIXTURES}/issue-edit.fail" ] && { cat "${GH_FIXTURES}/issue-edit.fail" >&2; exit 1; }; echo "https://github.com/credfeto/credfeto-orchestrator/issues/0" ;;' \
         '  "run list") f="${GH_FIXTURES}/run-list"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; lim=30; asked=""; prev=""; for arg in "$@"; do [ "${prev}" = "--limit" ] && lim="${arg}"; [ "${prev}" = "--json" ] && asked="${arg}"; prev="${arg}"; done; jq --argjson lim "${lim}" --arg asked "${asked}" ".[:\$lim] | map(with_entries(select(.key as \$key | (\$asked | split(\",\")) | index(\$key))))" "${f}.json" > "${f}.asked.json" || exit 1; emit "${f}.asked.json" ;;' \
         '  "run view") job=""; prev=""; for arg in "$@"; do [ "${prev}" = "--job" ] && job="${arg}"; prev="${arg}"; done; if [ -n "${job}" ]; then f="${GH_FIXTURES}/run-log-job-${job}"; else f="${GH_FIXTURES}/run-log-$3"; fi; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.txt" ] || { echo "stub: no log" >&2; exit 1; }; cat "${f}.txt" ;;' \
+        '  "api --method") e="${4%%\?*}"; f="${GH_FIXTURES}/api-${3}-${e//\//_}"; [ -f "${f}.fail" ] && { [ -d "${f}.then" ] && cp "${f}.then/"* "${GH_FIXTURES}/"; cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.json" ] || { echo "gh stub: no fixture for $*" >&2; exit 99; }; emit "${f}.json" ;;' \
         '  *) echo "gh stub: unexpected call: $*" >&2; exit 99 ;;' \
         'esac'
 
@@ -2009,7 +2010,7 @@ assert_nothing_created() {
 @test "issue needs a subcommand, and an unknown one is refused" {
     run "${SCRIPT}" issue
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"issue needs a subcommand (create, edit, view, plan-status, list, search, label-history, reopen, comments)"* ]]
+    [[ "${output}" == *"issue needs a subcommand (create, edit, view, plan-status, list, search, label-history, reopen, comments, add-sub-issue)"* ]]
 
     run "${SCRIPT}" issue frobnicate
     [ "${status}" -eq 2 ]
@@ -6688,7 +6689,7 @@ assert_sign_off() {
 
 @test "help for a command and its subcommand prints what that subcommand's -h prints, and the command's usage for a subcommand it does not know" {
     local pair spelling expected
-    for pair in "issue create" "issue view" "issue plan-status" "issue list" "issue search" "issue label-history" "body check" "pr checks" "pr ready-at" "pr diff" "comment add" "release view" "release list" "tag view"; do
+    for pair in "issue create" "issue view" "issue plan-status" "issue list" "issue search" "issue label-history" "issue add-sub-issue" "body check" "pr checks" "pr ready-at" "pr auto-merge-at" "pr diff" "comment add" "label create" "release view" "release list" "tag view"; do
         # shellcheck disable=SC2086  # each pair is split into its two words on purpose
         run "${SCRIPT}" ${pair} -h
         [ "${status}" -eq 0 ]
@@ -9277,7 +9278,7 @@ read_once_asking_for() {
     run --separate-stderr "${SCRIPT}" pr
     [ "${status}" -eq 2 ]
     [ -z "${output}" ]
-    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, checks-wait, view, list, comments, reply, create, ready-at, diff, edit, hand-off, finalise-dependency, take-back, close, reopen)"* ]]
+    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, checks-wait, view, list, comments, reply, create, ready-at, auto-merge-at, diff, edit, hand-off, finalise-dependency, take-back, close, reopen)"* ]]
     [[ "${stderr}" == *"Usage: cfwf pr checks"*"Run 'cfwf pr view --help' for pr view"* ]]
 
     run --separate-stderr "${SCRIPT}" pr frobnicate
@@ -9979,6 +9980,7 @@ run_tag_view() {
     run "${SCRIPT}" help
     [ "${status}" -eq 0 ]
     local listed=$'\n'"  comment add              Post a comment on a PR or an issue and print its URL"$'\n'
+    listed+="  label create             Create one of the standard labels in a repository (exit 8 for any other name)"$'\n'
     listed+="  release view             Print a repository's latest release, one key and value a line (exit 9 when it has none)"$'\n'
     listed+="  release list             List a repository's releases, newest first, one line each"$'\n'
     listed+="  tag view                 Print the commit a repository's tag points to (exit 9 when not found)"$'\n'
@@ -13973,4 +13975,406 @@ run_issue_comments() {
     run "${SCRIPT}" issue comments --help
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"Usage: cfwf issue comments --repo <owner/repo> --issue <n> [--since <time>] [--author <login>]"* ]]
+}
+
+# --- issue add-sub-issue, label create and pr auto-merge-at --------------------------
+
+SUB_ISSUE_USAGE="Usage: cfwf issue add-sub-issue --repo <owner/repo> --issue <parent> --sub-issue <child>"
+LABEL_CREATE_USAGE="Usage: cfwf label create --repo <owner/repo> --name <name> [--color <hex>] [--description <text>]"
+AUTO_MERGE_AT_USAGE="Usage: cfwf pr auto-merge-at --repo <owner/repo> --pr <n>"
+
+# The fixture path (without .json or .fail) the gh stub reads for a write with the method $1 to the
+# API endpoint $2.
+api_write_fixture() {
+    local endpoint="${2%%\?*}"
+    printf '%s/api-%s-%s' "${GH_FIXTURES}" "$1" "${endpoint//\//_}"
+}
+
+# Writes the number $1 as the issues endpoint gives it, with its id ($1 + 5000) and its URL: an
+# issue, or a pull request when $2 is pull.
+write_issue_with_id() {
+    jq -n --argjson n "$1" --arg kind "${2:-issue}" --arg repo "${REPO}" \
+        '{number: $n, id: ($n + 5000), title: "a title", state: "open", created_at: "2026-10-01T09:00:00Z",
+          html_url: "https://github.com/\($repo)/\(if $kind == "pull" then "pull" else "issues" end)/\($n)"}
+         + (if $kind == "pull" then {pull_request: {url: "https://api.github.com/repos/x/y/pulls/\($n)"}} else {} end)' \
+        | write_api "repos/${REPO}/issues/$1"
+}
+
+# Writes the sub-issues of the parent $1: each further argument a child's number.
+write_sub_issues() {
+    local parent="$1"
+    shift
+    printf '%s\n' "$@" | jq -R -s '[split("\n")[:-1][] | select(. != "") | {number: tonumber, id: (tonumber + 5000)}]' \
+        | write_api "repos/${REPO}/issues/${parent}/sub_issues"
+}
+
+run_sub_issue() {
+    run --separate-stderr "${SCRIPT}" issue add-sub-issue --repo "${REPO}" "$@"
+}
+
+run_label_create() {
+    run --separate-stderr "${SCRIPT}" label create --repo "${REPO}" "$@"
+}
+
+run_auto_merge_at() {
+    run --separate-stderr "${SCRIPT}" pr auto-merge-at --repo "${REPO}" "$@"
+}
+
+# Writes the label $1 with the colour $2 and the description $3 as the repository has it.
+write_label() {
+    jq -n --arg name "$1" --arg color "$2" --arg description "$3" '{id: 1, name: $name, color: $color, description: $description, default: false}' \
+        | write_api "repos/${REPO}/labels/${4:-$1}"
+}
+
+@test "issue add-sub-issue, label create and pr auto-merge-at help, from each -h and from help, gives the usage, the output and the exit codes, the group helps include them, the general help lists them, and none calls gh" {
+    local invocation
+    for invocation in "issue add-sub-issue -h" "issue add-sub-issue --help" "help issue add-sub-issue"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == "${SUB_ISSUE_USAGE}"$'\n'* ]]
+        [[ "${output}" == *"  result     linked, or already-linked when the child was a sub-issue of the parent already"* ]]
+        [[ "${output}" == *"--replace-parent, --json and --jq are not options"* ]]
+        [[ "${output}" == *"Exit codes: 0 linked, or already linked; 8 GitHub refused the link"*"9 an issue does not exist, or a number is a pull request's"* ]]
+    done
+    for invocation in "label create -h" "label create --help" "help label create" "help label" "label -h"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == "${LABEL_CREATE_USAGE}"$'\n'* ]]
+        [[ "${output}" == *"exists-different when it had it with another colour or description, which is left"* ]]
+        [[ "${output}" == *"Exit codes: 0 created or there already; 8 the name is not a standard label"* ]]
+    done
+    for invocation in "pr auto-merge-at -h" "pr auto-merge-at --help" "help pr auto-merge-at"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == "${AUTO_MERGE_AT_USAGE}"$'\n'* ]]
+        [[ "${output}" == *"  enabled-at      the time of the last auto_merge_enabled, auto_squash_enabled or"* ]]
+        [[ "${output}" == *"A pull request that never had auto-merge prints \"-\" on every line."* ]]
+        [[ "${output}" == *"Exit codes: 0 printed; 9 the pull request does not exist"* ]]
+    done
+
+    run "${SCRIPT}" help issue
+    [[ "${output}" == *"${LABEL_HISTORY_USAGE}"$'\n'*$'\n\n'"${SUB_ISSUE_USAGE}"$'\n'* ]]
+    run "${SCRIPT}" help pr
+    [[ "${output}" == *$'\n'"Run 'cfwf pr auto-merge-at --help' for pr auto-merge-at, which prints when auto-merge was last"$'\n'"enabled on a pull request."$'\n'* ]]
+    run "${SCRIPT}" help
+    [[ "${output}" == *$'\n'"  issue add-sub-issue      Link an issue to a parent issue as its sub-issue (exit 8 when refused, 9 when not found)"$'\n'* ]]
+    [[ "${output}" == *$'\n'"  pr auto-merge-at         Print when auto-merge was last enabled on a PR and its last change (exit 9 when not found)"$'\n'* ]]
+    [[ "${output}" == *$'\n'"  label create             Create one of the standard labels in a repository (exit 8 for any other name)"$'\n'* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "label without a subcommand names its subcommand" {
+    run --separate-stderr "${SCRIPT}" label
+    [ "${status}" -eq 2 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: label needs a subcommand (create)"$'\n\n'"${LABEL_CREATE_USAGE}"$'\n'* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue add-sub-issue usage errors exit 2 with its own usage and nothing on stdout, before any gh call" {
+    local args
+    for args in "--issue 5" "--sub-issue 6" "--issue 5 --sub-issue 5" "--issue 05 --sub-issue 5" "--issue 0 --sub-issue 6" \
+        "--issue 5 --sub-issue 0" "--issue 5 --sub-issue x" "--issue 5 --sub-issue 6 --sub-issue 7" \
+        "--issue 5 --issue 6 --sub-issue 7" "--issue 5 --sub-issue 6 --replace-parent" "--issue 5 --sub-issue 6 --json number"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run_sub_issue ${args}
+        [ "${status}" -eq 2 ] || { echo "not a usage error: ${args}" >&2; return 1; }
+        [ -z "${output}" ]
+        [[ "${stderr}" == *"${SUB_ISSUE_USAGE}"* ]]
+    done
+    run --separate-stderr "${SCRIPT}" issue add-sub-issue --issue 5 --sub-issue 6
+    [ "${status}" -eq 2 ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue add-sub-issue links the child with one POST of its id after reading both issues and every page of the parent's sub-issues, and prints both URLs" {
+    write_issue_with_id 5
+    write_issue_with_id 7
+    printf '%s\n' "$(timeline_page '{"number": 3}' '{"number": 4}')" "$(timeline_page '{"number": 6}')" | jq -s '.' \
+        > "$(api_fixture "repos/${REPO}/issues/5/sub_issues").pages"
+    jq -n '{number: 5, id: 5005}' > "$(api_write_fixture POST "repos/${REPO}/issues/5/sub_issues").json"
+    run_sub_issue --issue 5 --sub-issue 007
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "$(tab_row parent "https://github.com/${REPO}/issues/5")
+$(tab_row sub-issue "https://github.com/${REPO}/issues/7")
+$(tab_row result linked)" ]
+    [ "$(wc -l < "${GH_LOG}")" -eq 4 ]
+    [[ "$(sed -n 3p "${GH_LOG}")" == "api repos/${REPO}/issues/5/sub_issues?per_page=100 --paginate --jq "* ]]
+    [[ "$(sed -n 4p "${GH_LOG}")" == "api --method POST repos/${REPO}/issues/5/sub_issues -F sub_issue_id=5007 --jq "* ]]
+}
+
+@test "issue add-sub-issue writes nothing and exits 0 when the child is already a sub-issue of the parent" {
+    write_issue_with_id 5
+    write_issue_with_id 7
+    write_sub_issues 5 3 7
+    run_sub_issue --issue 5 --sub-issue 7
+    [ "${status}" -eq 0 ]
+    [ "${output##*$'\n'}" = "$(tab_row result already-linked)" ]
+    [ "$(grep -c -- '--method' "${GH_LOG}")" -eq 0 ]
+}
+
+@test "issue add-sub-issue exits 8 when GitHub refuses the link with 422, and 1 saying it may be linked for any other failed write" {
+    write_issue_with_id 5
+    write_issue_with_id 7
+    write_sub_issues 5
+    printf '%s\n' "gh: Validation Failed (HTTP 422)" > "$(api_write_fixture POST "repos/${REPO}/issues/5/sub_issues").fail"
+    run_sub_issue --issue 5 --sub-issue 7
+    [ "${status}" -eq 8 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: sub-issue refused: GitHub refused the link (the child may already have another parent)" ]
+
+    printf '%s\n' "gh: Bad Gateway (HTTP 502)" > "$(api_write_fixture POST "repos/${REPO}/issues/5/sub_issues").fail"
+    run_sub_issue --issue 5 --sub-issue 7
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: could not link ${REPO}#7 to ${REPO}#5, and it may have been linked: gh: Bad Gateway (HTTP 502)" ]]
+}
+
+@test "issue add-sub-issue exits 9 for a number that is not there or is a pull request's, and 1 when the repository is not there, writing nothing" {
+    write_this_repository
+    write_issue_with_id 5
+    run_sub_issue --issue 5 --sub-issue 7
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: ${REPO}#7 was not found" ]
+
+    write_issue_with_id 7 pull
+    run_sub_issue --issue 5 --sub-issue 7
+    [ "${status}" -eq 9 ]
+    [ "${stderr}" = "cfwf: ${REPO}#7 is a pull request, not an issue" ]
+
+    run_sub_issue --issue 7 --sub-issue 5
+    [ "${status}" -eq 9 ]
+    [ "${stderr}" = "cfwf: ${REPO}#7 is a pull request, not an issue" ]
+
+    rm "$(api_fixture "repos/${REPO}").json"
+    run_sub_issue --issue 9 --sub-issue 5
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: the repository ${REPO} was not found, or the caller cannot see it" ]
+    [ "$(grep -c -- '--method' "${GH_LOG}")" -eq 0 ]
+}
+
+@test "issue add-sub-issue exits 1 for an answer that is not the issue, its sub-issues or the parent it linked" {
+    jq -n '{number: 5, id: "x", html_url: "https://github.com/credfeto/credfeto-orchestrator/issues/5"}' | write_api "repos/${REPO}/issues/5"
+    write_issue_with_id 7
+    run_sub_issue --issue 5 --sub-issue 7
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: gh returned an unexpected result for ${REPO}#5" ]
+
+    jq -n '{number: 5, id: 5005, html_url: "https://github.com/credfeto/credfeto-orchestrator/issues/6"}' | write_api "repos/${REPO}/issues/5"
+    run_sub_issue --issue 5 --sub-issue 7
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: gh returned an unexpected result for ${REPO}#5" ]
+
+    write_issue_with_id 5
+    jq -n '[{number: "x"}]' | write_api "repos/${REPO}/issues/5/sub_issues"
+    run_sub_issue --issue 5 --sub-issue 7
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: gh returned an unexpected result for the sub-issues of ${REPO}#5" ]
+
+    write_sub_issues 5
+    jq -n '{number: 6}' > "$(api_write_fixture POST "repos/${REPO}/issues/5/sub_issues").json"
+    run_sub_issue --issue 5 --sub-issue 7
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: ${REPO}#7 may have been linked to ${REPO}#5 (gh returned an unexpected answer); run this again to check" ]
+}
+
+@test "issue add-sub-issue reads at most 1000 sub-issues, and with 1001 links nothing and exits 1" {
+    write_issue_with_id 5
+    write_issue_with_id 2000
+    jq -n '[range(1; 1001) | {number: .}]' | write_api "repos/${REPO}/issues/5/sub_issues"
+    jq -n '{number: 5}' > "$(api_write_fixture POST "repos/${REPO}/issues/5/sub_issues").json"
+    run_sub_issue --issue 5 --sub-issue 2000
+    [ "${status}" -eq 0 ]
+    [ "${output##*$'\n'}" = "$(tab_row result linked)" ]
+
+    jq -n '[range(1; 1002) | {number: .}]' | write_api "repos/${REPO}/issues/5/sub_issues"
+    : > "${GH_LOG}"
+    run_sub_issue --issue 5 --sub-issue 2000
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: ${REPO}#5 has more than 1000 sub-issues, so nothing is linked" ]
+    [ "$(grep -c -- '--method' "${GH_LOG}")" -eq 0 ]
+}
+
+@test "label create refuses a name that is not a standard label with exit 8, and a bad colour or description with exit 2, before any gh call" {
+    local args
+    run_label_create --name "Not A Label"
+    [ "${status}" -eq 8 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: label refused: not a standard label: only the labels the repositories share can be created" ]
+    for args in "--name Blocked --color ff00" "--name Blocked --color #ff0000" "--name Blocked --color gggggg" "--name Blocked --color ff00001" \
+        "--color ff0000" "--name Blocked --name High" "--name Blocked --force"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run_label_create ${args}
+        [ "${status}" -eq 2 ] || { echo "not a usage error: ${args}" >&2; return 1; }
+        [[ "${stderr}" == *"${LABEL_CREATE_USAGE}"* ]]
+    done
+    run_label_create --name Blocked --description "$(printf 'a\tb')"
+    [ "${status}" -eq 2 ]
+    run_label_create --name Blocked --description "$(printf 'x%.0s' {1..101})"
+    [ "${status}" -eq 2 ]
+    run --separate-stderr "${SCRIPT}" label create --name Blocked
+    [ "${status}" -eq 2 ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "label create creates a standard label in its standard spelling, colour and description with one POST after reading the label and the repository" {
+    write_this_repository
+    jq -n '{id: 9, name: "On Hold", color: "ff0000", description: "Do not work on this"}' > "$(api_write_fixture POST "repos/${REPO}/labels").json"
+    run_label_create --name "on hold"
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "$(tab_row label "On Hold")
+$(tab_row color ff0000)
+$(tab_row description "Do not work on this")
+$(tab_row result created)" ]
+    [[ "$(sed -n 1p "${GH_LOG}")" == "api repos/${REPO}/labels/On%20Hold --jq "* ]]
+    [[ "$(sed -n 2p "${GH_LOG}")" == "api repos/${REPO} --jq "* ]]
+    [[ "$(sed -n 3p "${GH_LOG}")" == "api --method POST repos/${REPO}/labels -f name=On Hold -f color=ff0000 -f description=Do not work on this --jq "* ]]
+}
+
+@test "label create uses the colour and description given, the colour in lower case" {
+    write_this_repository
+    jq -n '{id: 9, name: "High", color: "abcdef", description: "Most important"}' > "$(api_write_fixture POST "repos/${REPO}/labels").json"
+    run_label_create --name High --color ABCDEF --description "Most important"
+    [ "${status}" -eq 0 ]
+    [ "${output##*$'\n'}" = "$(tab_row result created)" ]
+    grep -q -- "-f color=abcdef -f description=Most important" "${GH_LOG}"
+}
+
+@test "label create reports exists or exists-different for a label the repository has, never changing it" {
+    write_label Blocked FF0000 "Blocked by a dependency or external factor"
+    run_label_create --name blocked
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(tab_row label Blocked)
+$(tab_row color ff0000)
+$(tab_row description "Blocked by a dependency or external factor")
+$(tab_row result exists)" ]
+
+    write_label Blocked 00ff00 "Something else"
+    run_label_create --name Blocked
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(tab_row label Blocked)
+$(tab_row color 00ff00)
+$(tab_row description "Something else")
+$(tab_row result exists-different)" ]
+    [ "$(grep -c -- '--method' "${GH_LOG}")" -eq 0 ]
+}
+
+@test "label create reports a label that turned up between the read and the create as there, and exits 1 for any other failed create or a missing repository" {
+    write_this_repository
+    local post
+    post="$(api_write_fixture POST "repos/${REPO}/labels")"
+    printf '%s\n' "gh: Validation Failed (HTTP 422) already_exists" > "${post}.fail"
+    mkdir -p "${post}.then"
+    jq -n '{name: "Urgent", color: "ff0000", description: "Urgent Priority"}' > "${post}.then/$(basename "$(api_fixture "repos/${REPO}/labels/Urgent")").json"
+    run_label_create --name Urgent
+    [ "${status}" -eq 0 ]
+    [ "${output##*$'\n'}" = "$(tab_row result exists)" ]
+
+    rm -rf "${post}.then" "$(api_fixture "repos/${REPO}/labels/Urgent").json"
+    printf '%s\n' "gh: Bad Gateway (HTTP 502)" > "${post}.fail"
+    run_label_create --name Urgent
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not create the label Urgent in ${REPO}: gh: Bad Gateway (HTTP 502)" ]
+
+    rm "$(api_fixture "repos/${REPO}").json"
+    run_label_create --name Urgent
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: the repository ${REPO} was not found, or the caller cannot see it" ]
+}
+
+@test "label create refuses a description that leaks with exit 8, before any write" {
+    write_this_repository
+    run_label_create --name Blocked --description "see /home/someone/notes"
+    [ "${status}" -eq 8 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: description refused: "* ]]
+    [ ! -f "${GH_LOG}" ] || [ "$(grep -c -- '--method' "${GH_LOG}")" -eq 0 ]
+}
+
+@test "label create percent-encodes a name for the label path, and exits 1 for an answer that is not the label" {
+    write_label "C#" db6baa "C# Source Files" "C%23"
+    run_label_create --name "c#"
+    [ "${status}" -eq 0 ]
+    [ "${output##*$'\n'}" = "$(tab_row result exists)" ]
+    [[ "$(sed -n 1p "${GH_LOG}")" == "api repos/${REPO}/labels/C%23 --jq "* ]]
+
+    write_label "Other" db6baa "C# Source Files" "C%23"
+    run_label_create --name "C#"
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: gh returned an unexpected result for the label C# of ${REPO}" ]
+}
+
+@test "pr auto-merge-at prints the last enable of any merge method and the last change, from every page of the timeline" {
+    write_issue_kind 8 pull
+    write_timeline_pages 8 \
+        "$(timeline_page "$(timeline_event auto_merge_enabled credfeto "" 2026-10-02T10:00:00Z)" "$(timeline_event labeled credfeto Medium 2026-10-02T10:30:00Z)")" \
+        "$(timeline_page "$(timeline_event auto_merge_disabled octocat "" 2026-10-03T10:00:00Z)" "$(timeline_event auto_squash_enabled dnyw4l3n13 "" 2026-10-04T10:00:00Z)")" \
+        "$(timeline_page "$(timeline_event auto_merge_disabled none "" 2026-10-05T10:00:00Z)")"
+    run_auto_merge_at --pr 0008
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = $'enabled-at\t2026-10-04T10:00:00Z\nenabled-by\tdnyw4l3n13\nlast-change\tdisabled\nlast-change-at\t2026-10-05T10:00:00Z\nlast-change-by\t-' ]
+    [ "$(wc -l < "${GH_LOG}")" -eq 2 ]
+    [[ "$(sed -n 2p "${GH_LOG}")" == "api repos/${REPO}/issues/8/timeline?per_page=100 --paginate --jq "* ]]
+}
+
+@test "pr auto-merge-at prints - on every line for a pull request that never had auto-merge, and an enable as the last change" {
+    write_issue_kind 8 pull
+    write_timeline 8 "$(timeline_event labeled credfeto Medium 2026-10-01T10:00:00Z)"
+    run_auto_merge_at --pr 8
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'enabled-at\t-\nenabled-by\t-\nlast-change\t-\nlast-change-at\t-\nlast-change-by\t-' ]
+
+    write_timeline 8 "$(timeline_event auto_rebase_enabled credfeto "" 2026-10-01T10:00:00Z)"
+    run_auto_merge_at --pr 8
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'enabled-at\t2026-10-01T10:00:00Z\nenabled-by\tcredfeto\nlast-change\tenabled\nlast-change-at\t2026-10-01T10:00:00Z\nlast-change-by\tcredfeto' ]
+}
+
+@test "pr auto-merge-at exits 9 for an issue's number or one that is not there, 2 for a usage error before any gh call, and 1 for an unexpected event row or too many events" {
+    local args
+    for args in "" "--pr 0" "--pr x" "--pr 8 --pr 9" "--pr 8 --field auto-merge" "--issue 8"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run_auto_merge_at ${args}
+        [ "${status}" -eq 2 ] || { echo "not a usage error: ${args}" >&2; return 1; }
+        [[ "${stderr}" == *"${AUTO_MERGE_AT_USAGE}"* ]]
+    done
+    [ ! -f "${GH_LOG}" ]
+
+    write_this_repository
+    run_auto_merge_at --pr 7
+    [ "${status}" -eq 9 ]
+    [ "${stderr}" = "cfwf: ${REPO}#7 was not found" ]
+    write_issue_kind 7 issue
+    run_auto_merge_at --pr 7
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+
+    write_issue_kind 8 pull
+    write_timeline 8 "$(timeline_event auto_merge_enabled credfeto "" soon)"
+    run_auto_merge_at --pr 8
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "${TIMELINE_UNEXPECTED}8" ]
+
+    write_timeline 8 "$(timeline_event auto_merge_enabled 'bad login' "" 2026-10-01T10:00:00Z)"
+    run_auto_merge_at --pr 8
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "${TIMELINE_UNEXPECTED}8" ]
+
+    jq -n '[range(1001) | {event: "auto_merge_enabled", created_at: "2026-10-01T10:00:00Z", actor: {login: "credfeto"}}]' \
+        | write_api "repos/${REPO}/issues/8/timeline"
+    run_auto_merge_at --pr 8
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: ${REPO}#8 has more than 1000 auto-merge events, so none is printed" ]
 }
