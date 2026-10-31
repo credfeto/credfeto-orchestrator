@@ -230,6 +230,78 @@ assert_blocked() {
     assert_allowed "npm ci"
 }
 
+# --- node ------------------------------------------------------------------------
+
+@test "node running a script under .github/actions is allowed, with an optional leading --check and script arguments" {
+    mkdir -p "${ROOT}/.github/actions/x"
+    assert_allowed "node .github/actions/x/a.js"
+    assert_allowed "node ./.github/actions/x/a.js"
+    assert_allowed "node --check .github/actions/x/a.js"
+    assert_allowed "node .github/actions/x/a.js --flag y -r z"
+    assert_allowed "node ${ROOT}/.github/actions/x/a.js"
+}
+
+@test "node allows a script name containing .. that is not a path component" {
+    mkdir -p "${ROOT}/.github/actions/x"
+    assert_allowed "node .github/actions/x/build..min.js"
+}
+
+@test "node resolves .github/actions against the directory a leading cd moves to" {
+    mkdir -p "${ROOT}/sub/.github/actions/x" "${ROOT}/.github/actions/x"
+    assert_allowed "cd sub && node .github/actions/x/a.js"
+    assert_blocked "cd sub && node ../.github/actions/x/a.js" 'not under .github/actions'
+}
+
+@test "node with a script outside .github/actions or outside every root is blocked" {
+    mkdir -p "${ROOT}/.github/actions/x"
+    assert_blocked "node sub/a.js" 'not under .github/actions'
+    assert_blocked "node .github/actions.js" 'not under .github/actions'
+    assert_blocked "node ../x.js" 'outside the allowed directories'
+    assert_blocked "node .github/actions/../../x.js" 'not under .github/actions'
+    assert_blocked "node .github/actions/../../../x.js" 'outside the allowed directories'
+    assert_blocked "node .github/actions/../a.js" 'not under .github/actions'
+    assert_blocked "node /etc/x.js" 'outside the allowed directories'
+}
+
+@test "node with a script that is a symlink leading out of the root is blocked" {
+    mkdir -p "${ROOT}/.github/actions/x"
+    : > "${OUTSIDE}/x.js"
+    ln -s "${OUTSIDE}/x.js" "${ROOT}/.github/actions/x/evil.js"
+    assert_blocked "node .github/actions/x/evil.js" 'outside the allowed directories'
+}
+
+@test "node options that load code from outside the script are blocked in every spelling" {
+    mkdir -p "${ROOT}/.github/actions/x"
+    local opt
+    for opt in "-r x" "--require x" "--require=x" "--req x" "--import x" "--import=x" "--loader x" \
+        "--experimental-loader x" "--experimental_loader x" "--inspect" "--inspect-brk" "--env-file=.env"; do
+        assert_blocked "node ${opt} .github/actions/x/a.js" 'not permitted'
+        assert_blocked "node --check ${opt} .github/actions/x/a.js" 'not permitted'
+    done
+}
+
+@test "node --check is permitted only as the first argument" {
+    mkdir -p "${ROOT}/.github/actions/x"
+    assert_blocked "node --check --check .github/actions/x/a.js" 'only as the first argument'
+}
+
+@test "node without a script, or reading its program from stdin, is blocked" {
+    assert_blocked "node" 'requires a script path'
+    assert_blocked "node --check" 'requires a script path'
+    assert_blocked "node -" 'stdin'
+    assert_blocked "node --check -" 'stdin'
+}
+
+@test "node with a non-literal or globbed script, or a relative script after an unknowable cd, is blocked" {
+    mkdir -p "${ROOT}/.github/actions/x"
+    # shellcheck disable=SC2016  # literal $X must reach the hook unexpanded
+    assert_blocked 'node "$X"' 'non-literal'
+    # shellcheck disable=SC2016  # literal $X must reach the hook unexpanded
+    assert_blocked 'node "$X" .github/actions/x/a.js' 'non-literal'
+    assert_blocked "node .github/actions/x/*.js" 'glob'
+    assert_blocked "cd sub && cd .. && node .github/actions/x/a.js" 'relative'
+}
+
 # --- find ------------------------------------------------------------------------
 
 @test "find with an explicit starting point under a root is allowed" {

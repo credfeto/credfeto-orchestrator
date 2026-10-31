@@ -719,8 +719,7 @@ installed_mcp_names() {
         printf '%s\n' "${denies}" | grep -qxF "Bash(${tool} * ${flag}*)" \
             || { echo "missing later-position deny: Bash(${tool} * ${flag}*)" >&2; return 1; }
     done
-    for exact in "Bash(rm -rf /)" "Bash(rm -fr /)" "Bash(rm -r -f /)" "Bash(rm -f -r /)" "Bash(rm * /)" \
-        "Bash(node *..*)"; do
+    for exact in "Bash(rm -rf /)" "Bash(rm -fr /)" "Bash(rm -r -f /)" "Bash(rm -f -r /)" "Bash(rm * /)"; do
         printf '%s\n' "${denies}" | grep -qxF "${exact}" \
             || { echo "missing exact deny: ${exact}" >&2; return 1; }
     done
@@ -743,10 +742,14 @@ installed_mcp_names() {
             return 1
         fi
     done
-    if printf '%s\n' "${denies}" | grep -qxF "Bash(node ..*)"; then
-        echo "unexpected deny Bash(node ..*) - already covered by Bash(node *..*)" >&2
-        return 1
-    fi
+    # enforce-allowed-dirs resolves the script path, so a text deny on `..` would only block
+    # legitimate names such as build..min.js.
+    for exact in "Bash(node *..*)" "Bash(node ..*)"; do
+        if printf '%s\n' "${denies}" | grep -qxF "${exact}"; then
+            echo "unexpected deny ${exact} - enforce-allowed-dirs checks the resolved script path" >&2
+            return 1
+        fi
+    done
 }
 
 # --- preconditions ---------------------------------------------------------------
