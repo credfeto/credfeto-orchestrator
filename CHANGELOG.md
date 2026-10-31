@@ -49,6 +49,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - The development-tools README describes where each tool comes from (apt, trixie-backports, pip or upstream release) and how each one is verified (#1547)
 - The docker login and docker buildx setup action pins in the build-development-tools workflow are bumped to their latest releases (#1547)
 - Agent prompts use cfwf instead of raw gh wherever cfwf covers the operation (#1761)
+- cfwf issue plan-status --approval is now the single plan-approval check for repositories without a Workflow board, and the agent prompt runs it instead of its own gh issue view check. The rule is the stricter of the two it replaces: the approval must follow the latest plan (any revised one included), come from a human collaborator or the owner who is not a bot, the agent, the PR creator or the plan's author, and hold approved or lgtm as a whole word on a non-quoted line with no negation, condition or question. go ahead and looks good no longer count. The orchestrator's host-side check applies the same rule (#1772)
 ### Deprecated
 ### Removed
 ### Deployment Changes
