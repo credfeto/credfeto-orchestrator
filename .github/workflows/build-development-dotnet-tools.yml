@@ -138,8 +138,10 @@ jobs:
         id: "check-dispatch-secret"
         if: ${{ github.event_name == 'workflow_run' && steps.relevance.outputs.relevant == 'true' }}
         shell: "bash"
+        env:
+          SOURCE_PUSH_TOKEN: "${{ secrets.SOURCE_PUSH_TOKEN }}"
         run: |
-          if [ -z "${{ secrets.SOURCE_PUSH_TOKEN }}" ]; then
+          if [ -z "${SOURCE_PUSH_TOKEN}" ]; then
             echo "::warning::SOURCE_PUSH_TOKEN is not set - skipping the development-credfeto-tools dispatch (chain continuation for #1424/#1444)"
             echo "has-token=false" >> "$GITHUB_OUTPUT"
           else
