@@ -275,7 +275,6 @@
       "Bash(node --loader*)",
       "Bash(node --require*)",
       "Bash(node -r*)",
-      "Bash(node *..*)",
       "Bash(npm --globalconfig*)",
       "Bash(npm --script-shell*)",
       "Bash(npm --userconfig*)",
