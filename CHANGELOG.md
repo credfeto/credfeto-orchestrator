@@ -25,6 +25,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - cfwf issue reopen, pr close and pr reopen to change an issue's or the agent's own pull request's state without merging, with an optional checked comment first (#1762)
 - cfwf issue comments to read an issue's or pull request's top-level comments with their bodies, filtered by --since and --author, capped and count-checked (#1764)
 - cfwf pr list --label to list only the open pull requests carrying every given label (#1767)
+- cfwf pr finalise-dependency marks a bot dependency-update PR ready and enables auto-merge, without the AI hand-off's title, description, board or review-record steps; dependency prompts use it instead of raw gh (#1771)
 ### Fixed
 - CI: workflow expressions in run and script bodies are passed through env, so the no-expressions-in-scripts check passes
 - CI: the remaining workflow expressions in run bodies (image summaries, dispatch-secret check, runner name) are passed through env
@@ -49,6 +50,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - The development-tools README describes where each tool comes from (apt, trixie-backports, pip or upstream release) and how each one is verified (#1547)
 - The docker login and docker buildx setup action pins in the build-development-tools workflow are bumped to their latest releases (#1547)
 - Agent prompts use cfwf instead of raw gh wherever cfwf covers the operation (#1761)
+- cfwf pr hand-off's --body-file is optional, so a hand-off is one call with the description on stdin and no review-record file (#1775)
 ### Deprecated
 ### Removed
 ### Deployment Changes
