@@ -247,9 +247,18 @@ JQ_RESOLVE_PARTS='
 # 0 guarantees no real \x01 byte can reach this point) and blocked, since the
 # variable it assigns cannot be known statically. The blocklist is loaded
 # once, not re-read from disk per assignment.
+#
+# An arithmetic or ${...} operator is read from the command text at its byte
+# offset rather than from its Op field, because shfmt before 3.14 encodes Op
+# as an integer token whose value shifts between releases and only 3.14
+# onwards encodes it as its text. jq indexes a string by codepoint, so it is
+# given op_src, a copy of the parsed command with every byte outside
+# printable ASCII replaced by `?`, keeping each byte offset a valid index. An
+# operator that cannot be read is treated as an assignment to an unknown name.
 mapfile -t env_var_patterns < <(grep -vE '^[[:space:]]*(#|$)' "$ENV_VAR_BLOCKLIST" 2> /dev/null)
+op_src=$(printf '%s' "$cmd" | tr -c ' -~\t\n\r' '?')
 
-assign_targets=$(printf '%s' "$ast" | jq -r "${JQ_RESOLVE_PARTS}"'
+assign_targets=$(printf '%s' "$ast" | jq -r --arg op_src "$op_src" "${JQ_RESOLVE_PARTS}"'
   def has_escape:
     any(.. | objects | select(.Type == "Lit" or (.Type == "SglQuoted" and .Dollar == true)); .Value | contains("\\"));
   def word_value:
@@ -293,6 +302,12 @@ assign_targets=$(printf '%s' "$ast" | jq -r "${JQ_RESOLVE_PARTS}"'
       (.Parts[0] | if .Type == "Lit" then .Value elif .Type == "ParamExp" then .Param.Value else "\u0001" end)
     else "\u0001"
     end;
+  def src_between($from; $to):
+    if ($from | type) == "number" and ($to | type) == "number" then $op_src[$from:$to] else null end;
+  # The operator text at $at, up to $width bytes, or null when unreadable.
+  def op_at($at; $width):
+    src_between($at; (if ($at | type) == "number" then $at + $width else null end))
+    | if . == "" then null else . end;
   def strip_index:
     if . == "\u0001" then . else sub("\\[.*$"; "") end;
   .. | objects
@@ -306,10 +321,30 @@ assign_targets=$(printf '%s' "$ast" | jq -r "${JQ_RESOLVE_PARTS}"'
       .Exprs[] | select(.Type == "Word") | word_value
       | if . == "\u0001" then . else scan("[A-Za-z_][A-Za-z0-9_]*") end
     elif .Type == "WordIter" then .Name.Value
-    elif .Type == "BinaryArithm" and (.Op | IN(44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 74)) then .X | arith_target
-    elif .Type == "UnaryArithm" and (.Op | IN(36, 37)) then .X | arith_target
-    elif .Type == "ParamExp" and ((.Exp.Op // null) | IN(74, 75)) then
-      (if .Excl then "\u0001" else .Param.Value end)
+    # =, op= and <<=/>>=, but not the ==, !=, <= and >= comparisons.
+    elif .Type == "BinaryArithm" then
+      op_at(.OpPos.Offset?; 3) as $op
+      | if $op == null then "\u0001"
+        elif $op | test("^(<<=|>>=|[-+*/%&|^]=|=([^=]|$))") then .X | arith_target
+        else empty
+        end
+    elif .Type == "UnaryArithm" then
+      op_at(.OpPos.Offset?; 2) as $op
+      | if $op == null then "\u0001"
+        elif $op | test("^(\\+\\+|--)$") then .X | arith_target
+        else empty
+        end
+    # The operator sits between the name (and any [index]) and the word, or
+    # the closing brace when the word is empty: := and = assign, :-, -, :?,
+    # ?, :+, +, #, %, ^, , and @ do not. The end is chosen by whether the
+    # word exists, not by whether its offset parsed, so a word without a
+    # readable offset fails closed instead of being read up to the brace.
+    elif .Type == "ParamExp" and .Exp != null then
+      src_between(.Param.ValueEnd.Offset?; (if .Exp.Word != null then .Exp.Word.Pos.Offset? else .Rbrace.Offset? end)) as $op
+      | if ($op // "") == "" then "\u0001"
+        elif $op | test(":?=$") then (if .Excl then "\u0001" else .Param.Value end)
+        else empty
+        end
     else empty
     end
 ') || block 'command AST could not be analysed - failing closed'

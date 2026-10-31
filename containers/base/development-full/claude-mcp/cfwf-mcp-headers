@@ -1,0 +1,43 @@
+#!/bin/sh
+
+# Claude Code's headersHelper for the cfwf MCP server (managed-mcp.json). It
+# prints the headers to send, as one JSON object on stdout, each time the MCP
+# client connects:
+#
+#   {"Authorization":"Bearer <token>"}
+#
+# The token is the GitHub token already in the environment: GH_ENTERPRISE_TOKEN,
+# then GH_TOKEN, then (on a host where neither is set) whatever gh holds for
+# GH_HOST, or gh's default host when GH_HOST is unset. Only Claude Code's MCP
+# client reads stdout, so the token is never written anywhere else: gh's own
+# stderr is discarded and the failure message names no token.
+#
+# With no token it prints nothing on stdout and exits 1. It never prints `{}`
+# instead, because a helper output without Authorization lets Claude Code fall
+# back to OAuth discovery against the server.
+
+fail() {
+    printf 'cfwf-mcp-headers: %s\n' "$*" >&2
+    exit 1
+}
+
+token_from_gh() {
+    command -v gh >/dev/null 2>&1 || return 1
+    gh auth token ${GH_HOST:+--hostname "${GH_HOST}"} 2>/dev/null
+}
+
+token="${GH_ENTERPRISE_TOKEN:-}"
+[ -n "${token}" ] || token="${GH_TOKEN:-}"
+[ -n "${token}" ] || token=$(token_from_gh)
+[ -n "${token}" ] || fail "no GitHub token: set GH_ENTERPRISE_TOKEN or GH_TOKEN, or log in with gh auth login"
+
+# RFC 6750's token68 characters only, so a stray newline or header text in the
+# variable can never smuggle a second header into the request.
+case "${token}" in
+    *[!A-Za-z0-9._~+/=-]*) fail "the GitHub token holds characters a bearer token cannot contain" ;;
+esac
+
+# The token reaches jq on stdin from the shell's builtin printf, never as an
+# argument, so no other local user can read it from /proc/<pid>/cmdline.
+printf '%s' "${token}" | jq -cR '{Authorization: ("Bearer " + .)}' 2>/dev/null \
+    || fail "jq could not build the Authorization header"

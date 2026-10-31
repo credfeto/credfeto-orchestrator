@@ -989,6 +989,56 @@ git status'
     done
 }
 
+# Puts a shfmt on PATH that runs the real one and then rewrites its JSON with
+# the jq filter "$1", so a test can feed the hook an AST whose operator
+# offsets are missing or point past the end of the command. The real shfmt is
+# looked up with STUB_BIN off PATH, so a second call does not wrap the stub.
+stub_shfmt_rewriting() {
+    local real_shfmt
+    real_shfmt=$(PATH="${PATH#"${STUB_BIN}:"}" type -P shfmt)
+    make_stub shfmt "'${real_shfmt}' \"\$@\" | jq -c '$1'"
+}
+
+@test "an arithmetic operator whose offset is missing or past the command's end fails closed" {
+    local filter cmd
+    for filter in \
+        'walk(if type == "object" then del(.OpPos) else . end)' \
+        'walk(if type == "object" and has("OpPos") then .OpPos.Offset = 100000 else . end)'; do
+        stub_shfmt_rewriting "${filter}"
+        for cmd in '((i=1))' '((i++))'; do
+            run_hook "${cmd}"
+            [ "${status}" -eq 2 ] || { echo "did not block: ${cmd} under ${filter}" >&2; return 1; }
+            [[ "${output}" == *'assignment to a variable whose name is not a plain literal is not permitted'* ]] || { echo "wrong message for: ${cmd}: ${output}" >&2; return 1; }
+        done
+    done
+}
+
+@test "a \${...} operator whose offset is missing fails closed" {
+    stub_shfmt_rewriting 'walk(if type == "object" and .Type == "ParamExp" then del(.Param.ValueEnd) else . end)'
+    # shellcheck disable=SC2016  # literal ${...} — must reach the hook unexpanded
+    run_hook 'echo "${FOO:-x}"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'assignment to a variable whose name is not a plain literal is not permitted'* ]]
+}
+
+@test "a \${...} word whose offset is missing fails closed rather than being read up to the closing brace" {
+    stub_shfmt_rewriting 'walk(if type == "object" and .Type == "ParamExp" and .Exp.Word != null then del(.Exp.Word.Pos) else . end)'
+    # shellcheck disable=SC2016  # literal ${...} — must reach the hook unexpanded
+    run_hook 'echo "${PATH=x}"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'assignment to a variable whose name is not a plain literal is not permitted'* ]]
+}
+
+@test "a \${...} assignment with an empty word is read up to the closing brace" {
+    # shellcheck disable=SC2016  # literal ${...} — must reach the hook unexpanded
+    run_hook 'echo ${PATH:=}'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'assignment to PATH is not permitted'* ]]
+    # shellcheck disable=SC2016  # literal ${...} — must reach the hook unexpanded
+    run_hook 'echo ${FOO:-}'
+    [ "${status}" -eq 0 ]
+}
+
 @test "a backslash-escaped assigning builtin name is blocked" {
     run_hook 'pr\intf -v PATH x'
     [ "${status}" -eq 2 ]
@@ -1014,6 +1064,13 @@ git status'
         '((i=1))' \
         '((i++))' \
         '((PATH==1))' \
+        '((PATH != 1))' \
+        '((PATH <= 1))' \
+        '((PATH >= 1))' \
+        '((PATH << 1))' \
+        '((-PATH))' \
+        '((!PATH))' \
+        'echo "${PATH#x}" "${PATH%=}" "${PATH-=}"' \
         'echo $((PATH+1))' \
         'let i=1'; do
         run_hook "${cmd}"

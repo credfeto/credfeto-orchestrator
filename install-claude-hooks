@@ -22,6 +22,14 @@
 # and so on) is copied to ~/.claude/settings.json, keeping the previous file
 # as settings.json.bak.
 #
+# It also installs /etc/claude-code/managed-mcp.json, which takes exclusive
+# control of the MCP servers Claude Code loads, and the cfwf-mcp-headers
+# helper it names. The installed file is the container's cfwf server merged
+# with the MCP servers in ~/.claude.json (user scope and every project scope),
+# so a host keeps its own servers; see merge_host_mcp_servers for what is left
+# out. The merge is a snapshot: a server added to ~/.claude.json later only
+# takes effect once this script is run again.
+#
 # The first argument, when given, is a file of allowed directory roots for
 # this host; it is installed as the root-owned allowed-dirs.local next to the
 # hooks, because the shipped allowed-dirs lists the container's mounts.
@@ -68,6 +76,8 @@ SOURCE_MANAGED_SETTINGS="${SOURCE_DIR}/claude-managed-settings.json"
 SOURCE_USER_SETTINGS="${SOURCE_DIR}/claude-user-settings.json"
 SOURCE_HOOKS_DIR="${SOURCE_DIR}/claude-hooks"
 SOURCE_CFWF="${SOURCE_DIR}/scripts/cfwf"
+SOURCE_MANAGED_MCP="${SOURCE_DIR}/claude-managed-mcp.json"
+SOURCE_MCP_HEADERS="${SOURCE_DIR}/claude-mcp/cfwf-mcp-headers"
 CFWF_BIN_DIR="${CFWF_BIN_DIR:-/usr/local/bin}"
 CLAUDE_MANAGED_DIR="${CLAUDE_MANAGED_DIR:-/etc/claude-code}"
 
@@ -134,18 +144,21 @@ root_install() {
 # so copying it would let the agent widen its own directory roots without a
 # reviewed change. It is installed only from the path given as the argument.
 install_managed_files() {
-    local allowed_dirs_file="$1"
+    local allowed_dirs_file="$1" merged_mcp_file="$2"
     local hooks_dir="${CLAUDE_MANAGED_DIR}/hooks"
+    local mcp_dir="${CLAUDE_MANAGED_DIR}/mcp"
     local src mode
 
     info "Installing managed settings and hooks into ${CLAUDE_MANAGED_DIR} as root (sudo may prompt)..."
-    root_install -d -m 0755 "${CLAUDE_MANAGED_DIR}" "${hooks_dir}"
+    root_install -d -m 0755 "${CLAUDE_MANAGED_DIR}" "${hooks_dir}" "${mcp_dir}"
     while IFS= read -r src; do
         mode=0444
         [ -x "${src}" ] && mode=0755
         root_install -m "${mode}" "${src}" "${hooks_dir}/$(basename "${src}")"
     done < <(find "${SOURCE_HOOKS_DIR}" -mindepth 1 -maxdepth 1 -type f ! -name allowed-dirs.local | sort)
     root_install -m 0444 "${SOURCE_MANAGED_SETTINGS}" "${CLAUDE_MANAGED_DIR}/managed-settings.json"
+    root_install -m 0755 "${SOURCE_MCP_HEADERS}" "${mcp_dir}/$(basename "${SOURCE_MCP_HEADERS}")"
+    root_install -m 0444 "${merged_mcp_file}" "${CLAUDE_MANAGED_DIR}/managed-mcp.json"
     [ -n "${allowed_dirs_file}" ] && root_install -m 0444 "${allowed_dirs_file}" "${hooks_dir}/allowed-dirs.local"
 
     if [ "${#PENDING_ROOT_COMMANDS[@]}" -eq 0 ]; then
@@ -156,6 +169,101 @@ install_managed_files() {
     printf -v pending '\n  %s' "${PENDING_ROOT_COMMANDS[@]}"
     info "Could not install the managed settings and hooks as root - no guardrails are active until you run:${pending}"
     return 1
+}
+
+# Prints a JSON report of merging the shipped cfwf server with the host's own
+# MCP servers from the given ~/.claude.json (a missing or empty file has none):
+#
+#   merged      the managed-mcp.json to install
+#   duplicates  host servers left out because their URL is cfwf's, which
+#               replaces them
+#   refused     host servers left out because they may hold a secret: a headers
+#               or env value holds literal text rather than only ${VAR}
+#               references (an optional Bearer/Basic/Token scheme word is
+#               allowed), the url carries userinfo (scheme://user@host) or a
+#               query string, or a command or args word looks like a
+#               credential: a KEY=value or --flag=value whose name holds a
+#               token, secret, password, api-key, auth or bearer word, a
+#               well-known token prefix such as ghp_, github_pat_, sk-, xox?-
+#               or AKIA, or a literal value after such a flag (a name ending
+#               in file, path, dir, helper, command, cmd, env or var says where
+#               the secret lives, so it is not one, and ${VAR} references are
+#               allowed). managed-mcp.json is world-readable, so a secret
+#               copied into it would leak to every user on the host
+#   collisions  names given to two different servers, which cannot both be
+#               kept under one name; the same definition repeated in several
+#               scopes is one server, not a collision
+#
+# Fails when either file is not valid JSON.
+merge_host_mcp_servers() {
+    local host_claude_json="$1"
+    # Read by jq from the file, never passed as an argument: an active
+    # ~/.claude.json is easily bigger than the kernel's per-argument limit.
+    local host_args=(--argjson hosts '[]')
+    [ -s "${host_claude_json}" ] && host_args=(--slurpfile hosts "${host_claude_json}")
+    # shellcheck disable=SC2016  # jq variables, not shell expansions
+    jq -c "${host_args[@]}" '
+        def same_url($a; $b): ($a | rtrimstr("/")) == ($b | rtrimstr("/"));
+        def without_refs: gsub("\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}"; "");
+        def literal_value:
+            type != "string" or (without_refs | test("^((Bearer|Basic|Token) )?$") | not);
+        def secret_name:
+            ascii_downcase
+            | test("(^|[-_.])(token|secret|password|passwd|api[-_]?key|apikey|auth|bearer)([-_.]|$)")
+              and (test("[-_.](file|path|dir|helper|command|cmd|env|var)$") | not);
+        def secret_flag:
+            test("^--?[A-Za-z0-9][A-Za-z0-9_.-]*$") and (ltrimstr("-") | ltrimstr("-") | secret_name);
+        def credential_word:
+            without_refs
+            | test("(^|[^A-Za-z0-9])(gh[pousr]_|github_pat_|sk-|xox[abeoprs]-)[A-Za-z0-9]|AKIA[A-Z0-9]{16}")
+              or ([capture("^-{0,2}(?<name>[A-Za-z0-9_.-]+)=.")] | any(.name | secret_name));
+        def url_has_credentials:
+            [.url | strings | test("^[A-Za-z][A-Za-z0-9+.-]*://[^/?#]*@|\\?")] | any;
+        def command_has_credentials:
+            [(.command | strings), (.args | arrays | .[] | strings)] as $words
+            | ($words | any(credential_word))
+              or ([range(0; ($words | length) - 1) as $i
+                   | select($words[$i] | secret_flag)
+                   | $words[$i + 1] | select(startswith("-") | not) | without_refs | length > 0] | any);
+        def holds_literal_secret:
+            ([(.headers // {}), (.env // {}) | objects | .[]] | any(literal_value))
+            or url_has_credentials
+            or command_has_credentials;
+
+        ($hosts[0] // {}) as $host
+        | (.mcpServers.cfwf.url) as $cfwf_url
+        | (.mcpServers | to_entries) as $shipped
+        | [($host | objects | .mcpServers // {} | objects | to_entries[]),
+           ($host | objects | .projects // {} | objects | .[] | objects | .mcpServers // {} | objects | to_entries[])]
+        | map(select(.value | type == "object")) as $hosted
+        | ($hosted | map(select(same_url(.value.url // "" | tostring; $cfwf_url)))) as $duplicates
+        | ($hosted - $duplicates | map(select(.value | holds_literal_secret))) as $refused
+        | (($shipped + ($hosted - $duplicates - $refused)) | unique) as $kept
+        | {
+            merged: {mcpServers: ($kept | from_entries)},
+            duplicates: ($duplicates | map(.key) | unique),
+            refused: ($refused | map(.key) | unique),
+            collisions: ($kept | group_by(.key) | map(select(length > 1) | .[0].key))
+          }
+    ' "${SOURCE_MANAGED_MCP}" 2>/dev/null
+}
+
+# Writes the merged managed-mcp.json to merged_mcp_file, from a report made by
+# merge_host_mcp_servers, saying which host servers were left out and why.
+# Only server names are printed, never a definition, so no secret is echoed.
+write_merged_mcp() {
+    local report="$1" merged_mcp_file="$2" host_claude_json="$3"
+    local names
+
+    names=$(jq -r '.duplicates | join(", ")' <<<"${report}")
+    [ -z "${names}" ] || info "Left out ${names} from ${host_claude_json}: same URL as cfwf, which replaces them. Remove them from ${host_claude_json}, as they are no longer used."
+    names=$(jq -r '.refused | join(", ")' <<<"${report}")
+    [ -z "${names}" ] || info "WARNING: did not copy ${names} from ${host_claude_json}: a headers or env value holds literal text, the url carries userinfo or a query string, or the command or args look like a credential, and ${CLAUDE_MANAGED_DIR}/managed-mcp.json is readable by every user. Supply the secret through a headersHelper or a \${VAR} reference instead, then re-run."
+
+    jq '.merged' <<<"${report}" >"${merged_mcp_file}" || die "Failed to write ${merged_mcp_file}"
+    jq empty "${merged_mcp_file}" 2>/dev/null || die "Merged MCP servers are not valid JSON: ${merged_mcp_file}"
+    names=$(jq -r '.mcpServers | keys | join(", ")' "${merged_mcp_file}")
+    info "MCP servers for ${CLAUDE_MANAGED_DIR}/managed-mcp.json: ${names}. This is a snapshot of ${host_claude_json}: re-run this script after adding an MCP server there."
 }
 
 # Replaces the previous per-user setup (hook symlinks into this checkout and a
@@ -235,6 +343,8 @@ main() {
     [ -f "${SOURCE_USER_SETTINGS}" ] || die "Source user settings not found: ${SOURCE_USER_SETTINGS}"
     [ -d "${SOURCE_HOOKS_DIR}" ] || die "Source hooks directory not found: ${SOURCE_HOOKS_DIR}"
     [ -f "${SOURCE_CFWF}" ] || die "Source cfwf script not found: ${SOURCE_CFWF}"
+    [ -f "${SOURCE_MANAGED_MCP}" ] || die "Source managed MCP servers not found: ${SOURCE_MANAGED_MCP}"
+    [ -f "${SOURCE_MCP_HEADERS}" ] || die "Source MCP headers helper not found: ${SOURCE_MCP_HEADERS}"
     if [ -n "${allowed_dirs_file}" ] && { [ ! -f "${allowed_dirs_file}" ] || [ ! -r "${allowed_dirs_file}" ]; }; then
         die "Allowed directories file not found or not readable: ${allowed_dirs_file}"
     fi
@@ -248,15 +358,26 @@ main() {
 
     jq empty "${SOURCE_MANAGED_SETTINGS}" 2>/dev/null || die "Managed settings are not valid JSON: ${SOURCE_MANAGED_SETTINGS}"
     jq empty "${SOURCE_USER_SETTINGS}" 2>/dev/null || die "User settings are not valid JSON: ${SOURCE_USER_SETTINGS}"
+    jq empty "${SOURCE_MANAGED_MCP}" 2>/dev/null || die "Managed MCP servers are not valid JSON: ${SOURCE_MANAGED_MCP}"
 
     [ -n "${HOME}" ] || die "\$HOME is not set"
     local target_claude_dir="${HOME}/.claude"
+    local host_claude_json="${HOME}/.claude.json"
+    # Kept, not a temp file: when sudo is declined the printed install command
+    # still has to find it.
+    local merged_mcp_file="${target_claude_dir}/managed-mcp.merged.json"
+
+    local mcp_report collisions
+    mcp_report=$(merge_host_mcp_servers "${host_claude_json}") || die "${host_claude_json} is not valid JSON"
+    collisions=$(jq -r '.collisions | join(", ")' <<<"${mcp_report}")
+    [ -z "${collisions}" ] || die "MCP server name(s) used for two different servers in ${host_claude_json} or by the shipped managed-mcp.json: ${collisions}. Rename one of each pair and re-run."
 
     info "Installing Claude Code settings/hooks from ${REPO_DIR}..."
 
     mkdir -p "${target_claude_dir}" || die "Failed to create ${target_claude_dir}"
+    write_merged_mcp "${mcp_report}" "${merged_mcp_file}" "${host_claude_json}"
     local managed_installed=1
-    install_managed_files "${allowed_dirs_file}" || managed_installed=0
+    install_managed_files "${allowed_dirs_file}" "${merged_mcp_file}" || managed_installed=0
     install_user_files "${target_claude_dir}" "${managed_installed}"
     install_cfwf
     warn_if_no_allowed_dirs_override "${allowed_dirs_file}"

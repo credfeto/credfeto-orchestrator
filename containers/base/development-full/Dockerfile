@@ -221,9 +221,15 @@ RUN mkdir -p /home/developer/.claude/agents \
 # ~/.claude copies can be replaced along with ~/.claude itself (see the skills
 # link step above). oneshot does not (and must not) bind-mount over these
 # paths - see containers/agent/Dockerfile.
+# managed-mcp.json pins the only MCP server, cfwf, and is world-readable, so
+# it holds no token: its Authorization header comes at connect time from the
+# root-owned headersHelper, mcp/cfwf-mcp-headers, which reads the GitHub token
+# from the environment.
 COPY --chown=root:root --chmod=0444 claude-user-settings.json /home/developer/.claude/settings.json
 COPY --chown=root:root --chmod=0444 claude-policy-limits.json /home/developer/.claude/policy-limits.json
 COPY --chown=root:root --chmod=0444 claude-managed-settings.json /etc/claude-code/managed-settings.json
+COPY --chown=root:root --chmod=0444 claude-managed-mcp.json /etc/claude-code/managed-mcp.json
+COPY --chown=root:root --chmod=0755 claude-mcp/cfwf-mcp-headers /etc/claude-code/mcp/cfwf-mcp-headers
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-dash-c /etc/claude-code/hooks/enforce-git-dash-c
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-identity /etc/claude-code/hooks/enforce-git-identity
 COPY --chown=root:root --chmod=0755 claude-hooks/reject-obfuscated-commands /etc/claude-code/hooks/reject-obfuscated-commands
@@ -240,8 +246,8 @@ COPY --chown=root:root --chmod=0444 claude-hooks/command-allowlist /etc/claude-c
 COPY --chown=root:root --chmod=0444 claude-hooks/command-blocklist /etc/claude-code/hooks/command-blocklist
 COPY --chown=root:root --chmod=0444 claude-hooks/env-var-blocklist /etc/claude-code/hooks/env-var-blocklist
 COPY --chown=root:root --chmod=0444 claude-hooks/allowed-dirs /etc/claude-code/hooks/allowed-dirs
-RUN chown root:root /etc/claude-code /etc/claude-code/hooks \
-    && chmod 0755 /etc/claude-code /etc/claude-code/hooks
+RUN chown root:root /etc/claude-code /etc/claude-code/hooks /etc/claude-code/mcp \
+    && chmod 0755 /etc/claude-code /etc/claude-code/hooks /etc/claude-code/mcp
 
 # ---- /opt/pre-commit (global pre-commit config) + hook shims ----------------
 # Clone the upstream config repo, record provenance in .env, strip git
@@ -410,11 +416,11 @@ RUN set -e; \
             || { echo "FATAL sanity: $wrapper not on PATH — /opt/pre-commit/src/scripts/ missing from PATH?" >&2; exit 1; }; \
     done; \
     echo "== Claude Code settings/policy-limits/hooks wiring =="; \
-    for f in /home/developer/.claude/settings.json /home/developer/.claude/policy-limits.json /etc/claude-code/managed-settings.json; do \
+    for f in /home/developer/.claude/settings.json /home/developer/.claude/policy-limits.json /etc/claude-code/managed-settings.json /etc/claude-code/managed-mcp.json; do \
         [ "$(stat -c '%U:%G %a' "$f")" = "root:root 444" ] \
             || { echo "FATAL sanity: $f has wrong owner/perms" >&2; exit 1; }; \
     done; \
-    for d in /etc/claude-code /etc/claude-code/hooks; do \
+    for d in /etc/claude-code /etc/claude-code/hooks /etc/claude-code/mcp; do \
         [ "$(stat -c '%U:%G %a' "$d")" = "root:root 755" ] \
             || { echo "FATAL sanity: $d missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
     done; \
@@ -430,6 +436,16 @@ RUN set -e; \
         [ "$(stat -c '%U:%G %a' /etc/claude-code/hooks/$h)" = "root:root 755" ] \
             || { echo "FATAL sanity: $h hook missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
     done; \
+    jq -e '(.mcpServers | keys) == ["cfwf"] and .mcpServers.cfwf.type == "http" and .mcpServers.cfwf.url == "https://workflow-mcp.markridgwell.com/mcp" and .mcpServers.cfwf.headersHelper == "/etc/claude-code/mcp/cfwf-mcp-headers"' /etc/claude-code/managed-mcp.json >/dev/null \
+        || { echo "FATAL sanity: managed-mcp.json must hold exactly the cfwf server, at its https URL, with its headers from /etc/claude-code/mcp/cfwf-mcp-headers" >&2; exit 1; }; \
+    jq -e '.mcpServers.cfwf | has("headers") or has("env") | not' /etc/claude-code/managed-mcp.json >/dev/null \
+        || { echo "FATAL sanity: managed-mcp.json is world-readable, so the cfwf server must not carry literal headers or env (its Authorization comes from the headersHelper)" >&2; exit 1; }; \
+    ! grep -qi 'authorization' /etc/claude-code/managed-mcp.json \
+        || { echo "FATAL sanity: managed-mcp.json holds a literal Authorization header" >&2; exit 1; }; \
+    [ "$(stat -c '%U:%G %a' /etc/claude-code/mcp/cfwf-mcp-headers)" = "root:root 755" ] \
+        || { echo "FATAL sanity: cfwf-mcp-headers missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
+    jq -e '.permissions.allow | index("mcp__cfwf__*")' /etc/claude-code/managed-settings.json >/dev/null \
+        || { echo "FATAL sanity: managed-settings.json does not allow the cfwf MCP tools (mcp__cfwf__*)" >&2; exit 1; }; \
     [ ! -e /etc/claude-code/hooks/allowed-dirs.local ] \
         || { echo "FATAL sanity: an allowed-dirs.local override must never be baked into the image" >&2; exit 1; }; \
     for d in /workspace/repo /workspace/rules /workspace/tmp; do \
