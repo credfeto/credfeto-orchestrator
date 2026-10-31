@@ -11,7 +11,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ## [Unreleased]
 ### Security
 - Redact every token form cfwf refuses (sk-proj-, discordapp.com webhooks, Bearer, AWS key IDs, Slack, sk-ant) in notify-unit-failure and lib/discord using a shared pattern list - #1616
-- TBD - to be finalized after review
+- The enforce-allowed-dirs hook now checks that the script given to node resolves under .github/actions and denies node options that load code from outside the script (such as --require, --import, --loader and --inspect), and the Bash(node *..*) deny rule is removed from claude-managed-settings.json now that the hook covers node paths - #1540
 ### Added
 - `cfwf repo advisories --repo <owner/repo>` lists a repository's security advisories, one `<ghsa_id>\t<severity>\t<state>\t<summary>` line each, so the dependency updater's advisory check no longer needs raw `gh api` (#1598)
 - `cfwf run list`, `cfwf run view` and `cfwf run log`: list a branch's or a commit's GitHub Actions runs with no event filter, read one run and its latest attempt's jobs, and read the tail of its failed steps' logs (at most 2000 lines a step, 1000 bytes a line, 256 KiB in all) made printable, with token lines redacted and long hex and base64 runs masked, replacing raw `gh run` and `gh api` reads (#1586)
