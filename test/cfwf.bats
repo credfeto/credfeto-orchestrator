@@ -11808,6 +11808,7 @@ commit_reads() {
 HAND_OFF_URL="https://github.com/credfeto/credfeto-orchestrator/pull/42"
 HAND_OFF_COMMENT_URL="https://github.com/credfeto/credfeto-orchestrator/pull/42#issuecomment-4343"
 HAND_OFF_NEW_SHA="2222222222222222222222222222222222222222"
+HAND_OFF_TITLE="feat(cfwf): hand a pull request off with its real title"
 HAND_OFF_BOARD_EDIT="project item-edit --project-id PVT_proj --id PVTI_target --field-id PVTSSF_status --single-select-option-id st_9"
 
 # Writes PR 42 as the pulls endpoint gives it: state $1 (open by default), draft $2 (false by
@@ -11835,6 +11836,7 @@ prepare_hand_off() {
     write_timeline 42 "$(timeline_event ready_for_review credfeto "" 2026-10-01T11:00:00Z)"
     printf '%s\n' "${HAND_OFF_COMMENT_URL}" > "${GH_FIXTURES}/comment.out"
     printf 'Reviewed and ready.\n' > "${TEST_TMP}/hand-off.md"
+    printf 'What the pull request really holds.\n\nCloses #1755\n' > "${TEST_TMP}/description.md"
 }
 
 # Makes "gh pr ready" copy every file a test puts in pr-ready.then over the fixtures, as what
@@ -11844,11 +11846,13 @@ after_ready() {
 }
 
 run_hand_off() {
-    run --separate-stderr "${SCRIPT}" pr hand-off --repo "${REPO}" --pr 42 --body-file "${TEST_TMP}/hand-off.md"
+    run --separate-stderr "${SCRIPT}" pr hand-off --repo "${REPO}" --pr 42 --title "${HAND_OFF_TITLE}" \
+        --description-file "${TEST_TMP}/description.md" --body-file "${TEST_TMP}/hand-off.md"
 }
 
 # Nothing was written: no board change, no ready, no comment and no merge request.
 assert_nothing_handed_off() {
+    [ "$(gh_call_count "pr edit")" -eq 0 ]
     [ "$(gh_call_count "project item-add")" -eq 0 ]
     [ "$(gh_call_count "project item-edit")" -eq 0 ]
     [ "$(gh_call_count "pr ready")" -eq 0 ]
@@ -11861,10 +11865,16 @@ assert_nothing_handed_off() {
     run_hand_off
     [ "${status}" -eq 0 ]
     [ -z "${stderr}" ]
-    [ "${output}" = "${HAND_OFF_URL} Human Review
+    [ "${output}" = "${HAND_OFF_URL} title and description set
+${HAND_OFF_URL} Human Review
 ${HAND_OFF_URL} ready
 ${HAND_OFF_COMMENT_URL}
 ${HAND_OFF_URL} auto-merge on" ]
+    [ "$(gh_call_count "pr edit 42 --repo ${REPO} --title ${HAND_OFF_TITLE} --body-file ")" -eq 1 ]
+    cmp "${TEST_TMP}/description.md" "${GH_FIXTURES}/edit-body.txt"
+    # gh is given the checked copy, never the caller's file.
+    [ "$(gh_call_count "--body-file ${TEST_TMP}/description.md")" -eq 0 ]
+    [ "$(gh_line_of "pr edit 42")" -lt "$(gh_line_of "project item-edit")" ]
     grep -qxF "${HAND_OFF_BOARD_EDIT}" "${GH_LOG}"
     # Already ready, so it is not marked ready again.
     [ "$(gh_call_count "pr ready")" -eq 0 ]
@@ -11883,7 +11893,8 @@ ${HAND_OFF_URL} auto-merge on" ]
     write_timeline 42 "$(timeline_event ready_for_review credfeto "" 2026-10-01T13:00:00Z)"
     run_hand_off
     [ "${status}" -eq 7 ]
-    [ "${output}" = "${HAND_OFF_URL} Human Review
+    [ "${output}" = "${HAND_OFF_URL} title and description set
+${HAND_OFF_URL} Human Review
 ${HAND_OFF_URL} ready
 ${HAND_OFF_COMMENT_URL}
 ${HAND_OFF_URL} auto-merge deferred: the required checks have not finished since the pull request was marked ready" ]
@@ -11928,7 +11939,7 @@ ${HAND_OFF_URL} auto-merge deferred: the required checks have not finished since
     run_hand_off
     [ "${status}" -eq 1 ]
     [[ "${stderr}" == *"cfwf: the head of ${REPO}#42 changed after it was reviewed, so auto-merge was not enabled"* ]]
-    [[ "${stderr}" == *"cfwf: hand-off steps done before the failure: board Human Review, ready, review record" ]]
+    [[ "${stderr}" == *"cfwf: hand-off steps done before the failure: title and description, board Human Review, ready, review record" ]]
     [ "$(gh_call_count "pr merge")" -eq 0 ]
 }
 
@@ -12010,17 +12021,93 @@ ${HAND_OFF_URL} auto-merge deferred: the required checks have not finished since
 }
 
 @test "pr hand-off rejects usage errors (exit 2) without calling gh" {
-    local args
+    local args td
     printf 'text\n' > "${TEST_TMP}/hand-off.md"
-    for args in "--repo ${REPO} --pr 42" "--repo ${REPO} --body-file ${TEST_TMP}/hand-off.md" \
-        "--pr 42 --body-file ${TEST_TMP}/hand-off.md" "--repo ${REPO} --pr 0 --body-file ${TEST_TMP}/hand-off.md" \
-        "--repo ${REPO} --pr 42 --body-file ${TEST_TMP}/hand-off.md --admin" \
-        "--repo ${REPO} --pr 42 --pr 43 --body-file ${TEST_TMP}/hand-off.md"; do
+    printf 'description\n' > "${TEST_TMP}/description.md"
+    td="--title fix:x --description-file ${TEST_TMP}/description.md"
+    for args in "--repo ${REPO} --pr 42 ${td}" "--repo ${REPO} ${td} --body-file ${TEST_TMP}/hand-off.md" \
+        "--pr 42 ${td} --body-file ${TEST_TMP}/hand-off.md" "--repo ${REPO} --pr 0 ${td} --body-file ${TEST_TMP}/hand-off.md" \
+        "--repo ${REPO} --pr 42 ${td} --body-file ${TEST_TMP}/hand-off.md --admin" \
+        "--repo ${REPO} --pr 42 --pr 43 ${td} --body-file ${TEST_TMP}/hand-off.md" \
+        "--repo ${REPO} --pr 42 --description-file ${TEST_TMP}/description.md --body-file ${TEST_TMP}/hand-off.md" \
+        "--repo ${REPO} --pr 42 --title fix:x --body-file ${TEST_TMP}/hand-off.md" \
+        "--repo ${REPO} --pr 42 --title fix:x --description text --body-file ${TEST_TMP}/hand-off.md" \
+        "--repo ${REPO} --pr 42 --title fix:x --body text --description-file ${TEST_TMP}/description.md" \
+        "--repo ${REPO} --pr 42 ${td} --description-file ${TEST_TMP}/description.md --body-file ${TEST_TMP}/hand-off.md" \
+        "--repo ${REPO} --pr 42 --title fix:x --title fix:y --description-file ${TEST_TMP}/description.md --body-file ${TEST_TMP}/hand-off.md" \
+        "--repo ${REPO} --pr 42 --title placeholder --description-file ${TEST_TMP}/description.md --body-file ${TEST_TMP}/hand-off.md" \
+        "--repo ${REPO} --pr 42 --title fix:x --description-file - --body-file -"; do
         # shellcheck disable=SC2086  # each case is split into its words on purpose
         run --separate-stderr "${SCRIPT}" pr hand-off ${args}
         [ "${status}" -eq 2 ]
         [ ! -s "${GH_LOG}" ]
     done
+    run --separate-stderr "${SCRIPT}" pr hand-off --repo "${REPO}" --pr 42 --title "" \
+        --description-file "${TEST_TMP}/description.md" --body-file "${TEST_TMP}/hand-off.md"
+    [ "${status}" -eq 2 ]
+    [ ! -s "${GH_LOG}" ]
+    run --separate-stderr "${SCRIPT}" pr hand-off --repo "${REPO}" --pr 42 --title fix:x \
+        --description-file - --body-file -
+    [[ "${stderr}" == "cfwf: --description-file and --body-file cannot both read stdin (-)"* ]]
+}
+
+@test "pr hand-off refuses a description that is missing, empty, leaks or carries a plan-approval keyword, before any gh call" {
+    prepare_hand_off
+    : > "${TEST_TMP}/description.md"
+    : > "${GH_LOG}"
+    run_hand_off
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: the description is empty" ]
+    assert_nothing_handed_off
+    [ "$(gh_call_count "pulls/42")" -eq 0 ]
+
+    printf ' \n\t\n' > "${TEST_TMP}/description.md"
+    run_hand_off
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: the description is empty" ]
+
+    rm "${TEST_TMP}/description.md"
+    run_hand_off
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: cannot read the --description-file" ]
+
+    printf 'see /home/someone/secret.txt\n' > "${TEST_TMP}/description.md"
+    : > "${GH_LOG}"
+    run_hand_off
+    [ "${status}" -eq 8 ]
+    [[ "${stderr}" == "cfwf: body refused: "* ]]
+    assert_nothing_handed_off
+    [ "$(gh_call_count "pulls/42")" -eq 0 ]
+
+    printf 'Looks good, approved.\n' > "${TEST_TMP}/description.md"
+    : > "${GH_LOG}"
+    run_hand_off
+    [ "${status}" -eq 8 ]
+    [ "${stderr}" = "cfwf: body refused: approval keyword (line 1)" ]
+    assert_nothing_handed_off
+    [ "$(gh_call_count "pulls/42")" -eq 0 ]
+}
+
+@test "pr hand-off reads the description from stdin for --description-file -" {
+    prepare_hand_off
+    run --separate-stderr "${SCRIPT}" pr hand-off --repo "${REPO}" --pr 42 --title "${HAND_OFF_TITLE}" \
+        --description-file - --body-file "${TEST_TMP}/hand-off.md" <<< "A description from stdin"
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${GH_FIXTURES}/edit-body.txt")" = "A description from stdin" ]
+    [ "$(sed -n 3p "${GH_FIXTURES}/comment-body.txt")" = "Reviewed and ready." ]
+}
+
+@test "pr hand-off stops (exit 1) with nothing else written when setting the title and description fails" {
+    prepare_hand_off
+    printf 'boom\n' > "${GH_FIXTURES}/pr-edit.fail"
+    run_hand_off
+    [ "${status}" -eq 1 ]
+    [[ "${stderr}" == "cfwf: could not set the title and description of ${REPO}#42: "* ]]
+    [[ "${stderr}" != *"steps done"* ]]
+    [ "$(gh_call_count "project item-edit")" -eq 0 ]
+    [ "$(gh_call_count "pr ready")" -eq 0 ]
+    [ "$(gh_call_count "pr comment")" -eq 0 ]
+    [ "$(gh_call_count "pr merge")" -eq 0 ]
 }
 
 @test "pr hand-off help, from help pr hand-off, pr hand-off --help and -h, describes the order and exit 7; help pr and the general help point to it; none calls gh" {
@@ -12029,7 +12116,8 @@ ${HAND_OFF_URL} auto-merge deferred: the required checks have not finished since
         # shellcheck disable=SC2086  # each invocation is split into its words on purpose
         run "${SCRIPT}" ${invocation}
         [ "${status}" -eq 0 ]
-        [[ "${output}" == "Usage: cfwf pr hand-off --repo <owner/repo> --pr <n> --body-file <file|->"* ]]
+        [[ "${output}" == "Usage: cfwf pr hand-off --repo <owner/repo> --pr <n> --title <title> --description-file <file|->"* ]]
+        [[ "${output}" == *"There is no --description."* ]]
         [[ "${output}" == *"### AI Review Loop: reviewed <head SHA>"* ]]
         [[ "${output}" == *"7 ready and recorded, auto-merge deferred"* ]]
     done
