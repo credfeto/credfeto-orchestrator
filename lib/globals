@@ -185,6 +185,19 @@ TOOL_DENIED_NEGATED_WORKAROUND_PATTERNS=(
     '(^|[^a-z])(nothing|no)( [a-z]+){0,3} (was|were|has been|have been|is|are) (finished|completed|pushed|succeeded)'
 )
 
+# The plan-approval rule's patterns (#1772): copies of the four of the same name in cfwf, which
+# applies the rule in issue plan-status --approval; issue_json_has_human_plan_approval
+# (lib/github-status) applies it host-side. test/oneshot.bats checks each copy is identical to cfwf's,
+# so the two can never disagree on what counts as a human approving a plan. See cfwf for each.
+# shellcheck disable=SC2034  # read by lib/github-status after sourcing
+LOOSE_PLAN_HEADING_PATTERN='##[[:space:]]*Implementation Plan'
+# shellcheck disable=SC2034  # read by lib/github-status after sourcing
+APPROVAL_LINE_KEYWORD_PATTERN='(^|[^A-Za-z0-9_])(approved|lgtm)([^A-Za-z0-9_]|$)'
+# shellcheck disable=SC2034  # read by lib/github-status after sourcing
+APPROVAL_NEGATION_PATTERN='(^|[^A-Za-z])(not|no|never|nope|cannot|pending|awaiting|until|unless|once|if|yet|almost|nearly|partially)([^A-Za-z]|$)|(do|does|did|is|are|was|were|has|have|had|ca|wo|could|would|should|must|need|ai)n.?t([^A-Za-z]|$)|[?]'
+# shellcheck disable=SC2034  # read by lib/github-status after sourcing
+APPROVER_ASSOCIATIONS='OWNER MEMBER COLLABORATOR'
+
 # Phrasings that classify a PHASE E (code review) or PHASE F (security review) session's final
 # message as a clean review: the review skill found nothing (claude_result_indicates_clean_review,
 # lib/podman). A session often ends on the skill's own report without moving the board or posting

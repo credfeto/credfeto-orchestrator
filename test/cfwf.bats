@@ -7066,6 +7066,233 @@ assert_sign_off() {
     [ -z "${stderr}" ]
 }
 
+# --- issue plan-status --approval (#1772) ----------------------------------------
+
+# The account the agent works as, which the stub answers gh api user with.
+APPROVAL_AGENT="the-agent"
+
+# Writes what --approval reads beyond the issue: the agent's login, and the collaborators of REPO:
+# someone and planner (people), and the agent and the PR creator (accounts that must never approve).
+prepare_approval() {
+    jq -n --arg login "${APPROVAL_AGENT}" '{login: $login, id: 2}' | write_api user
+    write_collaborators "$(collaborator someone write)" "$(collaborator planner write)" \
+        "$(collaborator "${APPROVAL_AGENT}" write)" "$(collaborator prpixie write)"
+}
+
+# The approved verdict plan-status --approval prints for issue 7, already written: yes or no.
+approval_verdict() {
+    "${SCRIPT}" issue plan-status --repo "${REPO}" --issue 7 --approval < /dev/null | awk -F '\t' '$1 == "approved" { print $2 }'
+}
+
+# Writes issue 7 with a plan by planner (COLLABORATOR) and then one comment with body $1 by login $2
+# (default someone) with association $3 (default COLLABORATOR), and prints the verdict.
+approval_of() {
+    write_issue 7 "A title" OPEN "The request."
+    write_comments 7 "$(issue_comment 1 planner COLLABORATOR "${PLAN_HEADING}"$'\n'"The plan.")" \
+        "$(issue_comment 2 "${2-someone}" "${3:-COLLABORATOR}" "$1")"
+    approval_verdict
+}
+
+# Every body after $1 (yes or no) gets that verdict from someone, a COLLABORATOR; the first that
+# does not is named.
+assert_approval() {
+    local expected="$1" body verdict
+    shift
+    for body; do
+        verdict="$(approval_of "${body}")"
+        [ "${verdict}" = "${expected}" ] || { echo "expected ${expected}, got '${verdict}': ${body}" >&2; return 1; }
+    done
+}
+
+@test "issue plan-status --approval is described in its help, takes no value, and is refused on issue view" {
+    run "${SCRIPT}" issue plan-status -h
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == "Usage: cfwf issue plan-status --repo <owner/repo> --issue <n> [--approval]"$'\n'* ]]
+    [[ "${output}" == *"no keyword, login or author"* ]]
+    [[ "${output}" == *"approved     <yes|no>"* ]]
+    [ ! -s "${GH_LOG}" ]
+    run_issue_read plan-status --issue 7 --approval=yes
+    [ "${status}" -eq 2 ]
+    run_issue_read view --issue 7 --approval
+    [ "${status}" -eq 2 ]
+    [ ! -s "${GH_LOG}" ]
+}
+
+@test "issue plan-status --approval says yes for a collaborator's sign-off keyword as a whole word on a line of its own making, and prints who and when" {
+    local keyword
+    prepare_approval
+    while IFS= read -r keyword; do
+        assert_approval yes "${keyword}" "${keyword^^}" "${keyword^}." "Thanks, ${keyword}!" "(${keyword})" "**${keyword}**" \
+            "\`${keyword}\`" "A first line."$'\n\n'"${keyword}" "Read it."$'\r\n'"${keyword}, ship it"$'\r\n' \
+            "${keyword}"$'\n'"No objections from me." "> quoting the plan"$'\n'"${keyword}"
+    done < <(sign_off_keywords)
+    keyword="$(sign_off_keywords | head -1)"
+    approval_of "${keyword}" > /dev/null
+    run_issue_read plan-status --issue 7 --approval
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(plan_status_head yes no)"$'\n'"$(plan_lines 1 planner COLLABORATOR)"$'\n'"$(comment_line 2 someone COLLABORATOR yes)"$'\n'"approved"$'\t'"yes"$'\n'"approved-by"$'\t'"someone"$'\t'"COLLABORATOR"$'\t'"$(comment_url 2)"$'\n'"approved-at"$'\t'"$(comment_time 2)" ]
+    [ -z "${stderr}" ]
+}
+
+@test "issue plan-status --approval says no for the phrases only the old prompt check took, and for emphasis only plan-status's signal took" {
+    local keyword
+    prepare_approval
+    assert_approval no "go ahead" "Go ahead." "looks good" "Looks good to me" "ship it" "+1" "yes" "ok"
+    while IFS= read -r keyword; do
+        assert_approval no "_${keyword}_" "__${keyword^^}__" "so _${keyword}_." "plan_${keyword}" "${keyword}_by" "un${keyword}" \
+            "dis${keyword}" "${keyword}s" "${keyword}2" "> ${keyword}" "   > ${keyword}" "> > ${keyword}" ""
+    done < <(sign_off_keywords)
+}
+
+@test "issue plan-status --approval says no for a keyword on a line with a negation, a condition or a question" {
+    local keyword
+    prepare_approval
+    while IFS= read -r keyword; do
+        assert_approval no "not ${keyword} yet" "Not ${keyword}." "${keyword}? not sure" "Is this ${keyword}?" \
+            "${keyword} if you fix the tests" "${keyword} once CI passes" "${keyword} unless someone objects" \
+            "I don't think it is ${keyword}" "I dont say ${keyword}" "can't say ${keyword}" "won't be ${keyword}" \
+            "isn't ${keyword}" "never ${keyword}" "${keyword} - pending review" "nearly ${keyword}" "almost ${keyword}" \
+            "partially ${keyword}" "awaiting ${keyword}" "${keyword} until Friday" "No, ${keyword} is wrong" \
+            "${keyword}. No objections." "cannot be ${keyword}"
+    done < <(sign_off_keywords)
+}
+
+@test "issue plan-status --approval counts only a collaborator or the owner, never a bot, the agent, the PR creator or the plan's own author" {
+    local keyword
+    prepare_approval
+    keyword="$(sign_off_keywords | tail -1)"
+    [ "$(approval_of "${keyword}" credfeto OWNER)" = yes ]
+    [ "$(approval_of "${keyword}" someone MEMBER)" = yes ]
+    [ "$(approval_of "${keyword}" stranger NONE)" = no ]
+    [ "$(approval_of "${keyword}" stranger CONTRIBUTOR)" = no ]
+    # An association GitHub gives that the collaborator list does not back up, and the reverse.
+    [ "$(approval_of "${keyword}" stranger COLLABORATOR)" = no ]
+    [ "$(approval_of "${keyword}" someone CONTRIBUTOR)" = no ]
+    [ "$(approval_of "${keyword}" someone NONE)" = no ]
+    [ "$(approval_of "${keyword}" "github-actions[bot]" COLLABORATOR)" = no ]
+    [ "$(approval_of "${keyword}" "copilot-pull-request-reviewer[bot]" MEMBER)" = no ]
+    [ "$(approval_of "${keyword}" "${APPROVAL_AGENT}" COLLABORATOR)" = no ]
+    [ "$(approval_of "${keyword}" "${APPROVAL_AGENT^^}" COLLABORATOR)" = no ]
+    [ "$(approval_of "${keyword}" prpixie COLLABORATOR)" = no ]
+    [ "$(approval_of "${keyword}" planner COLLABORATOR)" = no ]
+    [ "$(approval_of "${keyword}" "" NONE)" = no ]
+    # A later approver who is allowed still approves after one who is not.
+    write_comments 7 "$(issue_comment 1 planner COLLABORATOR "${PLAN_HEADING}")" \
+        "$(issue_comment 2 "${APPROVAL_AGENT}" COLLABORATOR "${keyword}")" \
+        "$(issue_comment 3 someone COLLABORATOR "${keyword}")"
+    run_issue_read plan-status --issue 7 --approval
+    [[ "${output}" == *$'\n'"approved-by"$'\t'"someone"$'\t'"COLLABORATOR"$'\t'"$(comment_url 3)"$'\n'* ]]
+}
+
+@test "issue plan-status --approval needs the approval after the latest plan, counting any comment with the heading in any case as a plan" {
+    local keyword
+    prepare_approval
+    keyword="$(sign_off_keywords | head -1)"
+    write_issue 7 "A title" OPEN "The request."
+    write_comments 7 "$(issue_comment 1 someone COLLABORATOR "${keyword}")" \
+        "$(issue_comment 2 planner COLLABORATOR "${PLAN_HEADING}")"
+    [ "$(approval_verdict)" = no ]
+    write_comments 7 "$(issue_comment 1 planner COLLABORATOR "${PLAN_HEADING}")" \
+        "$(issue_comment 2 someone COLLABORATOR "${keyword}")" \
+        "$(issue_comment 3 planner COLLABORATOR "Revised."$'\n\n'"${PLAN_HEADING}")"
+    [ "$(approval_verdict)" = no ]
+    # A revised plan whose heading plan-status itself does not count still needs approving again.
+    write_comments 7 "$(issue_comment 1 planner COLLABORATOR "${PLAN_HEADING}")" \
+        "$(issue_comment 2 someone COLLABORATOR "${keyword}")" \
+        "$(issue_comment 3 planner COLLABORATOR "${PLAN_HEADING^^}")"
+    [ "$(approval_verdict)" = no ]
+    write_comments 7 "$(issue_comment 1 planner COLLABORATOR "${PLAN_HEADING}")" \
+        "$(issue_comment 2 someone COLLABORATOR "${keyword}")" \
+        "$(issue_comment 3 planner COLLABORATOR "See the ##implementation plan above, revised")"
+    [ "$(approval_verdict)" = no ]
+    write_comments 7 "$(issue_comment 1 planner COLLABORATOR "${PLAN_HEADING}")" \
+        "$(issue_comment 2 planner COLLABORATOR "Revised."$'\n\n'"${PLAN_HEADING}")" \
+        "$(issue_comment 3 someone COLLABORATOR "${keyword}")"
+    [ "$(approval_verdict)" = yes ]
+    # No plan at all: no.
+    write_comments 7 "$(issue_comment 1 someone COLLABORATOR "${keyword}")"
+    [ "$(approval_verdict)" = no ]
+}
+
+@test "issue plan-status --approval reads only the issue when no comment could approve, and the login and collaborators once each when one could" {
+    local keyword
+    keyword="$(sign_off_keywords | head -1)"
+    write_issue 7 "A title" OPEN "The request."
+    write_comments 7 "$(issue_comment 1 planner COLLABORATOR "${PLAN_HEADING}")" \
+        "$(issue_comment 2 someone COLLABORATOR "go ahead")" \
+        "$(issue_comment 3 stranger NONE "${keyword}")"
+    run_issue_read plan-status --issue 7 --approval
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *$'\n'"approved"$'\t'"no" ]]
+    assert_one_issue_read 7 "${PLAN_STATUS_FIELDS}"
+
+    prepare_approval
+    : > "${GH_LOG}"
+    write_comments 7 "$(issue_comment 1 planner COLLABORATOR "${PLAN_HEADING}")" \
+        "$(issue_comment 2 someone COLLABORATOR "${keyword}")" \
+        "$(issue_comment 3 credfeto OWNER "${keyword}")"
+    run_issue_read plan-status --issue 7 --approval
+    [ "${status}" -eq 0 ]
+    [ "$(gh_call_count "issue view 7 --repo ${REPO} --json ${PLAN_STATUS_FIELDS} --jq ")" -eq 1 ]
+    [ "$(grep -c '^api user ' "${GH_LOG}")" -eq 1 ]
+    [ "$(grep -c "^api ${COLLABORATORS_ENDPOINT}" "${GH_LOG}")" -eq 1 ]
+}
+
+@test "issue plan-status --approval prints nothing, and exits 1, when the login or the collaborators cannot be read, never a no" {
+    local keyword
+    keyword="$(sign_off_keywords | head -1)"
+    prepare_approval
+    approval_of "${keyword}" > /dev/null
+    fail_api "${COLLABORATORS_ENDPOINT}" "${PUSH_ACCESS_ERROR}"
+    run_issue_read plan-status --issue 7 --approval
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: "* ]]
+    rm -f "$(api_fixture "${COLLABORATORS_ENDPOINT}").fail"
+    fail_api user
+    run_issue_read plan-status --issue 7 --approval
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    # Without --approval none of that is read, and the answer is the same as ever.
+    run_issue_read plan-status --issue 7
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(plan_status_head yes no)"$'\n'"$(plan_lines 1 planner COLLABORATOR)"$'\n'"$(comment_line 2 someone COLLABORATOR yes)" ]
+}
+
+# The approval check lib/prompts printed for a repository with no board before #1772 (the jq of
+# human_plan_approval_jq_literal for the bot login $1 and trusted logins $2), with its keywords
+# built from pieces as in sign_off_keywords.
+old_prompt_approval_jq() {
+    local keywords
+    keywords="$(sign_off_keywords | head -1)|go ahead|looks good|$(sign_off_keywords | tail -1)"
+    # shellcheck disable=SC2016 # jq syntax ($c, $i, $login), not bash variables
+    printf '%s' '(.comments) as $c | (first(range($c|length)|select($c[.].body|test("##\\s*Implementation Plan";"i"))) // -1) as $i | if $i>=0 then ($c[($i+1):]|map(select(.author.login as $login | $login != "'"$1"'" and ('"$2"'|index($login)) != null))|any(.[]; .body|test("\\b('"${keywords}"')\\b";"i"))) else false end'
+}
+
+@test "issue plan-status --approval never says yes to a comment the old prompt approval check refused" {
+    local keyword body author association old new old_jq
+    local -i accepted_by_old=0 refused_by_old=0
+    prepare_approval
+    # The old check trusted the owner and the collaborators (and two bots), as the orchestrator did.
+    old_jq="$(old_prompt_approval_jq "${APPROVAL_AGENT}" '["credfeto","someone","planner","the-agent","copilot-pull-request-reviewer","github-advanced-security[bot]"]')"
+    for keyword in $(sign_off_keywords); do
+        for body in "${keyword}" "_${keyword}_" "not ${keyword} yet" "> ${keyword}" "plan_${keyword}" "go ahead" "nothing here" "${keyword}?"; do
+            for author in "someone COLLABORATOR" "credfeto OWNER" "stranger NONE" "${APPROVAL_AGENT} COLLABORATOR" "planner COLLABORATOR" "copilot-pull-request-reviewer NONE"; do
+                association="${author#* }"
+                new="$(approval_of "${body}" "${author% *}" "${association}")"
+                old="$(jq -e "${old_jq}" "$(issue_fixture 7).json" > /dev/null && echo yes || echo no)"
+                if [ "${old}" = no ]; then
+                    refused_by_old+=1
+                    [ "${new}" = no ] || { echo "the old check refused, the new accepts: ${author}: ${body}" >&2; return 1; }
+                else
+                    accepted_by_old+=1
+                fi
+            done
+        done
+    done
+    [ "${refused_by_old}" -gt 0 ] && [ "${accepted_by_old}" -gt 0 ]
+}
+
 # --- issue list and issue search ------------------------------------------------
 
 ISSUE_LIST_USAGE="Usage: cfwf issue list --repo <owner/repo>"
