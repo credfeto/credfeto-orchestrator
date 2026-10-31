@@ -36,12 +36,15 @@ runs:
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         GITHUB_TOKEN: "${{ inputs.github_token }}"
+        BASE_SHA: "${{ inputs.base_sha }}"
+        HEAD_SHA: "${{ inputs.head_sha }}"
+        PR_TITLE: "${{ inputs.pr_title }}"
       with:
         github-token: "${{ inputs.github_token }}"
         script: |
-          const BASE_SHA = '${{ inputs.base_sha }}';
-          const HEAD_SHA = '${{ inputs.head_sha }}';
-          const PR_TITLE = ${{ toJson(inputs.pr_title) }};
+          const BASE_SHA = process.env.BASE_SHA;
+          const HEAD_SHA = process.env.HEAD_SHA;
+          const PR_TITLE = process.env.PR_TITLE;
 
           // ── Get changed files and commits via GitHub compare API ──────────
           let files = [];
