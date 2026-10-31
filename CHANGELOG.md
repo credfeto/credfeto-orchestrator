@@ -31,6 +31,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - cfwf label add and label remove change an issue's or a pull request's standard labels one gh call a label: priority and non-standard labels are refused, On Hold is never removed, and Blocked is removed only when the agent added it last (#1593)
 - cfwf label list lists a repository's label names (#1595)
 - cfwf issue close closes an issue with a reason (completed or not-planned) and an optional checked comment, refusing an issue on hold or one an open pull request will close (#1597)
+- cfwf repo list, repo search, pr search, code search and workflow list: read-only searching and listing for agents (#1765, #1766)
 ### Fixed
 - CI: workflow expressions in run and script bodies are passed through env, so the no-expressions-in-scripts check passes
 - CI: the remaining workflow expressions in run bodies (image summaries, dispatch-secret check, runner name) are passed through env
