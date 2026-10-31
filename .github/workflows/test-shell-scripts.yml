@@ -26,9 +26,11 @@ jobs:
 
       - name: "Set Active Environment"
         shell: bash
+        env:
+          ACTIVE_RUNNER: "${{ runner.name }}"
         run: |
           {
-            echo "ACTIVE_RUNNER_NAME=${{runner.name}}"
+            echo "ACTIVE_RUNNER_NAME=${ACTIVE_RUNNER}"
             echo "ACTIVE_HOSTNAME=$HOSTNAME"
             echo "ACTIVE_USER=$USER"
           } >> "$GITHUB_ENV"
