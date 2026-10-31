@@ -117,7 +117,7 @@ jobs:
             echo "## development-node image pushed"
             echo ""
             echo '```'
-            echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+            echo "${REGISTRY}/${IMAGE_NAME}:latest"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -128,7 +128,7 @@ jobs:
           {
             echo "## development-node image built (not pushed — pull_request run)"
             echo ""
-            echo "Verified the Dockerfile builds; nothing was pushed to \`${{ env.REGISTRY }}\`."
+            echo "Verified the Dockerfile builds; nothing was pushed to \`${REGISTRY}\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: "Summarise (installed versions)"

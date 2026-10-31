@@ -206,7 +206,7 @@ jobs:
             echo "## development-tools image pushed"
             echo ""
             echo '```'
-            echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+            echo "${REGISTRY}/${IMAGE_NAME}:latest"
             echo '```'
             echo ""
             echo "bettermarks/composite-action-lint @ \`${{ steps.cb.outputs.cal_sha }}\`"
@@ -219,7 +219,7 @@ jobs:
           {
             echo "## development-tools image built (not pushed — pull_request run)"
             echo ""
-            echo "Verified the Dockerfile builds; nothing was pushed to \`${{ env.REGISTRY }}\`."
+            echo "Verified the Dockerfile builds; nothing was pushed to \`${REGISTRY}\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: "Summarise (installed versions)"
