@@ -9277,7 +9277,7 @@ read_once_asking_for() {
     run --separate-stderr "${SCRIPT}" pr
     [ "${status}" -eq 2 ]
     [ -z "${output}" ]
-    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, checks-wait, view, list, comments, reply, create, ready-at, diff, edit, hand-off, take-back, close, reopen)"* ]]
+    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, checks-wait, view, list, comments, reply, create, ready-at, diff, edit, hand-off, finalise-dependency, take-back, close, reopen)"* ]]
     [[ "${stderr}" == *"Usage: cfwf pr checks"*"Run 'cfwf pr view --help' for pr view"* ]]
 
     run --separate-stderr "${SCRIPT}" pr frobnicate
@@ -13054,7 +13054,7 @@ ${HAND_OFF_URL} auto-merge deferred: the required checks have not finished since
     printf 'text\n' > "${TEST_TMP}/hand-off.md"
     printf 'description\n' > "${TEST_TMP}/description.md"
     td="--title fix:x --description-file ${TEST_TMP}/description.md"
-    for args in "--repo ${REPO} --pr 42 ${td}" "--repo ${REPO} ${td} --body-file ${TEST_TMP}/hand-off.md" \
+    for args in "--repo ${REPO} ${td}" "--repo ${REPO} ${td} --body-file ${TEST_TMP}/hand-off.md" \
         "--pr 42 ${td} --body-file ${TEST_TMP}/hand-off.md" "--repo ${REPO} --pr 0 ${td} --body-file ${TEST_TMP}/hand-off.md" \
         "--repo ${REPO} --pr 42 ${td} --body-file ${TEST_TMP}/hand-off.md --admin" \
         "--repo ${REPO} --pr 42 --pr 43 ${td} --body-file ${TEST_TMP}/hand-off.md" \
@@ -13148,12 +13148,218 @@ ${HAND_OFF_URL} auto-merge deferred: the required checks have not finished since
         [[ "${output}" == "Usage: cfwf pr hand-off --repo <owner/repo> --pr <n> --title <title> --description-file <file|->"* ]]
         [[ "${output}" == *"There is no --description."* ]]
         [[ "${output}" == *"### AI Review Loop: reviewed <head SHA>"* ]]
+        [[ "${output}" == *"[--body-file <file>]"*"--description-file - <<'EOF'"* ]]
         [[ "${output}" == *"7 ready and recorded, auto-merge deferred"* ]]
     done
     run "${SCRIPT}" help pr
     [[ "${output}" == *"Run 'cfwf pr hand-off --help' for pr hand-off"* ]]
     run "${SCRIPT}" help
     [[ "${output}" == *"  pr hand-off              Hand a PR to human review"* ]]
+    [ ! -s "${GH_LOG}" ]
+}
+
+@test "pr hand-off without --body-file is one call: the description on stdin and a review record of its own first line only (#1775)" {
+    prepare_hand_off
+    run --separate-stderr "${SCRIPT}" pr hand-off --repo "${REPO}" --pr 42 --title "${HAND_OFF_TITLE}" \
+        --description-file - <<< "A description from stdin"
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${GH_FIXTURES}/edit-body.txt")" = "A description from stdin" ]
+    [ "$(cat "${GH_FIXTURES}/comment-body.txt")" = "### AI Review Loop: reviewed ${HEAD_SHA}" ]
+    [ "$(wc -l < "${GH_FIXTURES}/comment-body.txt")" -eq 1 ]
+    [ "${output##*$'\n'}" = "${HAND_OFF_URL} auto-merge on" ]
+}
+
+@test "pr hand-off still refuses an empty, leaking or approving description when --body-file is omitted, writing nothing (#1775)" {
+    prepare_hand_off
+    : > "${GH_LOG}"
+    run --separate-stderr "${SCRIPT}" pr hand-off --repo "${REPO}" --pr 42 --title "${HAND_OFF_TITLE}" \
+        --description-file - <<< "   "
+    [ "${status}" -eq 1 ]
+    [[ "${stderr}" == *"description is empty"* ]]
+    [ ! -s "${GH_LOG}" ]
+    for text in 'see /home/someone/secret.txt' 'Looks good, approved.'; do
+        : > "${GH_LOG}"
+        run --separate-stderr "${SCRIPT}" pr hand-off --repo "${REPO}" --pr 42 --title "${HAND_OFF_TITLE}" \
+            --description-file - <<< "${text}"
+        [ "${status}" -eq 8 ]
+        assert_nothing_handed_off
+        [ "$(gh_call_count "pulls/42")" -eq 0 ]
+    done
+}
+
+@test "pr hand-off reads the review record from stdin for --body-file - when the description is a file (#1775)" {
+    prepare_hand_off
+    run --separate-stderr "${SCRIPT}" pr hand-off --repo "${REPO}" --pr 42 --title "${HAND_OFF_TITLE}" \
+        --description-file "${TEST_TMP}/description.md" --body-file - <<< "Record from stdin"
+    [ "${status}" -eq 0 ]
+    [ "$(sed -n 3p "${GH_FIXTURES}/comment-body.txt")" = "Record from stdin" ]
+}
+
+# --- pr finalise-dependency ----------------------------------------------------
+
+DEPENDENCY_BRANCH_NAME="depends/update-packages"
+
+# Writes PR 42 as the pulls endpoint gives it, for pr finalise-dependency: state $1 (open), draft $2
+# (false), head branch $3 (DEPENDENCY_BRANCH_NAME), author $4 (dependabot[bot]), author type $5
+# (Bot), head repository $6 (REPO), then each further argument a label name.
+write_dependency_pr() {
+    local state="${1:-open}" draft="${2:-false}" branch="${3:-${DEPENDENCY_BRANCH_NAME}}" author="${4:-dependabot[bot]}" type="${5:-Bot}" head_repo="${6:-${REPO}}"
+    shift 6 2> /dev/null || shift "$#"
+    jq -n --arg state "${state}" --argjson draft "${draft}" --arg sha "${HEAD_SHA}" --arg url "${HAND_OFF_URL}" \
+        --arg branch "${branch}" --arg author "${author}" --arg type "${type}" --arg head_repo "${head_repo}" --arg repo "${REPO}" --args \
+        '{number: 42, state: $state, draft: $draft, html_url: $url, user: {login: $author, type: $type},
+          head: {sha: $sha, ref: $branch, repo: (if $head_repo == "-" then null else {full_name: $head_repo} end)},
+          base: {ref: "main", repo: {full_name: $repo}},
+          labels: ($ARGS.positional | map({name: ., color: "ff0000"}))}' "$@" \
+        | write_api "repos/${REPO}/pulls/42"
+}
+
+# PR 42 as prepare_hand_off sets it up, but a dependency update by dependabot[bot] on a depends/ branch.
+prepare_dependency() {
+    prepare_hand_off
+    write_dependency_pr
+}
+
+run_finalise() {
+    run --separate-stderr "${SCRIPT}" pr finalise-dependency --repo "${REPO}" --pr 42
+}
+
+# Nothing was ever written by finalise-dependency, nor anything hand-off alone writes.
+assert_never_hand_off_writes() {
+    [ "$(gh_call_count "pr edit")" -eq 0 ]
+    [ "$(gh_call_count "project item-add")" -eq 0 ]
+    [ "$(gh_call_count "project item-edit")" -eq 0 ]
+    [ "$(gh_call_count "pr comment")" -eq 0 ]
+}
+
+@test "pr finalise-dependency on a ready dependency PR enables merge-commit auto-merge and touches nothing else (#1771)" {
+    prepare_dependency
+    run_finalise
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "${HAND_OFF_URL} ready
+${HAND_OFF_URL} auto-merge on" ]
+    grep -qxF "pr merge 42 --repo ${REPO} --auto --merge --match-head-commit ${HEAD_SHA}" "${GH_LOG}"
+    [ "$(gh_call_count "pr ready")" -eq 0 ]
+    [ "$(gh_call_count "--admin")" -eq 0 ]
+    assert_never_hand_off_writes
+}
+
+@test "pr finalise-dependency marks a draft ready, then defers auto-merge (exit 7) while the checks predate the ready time (#1771)" {
+    prepare_dependency
+    write_dependency_pr open true
+    write_timeline 42 "$(timeline_event ready_for_review credfeto "" 2026-10-01T13:00:00Z)"
+    run_finalise
+    [ "${status}" -eq 7 ]
+    [ "${output}" = "${HAND_OFF_URL} ready
+${HAND_OFF_URL} auto-merge deferred: the required checks have not finished since the pull request was marked ready" ]
+    [[ "${stderr}" == *"run pr finalise-dependency again once the checks have finished" ]]
+    grep -qxF "pr ready 42 --repo ${REPO}" "${GH_LOG}"
+    [ "$(gh_call_count "pr merge")" -eq 0 ]
+    assert_never_hand_off_writes
+}
+
+@test "pr finalise-dependency accepts a dependabot/ branch and a PR opened by the agent's PR creator (#1771)" {
+    prepare_dependency
+    write_dependency_pr open false "dependabot/nuget/foo-1.2.3"
+    run_finalise
+    [ "${status}" -eq 0 ]
+    prepare_dependency
+    write_dependency_pr open false "${DEPENDENCY_BRANCH_NAME}" prpixie User
+    : > "${GH_LOG}"
+    run_finalise
+    [ "${status}" -eq 0 ]
+    grep -qxF "pr merge 42 --repo ${REPO} --auto --merge --match-head-commit ${HEAD_SHA}" "${GH_LOG}"
+}
+
+@test "pr finalise-dependency refuses (exit 8, nothing written) a PR that is not a bot's dependency update (#1771)" {
+    local case_ args expected
+    for case_ in "open false feat/123-x dependabot[bot] Bot ${REPO}|the head branch is not a dependency-update branch (depends/ or dependabot/)" \
+        "open false ${DEPENDENCY_BRANCH_NAME} dependabot[bot] Bot someone/fork|the head branch is not in the repository itself" \
+        "open false ${DEPENDENCY_BRANCH_NAME} dependabot[bot] Bot -|the head branch is not in the repository itself" \
+        "open false ${DEPENDENCY_BRANCH_NAME} someone User ${REPO}|the pull request was not opened by a bot" \
+        "closed false ${DEPENDENCY_BRANCH_NAME} dependabot[bot] Bot ${REPO}|the pull request is not open"; do
+        prepare_dependency
+        args="${case_%%|*}"
+        expected="${case_#*|}"
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        write_dependency_pr ${args}
+        : > "${GH_LOG}"
+        run_finalise
+        [ "${status}" -eq 8 ]
+        [ "${stderr}" = "cfwf: finalise-dependency refused: ${expected}" ]
+        assert_nothing_handed_off
+    done
+}
+
+@test "pr finalise-dependency refuses (exit 8, nothing written) a Blocked or On Hold PR, or one whose checks failed, are pending or are missing (#1771)" {
+    local label
+    for label in Blocked "On Hold"; do
+        prepare_dependency
+        write_dependency_pr open false "${DEPENDENCY_BRANCH_NAME}" "dependabot[bot]" Bot "${REPO}" "${label}"
+        : > "${GH_LOG}"
+        run_finalise
+        [ "${status}" -eq 8 ]
+        [ "${stderr}" = "cfwf: finalise-dependency refused: the pull request is ${label}" ]
+        assert_nothing_handed_off
+    done
+    local case_
+    for case_ in "failure|a required check failed" "|a required check is still pending"; do
+        prepare_dependency
+        write_check_runs "${HEAD_SHA}" "$(check_run build "${case_%%|*}" 11)"
+        : > "${GH_LOG}"
+        run_finalise
+        [ "${status}" -eq 8 ]
+        [ "${stderr}" = "cfwf: finalise-dependency refused: ${case_#*|}" ]
+        assert_nothing_handed_off
+    done
+}
+
+@test "pr finalise-dependency on a repository without auto-merge leaves the PR ready and exits 0 (#1771)" {
+    prepare_dependency
+    jq -n --arg repo "${REPO}" '{id: 1, full_name: $repo, default_branch: "main", allow_auto_merge: false}' | write_api "repos/${REPO}"
+    run_finalise
+    [ "${status}" -eq 0 ]
+    [ "${output##*$'\n'}" = "${HAND_OFF_URL} auto-merge unavailable: the repository does not allow auto-merge, so the pull request is left ready for a human" ]
+    [ "$(gh_call_count "pr merge")" -eq 0 ]
+}
+
+@test "pr finalise-dependency exits 9 for a pull request that does not exist, writing nothing (#1771)" {
+    prepare_dependency
+    rm "$(api_fixture "repos/${REPO}/pulls/42").json"
+    run_finalise
+    [ "${status}" -eq 9 ]
+    [ "${stderr}" = "cfwf: the pull request ${REPO}#42 was not found" ]
+    assert_nothing_handed_off
+}
+
+@test "pr finalise-dependency rejects usage errors (exit 2) without calling gh (#1771)" {
+    local args
+    printf 'text\n' > "${TEST_TMP}/body.md"
+    for args in "--repo ${REPO}" "--pr 42" "--repo ${REPO} --pr 0" "--repo ${REPO} --pr 42 --admin" \
+        "--repo ${REPO} --pr 42 --pr 43" "--repo ${REPO} --pr 42 --body-file ${TEST_TMP}/body.md" \
+        "--repo ${REPO} --pr 42 --title fix:x" "--repo ${REPO} --pr 42 --squash"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run --separate-stderr "${SCRIPT}" pr finalise-dependency ${args}
+        [ "${status}" -eq 2 ]
+        [ ! -s "${GH_LOG}" ]
+    done
+}
+
+@test "pr finalise-dependency help, from help pr finalise-dependency and --help, describes the rules and exit 7; help pr and the general help point to it; none calls gh (#1771)" {
+    local invocation
+    for invocation in "help pr finalise-dependency" "pr finalise-dependency --help" "pr finalise-dependency -h"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == "Usage: cfwf pr finalise-dependency --repo <owner/repo> --pr <n>"* ]]
+        [[ "${output}" == *"never changes"*"the title, the description or the Workflow board"* ]]
+        [[ "${output}" == *"7 ready, auto-merge"* ]]
+    done
+    run "${SCRIPT}" help pr
+    [[ "${output}" == *"Run 'cfwf pr finalise-dependency --help' for pr finalise-dependency"* ]]
+    run "${SCRIPT}" help
+    [[ "${output}" == *"  pr finalise-dependency   Mark a bot dependency-update PR ready"* ]]
     [ ! -s "${GH_LOG}" ]
 }
 
