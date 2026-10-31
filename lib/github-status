@@ -596,44 +596,42 @@ issue_json_has_plan_comment() {
     ' > /dev/null 2>&1
 }
 
-# Returns 0 (true) if the pre-fetched Issue JSON contains a genuine HUMAN approval comment
-# (approved / go ahead / looks good / lgtm — case-insensitive, whole word) posted by someone other
-# than the orchestrator itself ($me_login) and a member of $trusted_logins_json, at any point AFTER
-# the most recent "## Implementation Plan" comment. Restricting the matching author to a trusted
-# human is what stops the orchestrator's OWN comments from ever satisfying the check — verified
-# live on funfair-build-check#434 and adblockplusrules#615, where the only "approved"-matching text
-# on the issue was the bot's own comment explaining that approval was MISSING (#1286). Single
-# source of truth for "was this plan approved by a human": used both by
-# issue_plan_awaiting_human_approval below and — via human_plan_approval_jq_literal, same filter
-# text baked into a self-contained one-liner — the identical check embedded into the generated
-# CLAUDE.md (lib/prompts) for no-board repos, so the orchestrator and the agent it launches always
-# agree on what counts as "approved".
+# Returns 0 (true) if the pre-fetched Issue JSON holds a genuine HUMAN approval of its latest plan,
+# by the plan-approval rule (#1772) that cfwf issue plan-status --approval applies in the container
+# and lib/prompts asks the agent to run, so the orchestrator and the agent it launches always agree
+# on what counts as "approved". The rule, with its four patterns kept identical to cfwf's in
+# lib/globals: a comment after the latest one matching LOOSE_PLAN_HEADING_PATTERN (any case,
+# anywhere), with a line that is not a Markdown quote, holds a sign-off keyword
+# (APPROVAL_LINE_KEYWORD_PATTERN) and no negation (APPROVAL_NEGATION_PATTERN), whose author's
+# association is in APPROVER_ASSOCIATIONS, and whose author is in $trusted_logins_json, is not a bot,
+# not $me_login (the orchestrator itself, #1286) and not the plan's own author. The trusted list
+# already leaves out the PR-creator account (#1517). It is the stricter of the two rules it
+# replaced on every dimension, so it never accepts what either refused.
 issue_json_has_human_plan_approval() {
     local issue_json="$1" me_login="$2" trusted_logins_json="$3"
-    printf '%s' "${issue_json}" | jq -e --arg me "${me_login}" --argjson trusted "${trusted_logins_json:-null}" '
-        (.comments) as $c
-        | (first(range($c|length) | select($c[.].body // "" | test("##\\s*Implementation Plan";"i"))) // -1) as $i
-        | if $i >= 0 then
-            $c[($i+1):]
-            | map(select(.author.login as $login | $login != $me and (($trusted // []) | index($login)) != null))
-            | any(.[]; .body // "" | test("\\b(approved|go ahead|looks good|lgtm)\\b";"i"))
-          else
+    # $a, $c, $i, $me, $planby, $t, $l and $trusted below are jq variables, not shell ones.
+    # shellcheck disable=SC2016
+    printf '%s' "${issue_json}" | jq -e --arg me "${me_login}" --argjson trusted "${trusted_logins_json:-null}" \
+        --arg loose "${LOOSE_PLAN_HEADING_PATTERN}" --arg keyword "${APPROVAL_LINE_KEYWORD_PATTERN}" \
+        --arg negation "${APPROVAL_NEGATION_PATTERN}" --arg associations "${APPROVER_ASSOCIATIONS}" '
+        def loose_plan: (.body // "") | test($loose; "i");
+        def approval_line: (test("^ {0,3}>") | not) and test($keyword; "i") and (test($negation; "i") | not);
+        def approves: (.body // "") | split("\n") | any(.[]; rtrimstr("\r") | approval_line);
+        def approver_association: (.authorAssociation // "") as $a | any($associations | split(" ")[]; . == $a);
+        def bot_author: (.author.login // "") | ascii_downcase | endswith("[bot]");
+        (.comments // []) as $c
+        | ([$c | to_entries[] | select(.value | loose_plan) | .key] | last) as $i
+        | if $i == null then
             false
+          else
+            ($c[$i].author.login // "" | ascii_downcase) as $planby
+            | (($trusted // []) | map(ascii_downcase)) as $t
+            | any($c[($i + 1):][];
+                (.author.login // "" | ascii_downcase) as $l
+                | $l != "" and $l != ($me | ascii_downcase) and $l != $planby and any($t[]; . == $l)
+                  and approves and approver_association and (bot_author | not))
           end
     ' > /dev/null 2>&1
-}
-
-# Same semantics as issue_json_has_human_plan_approval's inner filter, but with $me_login/
-# $trusted_logins_json already baked in as jq literals rather than passed via --arg/--argjson, so
-# the result is a single self-contained string an agent can paste directly after `gh ... --jq`,
-# which — unlike the `jq` CLI itself — has no separate --arg/--argjson flags. Keeping this
-# generation in the SAME file as the shell-side predicate (rather than hand-duplicating the filter
-# text at the lib/prompts call site) is what makes the two copies impossible to drift apart —
-# exactly the class of bug #1286 exists to catch.
-human_plan_approval_jq_literal() {
-    local me_login="$1" trusted_logins_json="$2"
-    # shellcheck disable=SC2016 # intentional — this is jq syntax ($c, $i), not a bash variable
-    printf '%s' '(.comments) as $c | (first(range($c|length)|select($c[.].body|test("##\\s*Implementation Plan";"i"))) // -1) as $i | if $i>=0 then ($c[($i+1):]|map(select(.author.login as $login | $login != "'"${me_login}"'" and ('"${trusted_logins_json:-[]}"'|index($login)) != null))|any(.[]; .body|test("\\b(approved|go ahead|looks good|lgtm)\\b";"i"))) else false end'
 }
 
 # Returns 0 (true) if the Issue has a plan comment with no genuine human approval following it —

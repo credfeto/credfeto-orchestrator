@@ -346,7 +346,7 @@ Commands:
   closing-issue-labels     Print the labels of the issues a PR closes (Blocked and On-Hold excluded)
   issue create             Create an issue and put it on the Workflow board as Not Started
   issue view               Print an issue's title, state, labels, assignees and body (exit 9 when not found)
-  issue plan-status        Print whether an issue has a plan and is Blocked, and the comments since the plan
+  issue plan-status        Print whether an issue has a plan and is Blocked, and the comments since the plan (--approval: whether a human approved it)
   issue list               List a repository's open issues, highest priority first, one line each
   issue search             Search one repository's issues by words in their title or body, one line each
   issue label-history      Print when each label was added to or removed from an issue or PR, and by whom (exit 9 when not found)
@@ -533,21 +533,29 @@ USAGE
 
 usage_issue_plan_status() {
     cat << USAGE
-Usage: cfwf issue plan-status --repo <owner/repo> --issue <n>
+Usage: cfwf issue plan-status --repo <owner/repo> --issue <n> [--approval]
 
 Prints whether an issue has an implementation plan, whether it is Blocked, and who has commented
-since the plan, in one read and one fixed format. It never prints a comment body.
+since the plan, in one read and one fixed format. It never prints a comment body. With --approval
+it also decides whether a human has approved the latest plan: the plan-approval check for a
+repository without a Workflow board (where there is one, the board status is the approval).
 
---repo   Always required; never taken from the current directory.
---issue  Always required: the issue number, digits only.
+--repo      Always required; never taken from the current directory.
+--issue     Always required: the issue number, digits only.
+--approval  Also print the approved lines below. It takes no value: no keyword, login or author
+            list can be given, so the rule cannot be widened by the caller.
 There are no other options: --json, --jq and --template are not options.
 
 Output, tab separated:
-  plan     <yes|no>
-  blocked  <yes|no>
-  plan-at  <createdAt of the latest plan comment>
-  plan-by  <its author login>  <its author association>  <its url>
-  comment  <createdAt>  <author login>  <author association>  <yes|no>  <url>
+  plan         <yes|no>
+  blocked      <yes|no>
+  plan-at      <createdAt of the latest plan comment>
+  plan-by      <its author login>  <its author association>  <its url>
+  comment      <createdAt>  <author login>  <author association>  <yes|no>  <url>
+and with --approval, last:
+  approved     <yes|no>
+  approved-by  <login>  <author association>  <url of the approving comment>   (only when yes)
+  approved-at  <its createdAt>                                                  (only when yes)
 plan is yes when a comment has a line that is exactly "## Implementation Plan" (in that case,
 with nothing else on the line, wherever the line is in the comment); the latest such comment is
 the plan. blocked is yes when the issue has a label named Blocked (in any case).
@@ -556,10 +564,30 @@ printed only when there is a plan. The yes or no of a comment line says whether 
 sign-off keyword (either of the two the plan-approval rules name) as a whole word, in any case,
 on a line that is not a Markdown quote (a line starting with >, after at most three spaces). A
 keyword in Markdown emphasis (underscores around it) counts; one inside a longer word does not.
+That yes is only a signal, not an approval.
+
+approved is yes only when one comment meets every one of these, and no otherwise:
+  - it comes after the latest comment holding "## Implementation Plan" in any case, anywhere in its
+    body (so any revised or re-posted plan, even one plan-status does not count, needs approving
+    again);
+  - one of its lines is not a Markdown quote, holds one of the two sign-off keywords as a whole word
+    with no underscore beside it, and holds no negation or condition word (not, no, never, an n't
+    contraction, cannot, pending, awaiting, until, unless, once, if, yet, almost, nearly,
+    partially) and no question mark;
+  - its author's association is OWNER, MEMBER or COLLABORATOR, and the author is the owner of the
+    repository or one of its collaborators;
+  - its author is not a bot, not the author of that latest plan, not the authenticated login (the
+    agent itself) and not the account that opens the agent's pull requests (PR_CREATOR_LOGIN,
+    default prpixie).
+The authenticated login (gh api user) and the collaborators (one paged read, which needs push
+access) are read only when some comment already meets the first three conditions apart from
+the collaborator check, so most answers still take one read. A read that fails is a runtime
+failure (exit 1), never a no.
 
 A yes is not an approval, and a plan is whatever comment has the heading, whoever wrote it: the
-command reports who wrote the plan and each comment (login and association) and leaves it to the
-caller to decide whether the plan is one it trusts and whether that author may sign it off.
+command reports who wrote the plan and each comment (login and association) and, without
+--approval, leaves it to the caller to decide whether the plan is one it trusts and whether that
+author may sign it off.
 
 Exit codes: 0 printed; ${ISSUE_NOT_FOUND_EXIT} the issue does not exist (no issue has that number, or the number is a
 pull request's); 1 a runtime failure, such as a gh or network error or a repository that was
@@ -3127,6 +3155,31 @@ readonly SIGNS_OFF_DEF='def signs_off: any(split("\n")[]; (test("^ {0,3}>") | no
 # $name below is a jq variable, not a shell one.
 # shellcheck disable=SC2016
 readonly HOLD_LABELS_DEF='def has_label_named($name): any(.labels[]; .name | ascii_downcase == $name); def is_blocked: has_label_named("blocked"); def is_on_hold: has_label_named("on hold") or has_label_named("on-hold");'
+# The plan-approval rule (#1772), the single source of truth for "has a human approved this plan"
+# in a repository with no Workflow board: issue plan-status --approval applies it, and lib/prompts
+# runs that rather than a check of its own. lib/github-status applies the same rule host-side with
+# the same four patterns (lib/globals; test/oneshot.bats checks the copies are identical). It is the
+# stricter of the two rules it replaced on every dimension, so it can only ever refuse what either
+# accepted, never accept what either refused:
+# - LOOSE_PLAN_HEADING_PATTERN: a comment matching it, in any case and anywhere in its body, is a
+#   plan for approval purposes, so the latest of them (a revised plan included) is the one an
+#   approval must follow; it matches every comment plan-status itself calls a plan, and more.
+# - APPROVAL_LINE_KEYWORD_PATTERN: an approving line holds one of the two sign-off keywords as a
+#   whole word, with no underscore beside it (no Markdown emphasis), in any case.
+# - APPROVAL_NEGATION_PATTERN: a line with a negation or a condition word, an n't contraction or a
+#   question mark never approves ("not yet", "if you fix", "ok?").
+# Neither keyword pattern holds a quote or a backslash, so each goes in a jq string as it is.
+readonly LOOSE_PLAN_HEADING_PATTERN='##[[:space:]]*Implementation Plan'
+readonly APPROVAL_LINE_KEYWORD_PATTERN='(^|[^A-Za-z0-9_])(approved|lgtm)([^A-Za-z0-9_]|$)'
+readonly APPROVAL_NEGATION_PATTERN='(^|[^A-Za-z])(not|no|never|nope|cannot|pending|awaiting|until|unless|once|if|yet|almost|nearly|partially)([^A-Za-z]|$)|(do|does|did|is|are|was|were|has|have|had|ca|wo|could|would|should|must|need|ai)n.?t([^A-Za-z]|$)|[?]'
+readonly APPROVER_ASSOCIATIONS='OWNER MEMBER COLLABORATOR'
+# A jq definition, put before a filter that uses it: loose_plan, approves, approver_association and
+# bot_author are, for the comment they are given, whether it is a plan for approval purposes,
+# whether a line of it approves (not a Markdown quote line, a keyword, no negation), whether its
+# author's association is one APPROVER_ASSOCIATIONS names, and whether its author is a bot account.
+# $a below is a jq variable, not a shell one.
+# shellcheck disable=SC2016
+readonly PLAN_APPROVAL_DEF='def loose_plan: (.body // "") | test("'"${LOOSE_PLAN_HEADING_PATTERN}"'"; "i"); def approval_line: (test("^ {0,3}>") | not) and test("'"${APPROVAL_LINE_KEYWORD_PATTERN}"'"; "i") and (test("'"${APPROVAL_NEGATION_PATTERN}"'"; "i") | not); def approves: (.body // "") | split("\n") | any(.[]; rtrimstr("\r") | approval_line); def approver_association: (.authorAssociation // "") as $a | any("'"${APPROVER_ASSOCIATIONS}"'" | split(" ")[]; . == $a); def bot_author: (.author.login // "") | ascii_downcase | endswith("[bot]");'
 # What ends the output of a filter whose last field must keep its trailing newlines: a command
 # substitution drops every newline at the end of what it captures, and none before this.
 readonly OUTPUT_END=$'\x1f'
@@ -3166,13 +3219,82 @@ issue_view() {
     printf '%s\n' "${GH_OUTPUT%"${OUTPUT_END}"}"
 }
 
+# Assigns the options of issue plan-status: those of a one-issue read, and the --approval switch.
+assign_plan_status_option() {
+    case "$1" in
+        --approval) PLAN_APPROVAL=true ;;
+        *) assign_issue_read_option "$@" ;;
+    esac
+}
+
+# Whether issue plan-status was asked for the --approval verdict.
+PLAN_APPROVAL=false
+
+# The jq program of issue plan-status --approval, after the lines plan-status always prints: one
+# candidate line for each comment after the latest plan (LOOSE_PLAN_HEADING_PATTERN) that approves,
+# whose author's association is an approver's, that is no bot and is not the plan's author:
+# candidate, login, association, createdAt and url. plan_approval_verdict then keeps only a login
+# that is neither the agent's own nor the PR creator's, and is the repository owner or one of its
+# collaborators.
+# $comments, $anchor and $planby below are jq variables, not shell ones.
+# shellcheck disable=SC2016
+readonly PLAN_APPROVAL_CANDIDATES_PROGRAM='([$comments | to_entries[] | select(.value | loose_plan) | .key] | last) as $anchor
+    | select($anchor != null)
+    | ($comments[$anchor].author.login // "" | ascii_downcase) as $planby
+    | $comments[($anchor + 1):][]
+    | select(approves and approver_association and (bot_author | not) and ((.author.login // "") != "")
+             and ((.author.login | ascii_downcase) != $planby))
+    | ["candidate", .author.login, .authorAssociation, .createdAt, .url] | map(printable) | join("\t")'
+
+# Prints the approved lines of issue plan-status --approval from the candidate lines $@ (each the
+# tab-separated candidate, login, association, createdAt and url). With no candidate, nothing more
+# is read. Otherwise the agent's own login and the collaborators of REPO are read, once each, and
+# the first candidate, oldest first, whose login is neither the agent's nor the PR creator's and is
+# the owner of REPO or one of its collaborators, approves. A login, time or URL that is not one is
+# an unexpected answer, never read as no approval.
+plan_approval_verdict() {
+    local row tag login association at url lowered creator owner collaborator
+    local -a collaborators=()
+    if [ "$#" -eq 0 ]; then
+        printf 'approved\tno\n'
+        return 0
+    fi
+    read_agent_login
+    creator="$(pr_creator_login)"
+    owner="${REPO%%/*}"
+    read_collaborator_rows
+    for row in "${COLLABORATOR_ROWS[@]+"${COLLABORATOR_ROWS[@]}"}"; do
+        collaborators+=("${row%%$'\t'*}")
+    done
+    for row; do
+        IFS=$'\t' read -r tag login association at url <<< "${row}"
+        [ "${tag}" = candidate ] && matches_pattern "${login}" "${LOGIN_PATTERN}" \
+            && [[ "${at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] \
+            && [[ "${url}" =~ ^https://[^[:space:]]+$ ]] || unexpected_issue_result
+        lowered="${login,,}"
+        [ "${lowered}" != "${AGENT_LOGIN,,}" ] && [ "${lowered}" != "${creator}" ] || continue
+        if [ "${lowered}" != "${owner,,}" ]; then
+            for collaborator in "${collaborators[@]+"${collaborators[@]}"}"; do
+                [ "${collaborator,,}" != "${lowered}" ] || break
+            done
+            [ "${collaborator:-}" != "" ] && [ "${collaborator,,}" = "${lowered}" ] || continue
+        fi
+        printf 'approved\tyes\napproved-by\t%s\t%s\t%s\napproved-at\t%s\n' "${login}" "${association}" "${url}" "${at}"
+        return 0
+    done
+    printf 'approved\tno\n'
+}
+
 issue_plan_status() {
-    parse_issue_read_options "$@"
+    local program line verdict
+    local -a lines=() candidates=()
+    parse_command_options assign_plan_status_option "--repo --issue" "--approval" "$@"
+    require REPO --repo
+    require ISSUE --issue
     require_gh
     # $comments and $plan below are jq variables, not shell ones.
     # shellcheck disable=SC2016
-    read_issue "labels,comments" \
-        "${PRINTABLE_DEF} ${SIGNS_OFF_DEF} ${HOLD_LABELS_DEF}"' (.comments // []) as $comments
+    program="${PRINTABLE_DEF} ${SIGNS_OFF_DEF} ${HOLD_LABELS_DEF} ${PLAN_APPROVAL_DEF}"' (.comments // []) as $comments
          | ([$comments | to_entries[] | select(.value.body // "" | split("\n") | any(rtrimstr("\r") == "## Implementation Plan")) | .key] | last) as $plan
          | ("plan\t" + (if $plan == null then "no" else "yes" end)),
            ("blocked\t" + (if is_blocked then "yes" else "no" end)),
@@ -3183,7 +3305,25 @@ issue_plan_status() {
                | ["comment", .createdAt, (.author.login // ""), (.authorAssociation // ""),
                   (if (.body // "" | signs_off) then "yes" else "no" end), .url])
             | map(printable) | join("\t"))'
-    printf '%s\n' "${GH_OUTPUT}"
+    [ "${PLAN_APPROVAL}" != true ] || program+=", (${PLAN_APPROVAL_CANDIDATES_PROGRAM})"
+    read_issue "labels,comments" "${program}"
+    if [ "${PLAN_APPROVAL}" != true ]; then
+        printf '%s\n' "${GH_OUTPUT}"
+        return 0
+    fi
+    mapfile -t lines <<< "${GH_OUTPUT}"
+    local -a shown=()
+    for line in "${lines[@]}"; do
+        if [[ "${line}" == candidate$'\t'* ]]; then
+            candidates+=("${line}")
+        else
+            shown+=("${line}")
+        fi
+    done
+    # Worked out before anything is printed, so a failed read of the login or the collaborators
+    # prints nothing at all rather than a plan-status answer with no verdict.
+    verdict="$(plan_approval_verdict "${candidates[@]+"${candidates[@]}"}")" || exit "$?"
+    printf '%s\n' "${shown[@]}" "${verdict}"
 }
 
 # The most issues issue list prints. One more is asked for, so a repository with more open ones is
@@ -3678,12 +3818,13 @@ readonly COLLABORATOR_LIMIT=1000
 # checked: its login is one and it has exactly its fields. GitHub answers a caller without push
 # access with HTTP 403, which api_read dies on, so no access is never read as an empty list; a 404
 # is the repository not being there or not being shown to the caller.
-repo_collaborators() {
+# Sets COLLABORATOR_ROWS to one "login<TAB>role" row for each collaborator of REPO, in GitHub's order,
+# from one paged REST read (repos/<repo>/collaborators). See repo_collaborators for how the answer is
+# checked; a repository with more than COLLABORATOR_LIMIT collaborators is refused.
+read_collaborator_rows() {
     local row login role end
-    local -a rows=() lines=()
-    parse_command_options assign_repository_option "--repo" "" "$@"
-    require REPO --repo
-    require_gh
+    local -a rows=()
+    COLLABORATOR_ROWS=()
     api_read "could not list the collaborators of ${REPO}" "repos/${REPO}/collaborators?per_page=${API_PAGE_SIZE}" \
         "${FIELDS_ROW_DEF} .[] | [.login, .role_name, \"end\"] | fields_row" --paginate \
         || repository_not_found "${REPO}"
@@ -3697,9 +3838,17 @@ repo_collaborators() {
         if ! matches_pattern "${login}" "${LOGIN_PATTERN}" || [ "${end}" != end ]; then
             die "gh returned an unexpected result for the collaborators of ${REPO}"
         fi
-        lines+=("${login}"$'\t'"${role:--}")
+        COLLABORATOR_ROWS+=("${login}"$'\t'"${role:--}")
     done
-    printf '%s\n' "${lines[@]}" | LC_ALL=C sort
+}
+
+repo_collaborators() {
+    parse_command_options assign_repository_option "--repo" "" "$@"
+    require REPO --repo
+    require_gh
+    read_collaborator_rows
+    [ "${#COLLABORATOR_ROWS[@]}" -gt 0 ] || return 0
+    printf '%s\n' "${COLLABORATOR_ROWS[@]}" | LC_ALL=C sort
 }
 
 # The most advisories repo advisories prints. A repository with more is refused, never listed in
