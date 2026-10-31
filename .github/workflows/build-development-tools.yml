@@ -201,6 +201,8 @@ jobs:
       - name: "Summarise"
         if: ${{ github.event_name != 'pull_request' && steps.relevance.outputs.relevant == 'true' }}
         shell: "bash"
+        env:
+          CAL_SHA: "${{ steps.cb.outputs.cal_sha }}"
         run: |
           {
             echo "## development-tools image pushed"
@@ -209,7 +211,7 @@ jobs:
             echo "${REGISTRY}/${IMAGE_NAME}:latest"
             echo '```'
             echo ""
-            echo "bettermarks/composite-action-lint @ \`${{ steps.cb.outputs.cal_sha }}\`"
+            echo "bettermarks/composite-action-lint @ \`${CAL_SHA}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: "Summarise (build-only, not pushed)"
