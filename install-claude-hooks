@@ -177,11 +177,19 @@ install_managed_files() {
 #   merged      the managed-mcp.json to install
 #   duplicates  host servers left out because their URL is cfwf's, which
 #               replaces them
-#   refused     host servers left out because a headers or env value holds
-#               literal text rather than only ${VAR} references (an optional
-#               Bearer/Basic/Token scheme word is allowed): managed-mcp.json is
-#               world-readable, so a secret copied into it would leak to every
-#               user on the host
+#   refused     host servers left out because they may hold a secret: a headers
+#               or env value holds literal text rather than only ${VAR}
+#               references (an optional Bearer/Basic/Token scheme word is
+#               allowed), the url carries userinfo (scheme://user@host) or a
+#               query string, or a command or args word looks like a
+#               credential: a KEY=value or --flag=value whose name holds a
+#               token, secret, password, api-key, auth or bearer word, a
+#               well-known token prefix such as ghp_, github_pat_, sk-, xox?-
+#               or AKIA, or a literal value after such a flag (a name ending
+#               in file, path, dir, helper, command, cmd, env or var says where
+#               the secret lives, so it is not one, and ${VAR} references are
+#               allowed). managed-mcp.json is world-readable, so a secret
+#               copied into it would leak to every user on the host
 #   collisions  names given to two different servers, which cannot both be
 #               kept under one name; the same definition repeated in several
 #               scopes is one server, not a collision
@@ -196,11 +204,31 @@ merge_host_mcp_servers() {
     # shellcheck disable=SC2016  # jq variables, not shell expansions
     jq -c "${host_args[@]}" '
         def same_url($a; $b): ($a | rtrimstr("/")) == ($b | rtrimstr("/"));
+        def without_refs: gsub("\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}"; "");
         def literal_value:
-            type != "string"
-            or (gsub("\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}"; "") | test("^((Bearer|Basic|Token) )?$") | not);
+            type != "string" or (without_refs | test("^((Bearer|Basic|Token) )?$") | not);
+        def secret_name:
+            ascii_downcase
+            | test("(^|[-_.])(token|secret|password|passwd|api[-_]?key|apikey|auth|bearer)([-_.]|$)")
+              and (test("[-_.](file|path|dir|helper|command|cmd|env|var)$") | not);
+        def secret_flag:
+            test("^--?[A-Za-z0-9][A-Za-z0-9_.-]*$") and (ltrimstr("-") | ltrimstr("-") | secret_name);
+        def credential_word:
+            without_refs
+            | test("(^|[^A-Za-z0-9])(gh[pousr]_|github_pat_|sk-|xox[abeoprs]-)[A-Za-z0-9]|AKIA[A-Z0-9]{16}")
+              or ([capture("^-{0,2}(?<name>[A-Za-z0-9_.-]+)=.")] | any(.name | secret_name));
+        def url_has_credentials:
+            [.url | strings | test("^[A-Za-z][A-Za-z0-9+.-]*://[^/?#]*@|\\?")] | any;
+        def command_has_credentials:
+            [(.command | strings), (.args | arrays | .[] | strings)] as $words
+            | ($words | any(credential_word))
+              or ([range(0; ($words | length) - 1) as $i
+                   | select($words[$i] | secret_flag)
+                   | $words[$i + 1] | select(startswith("-") | not) | without_refs | length > 0] | any);
         def holds_literal_secret:
-            [(.headers // {}), (.env // {}) | objects | .[]] | any(literal_value);
+            ([(.headers // {}), (.env // {}) | objects | .[]] | any(literal_value))
+            or url_has_credentials
+            or command_has_credentials;
 
         ($hosts[0] // {}) as $host
         | (.mcpServers.cfwf.url) as $cfwf_url
@@ -230,7 +258,7 @@ write_merged_mcp() {
     names=$(jq -r '.duplicates | join(", ")' <<<"${report}")
     [ -z "${names}" ] || info "Left out ${names} from ${host_claude_json}: same URL as cfwf, which replaces them. Remove them from ${host_claude_json}, as they are no longer used."
     names=$(jq -r '.refused | join(", ")' <<<"${report}")
-    [ -z "${names}" ] || info "WARNING: did not copy ${names} from ${host_claude_json}: a headers or env value holds literal text, and ${CLAUDE_MANAGED_DIR}/managed-mcp.json is readable by every user. Supply the secret through a headersHelper or a \${VAR} reference instead, then re-run."
+    [ -z "${names}" ] || info "WARNING: did not copy ${names} from ${host_claude_json}: a headers or env value holds literal text, the url carries userinfo or a query string, or the command or args look like a credential, and ${CLAUDE_MANAGED_DIR}/managed-mcp.json is readable by every user. Supply the secret through a headersHelper or a \${VAR} reference instead, then re-run."
 
     jq '.merged' <<<"${report}" >"${merged_mcp_file}" || die "Failed to write ${merged_mcp_file}"
     jq empty "${merged_mcp_file}" 2>/dev/null || die "Merged MCP servers are not valid JSON: ${merged_mcp_file}"
