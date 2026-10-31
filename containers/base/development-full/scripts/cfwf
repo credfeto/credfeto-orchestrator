@@ -18,6 +18,7 @@ readonly PR_NOT_FOUND_EXIT=9
 readonly PR_NOT_FOUND_TEXT='Could not resolve to a PullRequest with the number'
 readonly RELEASE_NOT_FOUND_EXIT=9
 readonly TAG_NOT_FOUND_EXIT=9
+readonly ADVISORY_NOT_FOUND_EXIT=9
 readonly BRANCH_NOT_FOUND_EXIT=9
 # The verdict codes of pr checks, which every cfwf command that judges checks shares.
 readonly CHECKS_FAILED_EXIT=3
@@ -354,6 +355,7 @@ Commands:
   repo view                Print a repository's default branch, visibility, merge methods and description
   repo collaborators       List a repository's collaborators and their roles, sorted by login in the C locale
   repo advisories          List a repository's security advisories: GHSA id, severity, state and summary
+  advisory view            Print a global security advisory and its affected packages by GHSA id (exit 9 when not found)
   auth status              Print the authenticated login, the host and the gh version, never a token
   branch required-checks   Print the checks a branch requires, from its protection and rulesets (exit 9 when not found)
   pr checks                Judge the checks on a PR's, a branch's or a commit's head (exit 0, 3, 4 or 5)
@@ -867,6 +869,40 @@ printed, never part of the list.
 Exit codes: 0 listed, an empty list included (nothing is printed); 1 a runtime failure, such as a
 gh or network error or a repository that was not found or that the caller cannot see, prefixed
 "cfwf:"; 2 a usage error.
+USAGE
+}
+
+usage_advisory_view() {
+    cat << USAGE
+Usage: cfwf advisory view --ghsa <GHSA-xxxx-xxxx-xxxx>
+
+Prints one advisory from GitHub's global advisory database (not a repository's own advisories:
+see 'cfwf repo advisories'), from one REST read, with its affected packages and their version
+ranges, as when choosing a version to pin.
+
+--ghsa  Always required: the advisory's GHSA id as GitHub writes it, GHSA and three groups of
+        four characters from 23456789cfghjmpqrvwx. Anything else is a usage error, before any gh
+        call.
+--json, --jq, --repo and --ecosystem are not options. The advisory's description and references
+are never read, so what is printed stays small.
+
+Output, tab separated: five lines of a key and a value, always in this order,
+  ghsa_id    the advisory's GHSA id
+  severity   critical, high, medium, low or unknown; empty when GitHub gives none
+  summary    free text
+  published  when it was published, ISO 8601 in UTC
+  withdrawn  when it was withdrawn, ISO 8601 in UTC; empty when it has not been
+then a line for each affected package, in GitHub's order, of four fields none of which is empty:
+  <ecosystem>  <package>  <vulnerable_range>  <first_patched>
+with "-" for a range GitHub leaves empty, and first_patched "-" when no version is patched yet.
+The summary, the package names and the ranges are written by whoever filed the advisory: each
+control character in them (a tab or a newline included) is printed as a space, so a line never
+gains a field or another line, and they are not filtered in any other way, so read them as
+untrusted text. At most ${ADVISORY_PACKAGE_LIMIT} affected packages are printed: more is a runtime failure and
+nothing is printed.
+
+Exit codes: 0 printed; ${ADVISORY_NOT_FOUND_EXIT} the advisory was not found; 1 a runtime failure, such as a gh or
+network error or an answer that is not the advisory asked for, prefixed "cfwf:"; 2 a usage error.
 USAGE
 }
 
@@ -1865,6 +1901,7 @@ usage_for() {
         "repo view") usage_repo_view ;;
         "repo collaborators") usage_repo_collaborators ;;
         "repo advisories") usage_repo_advisories ;;
+        advisory | "advisory view") usage_advisory_view ;;
         auth | "auth status") usage_auth ;;
         pr | "pr checks") usage_pr ;;
         "pr checks-wait") usage_pr_checks_wait ;;
@@ -3305,6 +3342,74 @@ repo_advisories() {
 
 cmd_repo() {
     dispatch_subcommand repo view repo_view collaborators repo_collaborators advisories repo_advisories -- "$@"
+}
+
+# The most affected packages advisory view prints. An advisory with more is refused, never printed
+# in part.
+readonly ADVISORY_PACKAGE_LIMIT=1000
+# A global advisory's severity, as GitHub gives it: the advisory database also has unknown.
+readonly GLOBAL_ADVISORY_SEVERITY_PATTERN='^(critical|high|medium|low|unknown)$'
+# The jq program of advisory view: one row for the advisory (its GHSA id, severity, summary, when it
+# was published and withdrawn, and how many affected packages it has), then a row for each affected
+# package, after FIELDS_ROW_DEF (defined further down, so it is added where it is run). The first patched version is a string in the global database and an object with an
+# identifier in a repository's, so either is read. The description and references are never read.
+readonly ADVISORY_VIEW_PROGRAM=' ([.ghsa_id, .severity, .summary, .published_at, .withdrawn_at, ((.vulnerabilities // []) | length), "end"] | fields_row),'\
+' ((.vulnerabilities // [])[] | [.package.ecosystem, .package.name, .vulnerable_version_range,'\
+' (.first_patched_version | if type == "object" then .identifier else . end), "end"] | fields_row)'
+GHSA=""
+
+assign_advisory_option() {
+    local flag="$1" value="$2"
+    case "${flag}" in
+        --ghsa)
+            assign_once GHSA "${flag}"
+            validate "${value}" "${GHSA_ID_PATTERN}" "${flag}" "it must be a GHSA id, GHSA-xxxx-xxxx-xxxx"
+            GHSA="${value}"
+            ;;
+    esac
+}
+
+# Prints the global advisory GHSA from one REST read (advisories/<ghsa>): its own fields a line
+# each, then a row for each affected package. Nothing is printed until the whole answer has been
+# checked: it is the advisory asked for, its severity (when given) is GitHub's, its times are
+# times, it has exactly as many package rows as it says, and each row has exactly its fields with
+# an ecosystem and a package name. Free text is only made printable. A 404 is the advisory not
+# being there.
+advisory_view() {
+    local row ghsa_id severity summary published withdrawn count end ecosystem package range patched unexpected
+    local -a rows=() lines=()
+    parse_command_options assign_advisory_option "--ghsa" "" "$@"
+    require GHSA --ghsa
+    require_gh
+    unexpected="gh returned an unexpected result for the advisory ${GHSA}"
+    if ! api_read "could not read the advisory ${GHSA}" "advisories/${GHSA}" "${FIELDS_ROW_DEF}${ADVISORY_VIEW_PROGRAM}"; then
+        printf 'cfwf: the advisory %s was not found\n' "${GHSA}" >&2
+        exit "${ADVISORY_NOT_FOUND_EXIT}"
+    fi
+    [ -n "${GH_OUTPUT}" ] || die "${unexpected}"
+    mapfile -t rows <<< "${GH_OUTPUT}"
+    IFS="${ROW_SEPARATOR}" read -r ghsa_id severity summary published withdrawn count end <<< "${rows[0]}"
+    if [ "${ghsa_id}" != "${GHSA}" ] || [ "${end}" != end ] || ! [[ "${count}" =~ ^(0|[1-9][0-9]{0,6})$ ]] \
+        || { [ -n "${severity}" ] && ! matches_pattern "${severity}" "${GLOBAL_ADVISORY_SEVERITY_PATTERN}"; } \
+        || ! matches_pattern "${published}" "${TIMESTAMP_PATTERN}" \
+        || { [ -n "${withdrawn}" ] && ! matches_pattern "${withdrawn}" "${TIMESTAMP_PATTERN}"; }; then
+        die "${unexpected}"
+    fi
+    [ "${count}" -le "${ADVISORY_PACKAGE_LIMIT}" ] \
+        || die "the advisory ${GHSA} has more than ${ADVISORY_PACKAGE_LIMIT} affected packages, so none is printed"
+    [ "$((${#rows[@]} - 1))" -eq "${count}" ] || die "${unexpected}"
+    lines=("ghsa_id"$'\t'"${ghsa_id}" "severity"$'\t'"${severity}" "summary"$'\t'"${summary}"
+        "published"$'\t'"${published}" "withdrawn"$'\t'"${withdrawn}")
+    for row in "${rows[@]:1}"; do
+        IFS="${ROW_SEPARATOR}" read -r ecosystem package range patched end <<< "${row}"
+        [ -n "${ecosystem}" ] && [ -n "${package}" ] && [ "${end}" = end ] || die "${unexpected}"
+        lines+=("${ecosystem}"$'\t'"${package}"$'\t'"${range:--}"$'\t'"${patched:--}")
+    done
+    printf '%s\n' "${lines[@]}"
+}
+
+cmd_advisory() {
+    dispatch_subcommand advisory view advisory_view -- "$@"
 }
 
 RATE_LIMIT_ASKED=""
@@ -6178,6 +6283,7 @@ main() {
         issue) cmd_issue "$@" ;;
         body) cmd_body "$@" ;;
         repo) cmd_repo "$@" ;;
+        advisory) cmd_advisory "$@" ;;
         auth) cmd_auth "$@" ;;
         pr) cmd_pr "$@" ;;
         comment) cmd_comment "$@" ;;
