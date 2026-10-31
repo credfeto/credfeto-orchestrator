@@ -46,7 +46,7 @@ setup() {
         '  "pr create") f="${GH_FIXTURES}/pr-create"; prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/pr-body.txt"; prev="${arg}"; done; readlink /proc/self/fd/0 > "${f}.stdin.txt"; [ -f "${f}.fail" ] && { [ -f "${f}.then-list.json" ] && cp "${f}.then-list.json" "${GH_FIXTURES}/pr-list.json"; [ -f "${f}.then-list.fail" ] && cp "${f}.then-list.fail" "${GH_FIXTURES}/pr-list.fail"; cat "${f}.fail" >&2; exit 1; }; cat "${f}.out" ;;' \
         '  "issue list") f="${GH_FIXTURES}/issue-list"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; lim=30; st=open; asked=""; prev=""; for arg in "$@"; do [ "${prev}" = "--limit" ] && lim="${arg}"; [ "${prev}" = "--state" ] && st="${arg}"; [ "${prev}" = "--json" ] && asked="${arg}"; prev="${arg}"; done; jq --arg st "${st}" --argjson lim "${lim}" --arg asked "${asked}" "[.[] | select(\$st == \"all\" or (.state | ascii_downcase) == \$st)] | .[:\$lim] | map(with_entries(select(.key as \$key | (\$asked | split(\",\")) | index(\$key))))" "${f}.json" > "${f}.asked.json" || exit 1; emit "${f}.asked.json" ;;' \
         '  "issue view") f="${GH_FIXTURES}/issue-view-$3"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.json" ] || { echo "GraphQL: Could not resolve to an issue or pull request with the number of $3. (repository.issue)" >&2; exit 1; }; emit "${f}.json" ;;' \
-        '  "api repos/"* | "api advisories/"*) e="${2%%\?*}"; f="${GH_FIXTURES}/api-${e//\//_}"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; [ -f "${f}.pages" ] && { jq -c ".[]" "${f}.pages" | while IFS= read -r page; do printf "%s\n" "${page}" > "${f}.page.json"; emit "${f}.page.json" || exit 1; done; exit; }; [ -f "${f}.json" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }; emit "${f}.json" ;;' \
+        '  "api repos/"* | "api advisories/"* | "api users/"*) e="${2%%\?*}"; f="${GH_FIXTURES}/api-${e//\//_}"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; [ -f "${f}.pages" ] && { jq -c ".[]" "${f}.pages" | while IFS= read -r page; do printf "%s\n" "${page}" > "${f}.page.json"; emit "${f}.page.json" || exit 1; done; exit; }; [ -f "${f}.json" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }; emit "${f}.json" ;;' \
         '  "pr comment" | "issue comment") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/comment-body.txt"; prev="${arg}"; done; readlink /proc/self/fd/0 > "${GH_FIXTURES}/comment-stdin.txt"; [ -f "${GH_FIXTURES}/comment.fail" ] && { echo "boom" >&2; exit 1; }; cat "${GH_FIXTURES}/comment.out" ;;' \
         '  "api user" | "api rate_limit") f="${GH_FIXTURES}/api-$2"; [ -f "${f}.fail" ] && { [ -f "${f}.failout" ] && cat "${f}.failout"; cat "${f}.fail" >&2; exit 1; }; emit "${f}.json" ;;' \
         '  "--version ") f="${GH_FIXTURES}/gh-version"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; cat "${f}.out" ;;' \
@@ -56,6 +56,8 @@ setup() {
         '  "issue edit") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/edit-body.txt"; prev="${arg}"; done; [ -f "${GH_FIXTURES}/issue-edit.fail" ] && { cat "${GH_FIXTURES}/issue-edit.fail" >&2; exit 1; }; echo "https://github.com/credfeto/credfeto-orchestrator/issues/0" ;;' \
         '  "run list") f="${GH_FIXTURES}/run-list"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; lim=30; asked=""; prev=""; for arg in "$@"; do [ "${prev}" = "--limit" ] && lim="${arg}"; [ "${prev}" = "--json" ] && asked="${arg}"; prev="${arg}"; done; jq --argjson lim "${lim}" --arg asked "${asked}" ".[:\$lim] | map(with_entries(select(.key as \$key | (\$asked | split(\",\")) | index(\$key))))" "${f}.json" > "${f}.asked.json" || exit 1; emit "${f}.asked.json" ;;' \
         '  "run view") job=""; prev=""; for arg in "$@"; do [ "${prev}" = "--job" ] && job="${arg}"; prev="${arg}"; done; if [ -n "${job}" ]; then f="${GH_FIXTURES}/run-log-job-${job}"; else f="${GH_FIXTURES}/run-log-$3"; fi; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.txt" ] || { echo "stub: no log" >&2; exit 1; }; cat "${f}.txt" ;;' \
+        '  "repo list") f="${GH_FIXTURES}/repo-list"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; arch=true; for arg in "$@"; do [ "${arg}" = "--no-archived" ] && arch=false; done; jq --argjson arch "${arch}" "[.[] | select(\$arch or .isArchived != true)]" "${f}.json" > "${f}.asked.json" || exit 1; emit "${f}.asked.json" ;;' \
+        '  "search repos" | "search code") f="${GH_FIXTURES}/search-$2"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; lim=30; prev=""; for arg in "$@"; do [ "${prev}" = "--limit" ] && lim="${arg}"; prev="${arg}"; done; jq --argjson lim "${lim}" ".[:\$lim]" "${f}.json" > "${f}.asked.json" || exit 1; emit "${f}.asked.json" ;;' \
         '  *) echo "gh stub: unexpected call: $*" >&2; exit 99 ;;' \
         'esac'
 
@@ -7897,7 +7899,7 @@ rate_limit_lines() {
     run --separate-stderr "${SCRIPT}" repo
     [ "${status}" -eq 2 ]
     [ -z "${output}" ]
-    [[ "${stderr}" == "cfwf: repo needs a subcommand (view, collaborators, advisories)"$'\n'* ]]
+    [[ "${stderr}" == "cfwf: repo needs a subcommand (view, collaborators, advisories, list, search)"$'\n'* ]]
 
     run --separate-stderr "${SCRIPT}" auth
     [ "${status}" -eq 2 ]
@@ -9277,7 +9279,7 @@ read_once_asking_for() {
     run --separate-stderr "${SCRIPT}" pr
     [ "${status}" -eq 2 ]
     [ -z "${output}" ]
-    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, checks-wait, view, list, comments, reply, create, ready-at, diff, edit, hand-off, take-back, close, reopen)"* ]]
+    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, checks-wait, view, list, comments, reply, create, ready-at, diff, edit, hand-off, take-back, close, reopen, search)"* ]]
     [[ "${stderr}" == *"Usage: cfwf pr checks"*"Run 'cfwf pr view --help' for pr view"* ]]
 
     run --separate-stderr "${SCRIPT}" pr frobnicate
@@ -13767,4 +13769,302 @@ run_issue_comments() {
     run "${SCRIPT}" issue comments --help
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"Usage: cfwf issue comments --repo <owner/repo> --issue <n> [--since <time>] [--author <login>]"* ]]
+}
+
+# --- repo list, repo search, pr search, code search and workflow list -------------------------------
+
+OWNER="credfeto"
+WORKFLOWS_ENDPOINT="repos/${REPO}/actions/workflows"
+
+# One repository as gh repo list gives it: name $1, visibility $2, archived $3 (true or false) and
+# default branch $4 (empty for none), with a field repo list does not print.
+listed_repository() {
+    jq -n --arg name "$1" --arg visibility "$2" --argjson archived "$3" --arg branch "$4" \
+        '{name: $name, visibility: $visibility, isArchived: $archived, description: "decoy-description",
+          defaultBranchRef: (if $branch == "" then null else {name: $branch} end)}'
+}
+
+# Writes the repositories gh repo list answers with: each argument a repository object.
+write_repo_list() {
+    printf '%s\n' "$@" | jq -s '.' > "${GH_FIXTURES}/repo-list.json"
+}
+
+write_owner() {
+    jq -n --arg login "${OWNER}" '{login: $login}' | write_api "users/${OWNER}"
+}
+
+@test "repo list prints each repository's name, visibility, active or archived and default branch, sorted by name, archived ones left out unless asked for, after reading the owner" {
+    write_owner
+    write_repo_list "$(listed_repository zeta PUBLIC false main)" "$(listed_repository Alpha PRIVATE false trunk)" \
+        "$(listed_repository old-one PUBLIC true master)" "$(listed_repository empty-repo PUBLIC false '')"
+    run --separate-stderr "${SCRIPT}" repo list --owner "${OWNER}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'Alpha\tPRIVATE\tactive\ttrunk\nempty-repo\tPUBLIC\tactive\t-\nzeta\tPUBLIC\tactive\tmain' ]
+    [ "$(gh_call_count "api users/${OWNER} --jq .login")" -eq 1 ]
+    [ "$(gh_call_count "repo list ${OWNER} --limit 1001 --json name,visibility,isArchived,defaultBranchRef --jq ")" -eq 1 ]
+    [ "$(gh_call_count "--no-archived")" -eq 1 ]
+
+    run --separate-stderr "${SCRIPT}" repo list --owner "${OWNER}" --include-archived
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'Alpha\tPRIVATE\tactive\ttrunk\nempty-repo\tPUBLIC\tactive\t-\nold-one\tPUBLIC\tarchived\tmaster\nzeta\tPUBLIC\tactive\tmain' ]
+}
+
+@test "repo list exits 9 for an owner that is not there, and 1 for any other failed read, printing nothing" {
+    run --separate-stderr "${SCRIPT}" repo list --owner "${OWNER}"
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the owner ${OWNER} was not found" ]
+    [ "$(gh_call_count "repo list")" -eq 0 ]
+
+    write_owner
+    echo "HTTP 502: Bad Gateway" > "${GH_FIXTURES}/repo-list.fail"
+    run --separate-stderr "${SCRIPT}" repo list --owner "${OWNER}"
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: could not list the repositories of ${OWNER}: HTTP 502: Bad Gateway" ]]
+}
+
+@test "repo list prints nothing and exits 1 for a row that is not a repository, or more than 1000 repositories, and keeps a forged branch name on one line" {
+    write_owner
+    write_repo_list "$(listed_repository 'bad name' PUBLIC false main)"
+    run --separate-stderr "${SCRIPT}" repo list --owner "${OWNER}"
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    write_repo_list "$(listed_repository good SECRET false main)"
+    run --separate-stderr "${SCRIPT}" repo list --owner "${OWNER}"
+    [ "${status}" -eq 1 ]
+    write_repo_list "$(listed_repository good PUBLIC false $'main\nforged\tPUBLIC\tactive\tx')"
+    run --separate-stderr "${SCRIPT}" repo list --owner "${OWNER}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'good\tPUBLIC\tactive\tmain forged PUBLIC active x' ]
+    jq -n '[range(1001) | {name: ("r" + tostring), visibility: "PUBLIC", isArchived: false, defaultBranchRef: {name: "main"}}]' > "${GH_FIXTURES}/repo-list.json"
+    run --separate-stderr "${SCRIPT}" repo list --owner "${OWNER}"
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: ${OWNER} has more than 1000 repositories, so none is printed" ]]
+}
+
+@test "repo list and repo search usage errors exit 2 before any gh call, never echoing a value" {
+    local token args
+    token="gh""p_$(run_of a 36)"
+    local -a cases=(
+        "repo list"
+        "repo list --owner"
+        "repo list --owner -bad"
+        "repo list --owner a/b"
+        "repo list --owner ${OWNER} --owner ${OWNER}"
+        "repo list --owner ${OWNER} --limit 5"
+        "repo list --owner ${OWNER} --json name"
+        "repo list --repo ${REPO}"
+        "repo search --owner ${OWNER}"
+        "repo search --text words"
+        "repo search --owner ${OWNER} --text"
+        "repo search --owner ${OWNER} --text ..."
+        "repo search --owner ${OWNER} --text a OR b"
+        "repo search --owner ${OWNER} --text words --limit 0"
+        "repo search --owner ${OWNER} --text words --limit 101"
+        "repo search --owner ${OWNER} --text words --state open"
+        "repo list --owner ${OWNER} ${token}"
+    )
+    for args in "${cases[@]}"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run --separate-stderr "${SCRIPT}" ${args}
+        [ "${status}" -eq 2 ] || {
+            echo "accepted: ${args} (${status})" >&2
+            return 1
+        }
+        [ -z "${output}" ]
+        [[ "${stderr}" == *"Usage: cfwf repo "* ]]
+        [[ "${stderr}" != *"${token}"* ]]
+    done
+    [ ! -f "${GH_LOG}" ]
+}
+
+# One repository as gh search repos gives it: owner/name $1, visibility $2 (gh gives lower case),
+# archived $3 and default branch $4.
+found_repository() {
+    jq -n --arg name "$1" --arg visibility "$2" --argjson archived "$3" --arg branch "$4" \
+        '{fullName: $name, visibility: $visibility, isArchived: $archived, defaultBranch: $branch, description: "decoy-description"}'
+}
+
+@test "repo search searches names and descriptions of one owner after --, archived ones left out unless asked for, sorted, and cut with a warning at --limit" {
+    printf '%s\n' "$(found_repository credfeto/zz public false main)" "$(found_repository credfeto/aa private false trunk)" \
+        "$(found_repository credfeto/mm public false main)" | jq -s '.' > "${GH_FIXTURES}/search-repos.json"
+    run --separate-stderr "${SCRIPT}" repo search --owner "${OWNER}" --text "cfwf: tools"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'credfeto/aa\tPRIVATE\tactive\ttrunk\ncredfeto/mm\tPUBLIC\tactive\tmain\ncredfeto/zz\tPUBLIC\tactive\tmain' ]
+    [ -z "${stderr}" ]
+    [ "$(gh_call_count "search repos --owner ${OWNER} --limit 31 --json fullName,visibility,isArchived,defaultBranch --jq ")" -eq 1 ]
+    grep -qF -- "--archived=false -- in:name,description cfwf tools" "${GH_LOG}"
+
+    run --separate-stderr "${SCRIPT}" repo search --owner "${OWNER}" --text tools --limit 2 --include-archived
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'credfeto/aa\tPRIVATE\tactive\ttrunk\ncredfeto/zz\tPUBLIC\tactive\tmain' ]
+    [ "${stderr}" = "cfwf: warning: more than 2 repositories match; only the first 2 are printed" ]
+    [ "$(grep -cF -- "--archived=false" "${GH_LOG}")" -eq 1 ]
+}
+
+@test "repo search exits 9 when GitHub cannot search the owner, and 8 for a token in --text before any gh call" {
+    echo "The listed users and repositories cannot be searched either because the resources do not exist or you do not have permission to view them." > "${GH_FIXTURES}/search-repos.fail"
+    run --separate-stderr "${SCRIPT}" repo search --owner "${OWNER}" --text tools
+    [ "${status}" -eq 9 ]
+    [ "${stderr}" = "cfwf: the owner ${OWNER} was not found" ]
+    rm -f "${GH_LOG}"
+    run --separate-stderr "${SCRIPT}" repo search --owner "${OWNER}" --text "gh""p_$(run_of a 36)"
+    [ "${status}" -eq 8 ]
+    [ "${stderr}" = "cfwf: text refused: token" ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+# One pull request as gh pr list gives it for pr search: number $1, state $2, head $3 and title $4.
+searched_pull_request() {
+    jq -n --argjson number "$1" --arg state "$2" --arg head "$3" --arg title "$4" \
+        '{number: $number, state: $state, headRefName: $head, title: $title, author: {login: "decoy"}}'
+}
+
+@test "pr search searches titles and bodies of one repository's pull requests in the search's order, with --state, and cuts with a warning at --limit" {
+    printf '%s\n' "$(searched_pull_request 9 MERGED feat/9-x 'feat: x')" "$(searched_pull_request 3 OPEN fix/3-y 'fix: y')" \
+        "$(searched_pull_request 5 CLOSED feat/5-z $'tab\there')" | jq -s '.' > "${GH_FIXTURES}/pr-list.json"
+    run --separate-stderr "${SCRIPT}" pr search --repo "${REPO}" --text "repo advisories" --state merged
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'9\tMERGED\tfeat/9-x\tfeat: x\n3\tOPEN\tfix/3-y\tfix: y\n5\tCLOSED\tfeat/5-z\ttab here' ]
+    [ "$(gh_call_count "pr list --repo ${REPO} --state merged --search in:title,body repo advisories --limit 31 --json number,state,headRefName,title --jq ")" -eq 1 ]
+
+    run --separate-stderr "${SCRIPT}" pr search --repo "${REPO}" --text words --limit 2
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'9\tMERGED\tfeat/9-x\tfeat: x\n3\tOPEN\tfix/3-y\tfix: y' ]
+    [ "${stderr}" = "cfwf: warning: more than 2 pull requests match; only the first 2 are printed" ]
+    grep -qF -- "--state open --search" "${GH_LOG}"
+}
+
+@test "pr search usage errors exit 2 before any gh call, and a row that is not a pull request prints nothing and exits 1" {
+    local args
+    for args in "--text x" "--repo ${REPO}" "--repo ${REPO} --text x --state draft" "--repo ${REPO} --text a NOT b" "--repo ${REPO} --text x --label y"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run --separate-stderr "${SCRIPT}" pr search ${args}
+        [ "${status}" -eq 2 ] || {
+            echo "accepted: ${args}" >&2
+            return 1
+        }
+        [[ "${stderr}" == *"Usage: cfwf pr search "* ]]
+    done
+    [ ! -f "${GH_LOG}" ]
+    searched_pull_request 9 DRAFT feat/9-x x | jq -s '.' > "${GH_FIXTURES}/pr-list.json"
+    run --separate-stderr "${SCRIPT}" pr search --repo "${REPO}" --text words
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+}
+
+# One file as gh search code gives it: path $1 and the number $2 of text matches, each holding file
+# content that must never be printed.
+found_code() {
+    jq -n --arg path "$1" --argjson n "$2" \
+        '{path: $path, sha: "decoy", url: "https://example.com/decoy", textMatches: [range($n) | {fragment: "SECRET-CONTENT", matches: []}]}'
+}
+
+@test "code search reads the repository first, then prints each matching file's path and match count sorted by path, and never any file content" {
+    jq -n '{id: 1}' | write_api "repos/${REPO}"
+    printf '%s\n' "$(found_code src/z.sh 2)" "$(found_code README.md 1)" "$(found_code lib/a 0)" | jq -s '.' > "${GH_FIXTURES}/search-code.json"
+    run --separate-stderr "${SCRIPT}" code search --repo "${REPO}" --text usage_repo_advisories
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'README.md\t1\nlib/a\t0\nsrc/z.sh\t2' ]
+    [[ "${output}" != *"SECRET-CONTENT"* ]]
+    [ "$(gh_line_of "api repos/${REPO} --jq .id")" -lt "$(gh_line_of "search code")" ]
+    [ "$(gh_call_count "search code --repo ${REPO} --limit 31 --json path,textMatches --jq ")" -eq 1 ]
+    grep -qF -- " -- usage_repo_advisories" "${GH_LOG}"
+
+    run --separate-stderr "${SCRIPT}" code search --repo "${REPO}" --text x --limit 1
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'src/z.sh\t2' ]
+    [ "${stderr}" = "cfwf: warning: more than 1 files match; only the first 1 are printed" ]
+}
+
+@test "code search exits 1 with the repository message for a repository that is not there, and 2 for usage errors, before searching" {
+    run --separate-stderr "${SCRIPT}" code search --repo "${REPO}" --text words
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: the repository ${REPO} was not found, or the caller cannot see it" ]
+    [ "$(gh_call_count "search code")" -eq 0 ]
+    rm -f "${GH_LOG}"
+    local args
+    for args in "" "--repo ${REPO}" "--text x" "--repo ${REPO} --text x --owner y" "--repo ${REPO} --text x --limit 200"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run --separate-stderr "${SCRIPT}" code search ${args}
+        [ "${status}" -eq 2 ] || {
+            echo "accepted: ${args}" >&2
+            return 1
+        }
+    done
+    run --separate-stderr "${SCRIPT}" code
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: code needs a subcommand (search)"$'\n'* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+# One workflow as the REST API lists it: name $1, path $2 and state $3.
+workflow() {
+    jq -n --arg name "$1" --arg path "$2" --arg state "$3" '{id: 1, node_id: "decoy", name: $name, path: $path, state: $state, badge_url: "decoy"}'
+}
+
+write_workflows() {
+    printf '%s\n' "$@" | jq -s '{total_count: length, workflows: .}' | write_api "${WORKFLOWS_ENDPOINT}"
+}
+
+@test "workflow list prints each workflow's path, state and name sorted by path, disabled ones included, from one paged read" {
+    write_workflows "$(workflow 'Build' .github/workflows/build.yml active)" \
+        "$(workflow 'Old' .github/workflows/old.yml disabled_manually)" "$(workflow $'Lint\tx' .github/workflows/a-lint.yml active)"
+    run --separate-stderr "${SCRIPT}" workflow list --repo "${REPO}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'.github/workflows/a-lint.yml\tactive\tLint x\n.github/workflows/build.yml\tactive\tBuild\n.github/workflows/old.yml\tdisabled_manually\tOld' ]
+    [ "$(gh_call_count "api ${WORKFLOWS_ENDPOINT}?per_page=100 --paginate --jq ")" -eq 1 ]
+}
+
+@test "workflow list prints nothing and exits 1 for a state that is not GitHub's or a 404, and 2 for usage errors" {
+    write_workflows "$(workflow Build .github/workflows/build.yml paused)"
+    run --separate-stderr "${SCRIPT}" workflow list --repo "${REPO}"
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    rm -f "$(api_fixture "${WORKFLOWS_ENDPOINT}").json"
+    run --separate-stderr "${SCRIPT}" workflow list --repo "${REPO}"
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: the repository ${REPO} was not found, or the caller cannot see it" ]
+    write_workflows
+    run --separate-stderr "${SCRIPT}" workflow list --repo "${REPO}"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    rm -f "${GH_LOG}"
+    run --separate-stderr "${SCRIPT}" workflow list
+    [ "${status}" -eq 2 ]
+    run --separate-stderr "${SCRIPT}" workflow list --repo "${REPO}" --all
+    [ "${status}" -eq 2 ]
+    run --separate-stderr "${SCRIPT}" workflow
+    [[ "${stderr}" == "cfwf: workflow needs a subcommand (list)"$'\n'* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "the new commands are in the general help and their own help, and help calls no gh" {
+    run "${SCRIPT}" help
+    [[ "${output}" == *$'\n'"  repo list                List an owner's repositories, sorted by name, archived ones left out unless asked for"$'\n'* ]]
+    [[ "${output}" == *$'\n'"  repo search              Search an owner's repositories by words in their name or description, one line each"$'\n'* ]]
+    [[ "${output}" == *$'\n'"  pr search                Search one repository's pull requests by words in their title or body, one line each"$'\n'* ]]
+    [[ "${output}" == *$'\n'"  code search              Search one repository's code by words, printing each matching file's path"$'\n'* ]]
+    [[ "${output}" == *$'\n'"  workflow list            List a repository's Actions workflows: path, state and name, sorted by path"$'\n'* ]]
+    local spelling
+    for spelling in "repo list" "repo search" "pr search" "code search" "workflow list"; do
+        # shellcheck disable=SC2086  # each spelling is split into its words on purpose
+        run "${SCRIPT}" ${spelling} --help
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == "Usage: cfwf ${spelling} "* ]] || {
+            echo "${spelling}" >&2
+            return 1
+        }
+        # shellcheck disable=SC2086
+        run "${SCRIPT}" help ${spelling}
+        [[ "${output}" == "Usage: cfwf ${spelling} "* ]]
+    done
+    run "${SCRIPT}" help repo
+    [[ "${output}" == *"Usage: cfwf repo list --owner <owner> [--include-archived]"* ]]
+    [[ "${output}" == *"Usage: cfwf repo search --owner <owner> --text <words>"* ]]
+    run "${SCRIPT}" help pr
+    [[ "${output}" == *"Run 'cfwf pr search --help' for pr search"* ]]
+    [ ! -f "${GH_LOG}" ]
 }
