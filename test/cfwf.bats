@@ -28,7 +28,7 @@ setup() {
         'emit_asked() { f="$1"; shift; asked=""; prev=""; for arg in "$@"; do [ "${prev}" = "--json" ] && asked="${arg}"; prev="${arg}"; done; jq --arg asked "${asked}" "with_entries(select(.key as \$key | (\$asked | split(\",\")) | index(\$key)))" < "${f}.json" > "${f}.asked.json" || exit 1; emit "${f}.asked.json"; }' \
         'case " $* " in " repo view "*" --json defaultBranchRef,"*) v="${3,,}"; f="${GH_FIXTURES}/repository-${v//\//_}"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; [ -f "${f}.json" ] || { echo "GraphQL: Could not resolve to a Repository with the name ${3}. (repository)" >&2; exit 1; }; emit_asked "${f}" "$@"; exit ;; esac' \
         'case "$1 $2" in' \
-        '  "pr list") f="${GH_FIXTURES}/pr-list"; [ -f "${f}.rewrite" ] && printf "%s\n" "rewritten with /tmp/leak" > "$(cat "${f}.rewrite")"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; lim=30; hd=""; prev=""; for arg in "$@"; do [ "${prev}" = "--limit" ] && lim="${arg}"; [ "${prev}" = "--head" ] && hd="${arg}"; prev="${arg}"; done; [ -f "${f}.ignore-head" ] && hd=""; jq --arg hd "${hd}" --argjson lim "${lim}" "[.[] | select(\$hd == \"\" or .headRefName == \$hd)] | .[:\$lim]" "${f}.json" > "${f}.asked.json" || exit 1; emit "${f}.asked.json" ;;' \
+        '  "pr list") f="${GH_FIXTURES}/pr-list"; [ -f "${f}.rewrite" ] && printf "%s\n" "rewritten with /tmp/leak" > "$(cat "${f}.rewrite")"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; lim=30; hd=""; lb=""; prev=""; for arg in "$@"; do [ "${prev}" = "--limit" ] && lim="${arg}"; [ "${prev}" = "--head" ] && hd="${arg}"; [ "${prev}" = "--label" ] && lb="${lb}${arg}|"; prev="${arg}"; done; [ -f "${f}.ignore-head" ] && hd=""; [ -f "${f}.ignore-label" ] && lb=""; jq --arg hd "${hd}" --arg lb "${lb}" --argjson lim "${lim}" "(\$lb | split(\"|\") | map(select(. != \"\"))) as \$want | [.[] | select(\$hd == \"\" or .headRefName == \$hd) | select(. as \$pr | all(\$want[]; . as \$w | any((\$pr.labels // [])[]; (.name | ascii_downcase) == (\$w | ascii_downcase))))] | .[:\$lim]" "${f}.json" > "${f}.asked.json" || exit 1; emit "${f}.asked.json" ;;' \
         '  "release list") f="${GH_FIXTURES}/release-list"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; lim=30; drafts=true; asked=""; prev=""; for arg in "$@"; do [ "${prev}" = "--limit" ] && lim="${arg}"; [ "${prev}" = "--json" ] && asked="${arg}"; [ "${arg}" = "--exclude-drafts" ] && drafts=false; prev="${arg}"; done; [ -f "${f}.keep-drafts" ] && drafts=true; jq --argjson drafts "${drafts}" --argjson lim "${lim}" --arg asked "${asked}" "[.[] | select(\$drafts or .isDraft != true)] | .[:\$lim] | map(with_entries(select(.key as \$key | (\$asked | split(\",\")) | index(\$key))))" "${f}.json" > "${f}.asked.json" || exit 1; emit "${f}.asked.json" ;;' \
         '  "repo view") case " $* " in *" --json visibility "*) v="${3,,}"; f="${GH_FIXTURES}/visibility-${v//\//_}"; [ -f "${f}.fail" ] && { if [ -s "${f}.fail" ]; then cat "${f}.fail" >&2; else echo "HTTP 502: Bad Gateway" >&2; fi; exit 1; }; [ -f "${f}.json" ] || { echo "GraphQL: Could not resolve to a Repository with the name ${3}. (repository)" >&2; exit 1; }; emit "${f}.json"; exit 0 ;; esac; [ -f "${GH_FIXTURES}/repo-view.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/repo-view.json" ;;' \
         '  "project field-list") emit "${GH_FIXTURES}/field-list.json" ;;' \
@@ -50,6 +50,7 @@ setup() {
         '  "pr comment" | "issue comment") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/comment-body.txt"; prev="${arg}"; done; readlink /proc/self/fd/0 > "${GH_FIXTURES}/comment-stdin.txt"; [ -f "${GH_FIXTURES}/comment.fail" ] && { echo "boom" >&2; exit 1; }; cat "${GH_FIXTURES}/comment.out" ;;' \
         '  "api user" | "api rate_limit") f="${GH_FIXTURES}/api-$2"; [ -f "${f}.fail" ] && { [ -f "${f}.failout" ] && cat "${f}.failout"; cat "${f}.fail" >&2; exit 1; }; emit "${f}.json" ;;' \
         '  "--version ") f="${GH_FIXTURES}/gh-version"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; cat "${f}.out" ;;' \
+        '  "issue reopen" | "pr close" | "pr reopen") [ -f "${GH_FIXTURES}/state-change.fail" ] && { cat "${GH_FIXTURES}/state-change.fail" >&2; exit 1; }; exit 0 ;;' \
         '  "run rerun") [ -f "${GH_FIXTURES}/run-rerun.fail" ] && { cat "${GH_FIXTURES}/run-rerun.fail" >&2; exit 1; }; echo "stub: requested a rerun"; exit 0 ;;' \
         '  "pr edit") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/edit-body.txt"; prev="${arg}"; done; [ -f "${GH_FIXTURES}/pr-edit.fail" ] && { cat "${GH_FIXTURES}/pr-edit.fail" >&2; exit 1; }; echo "https://github.com/credfeto/credfeto-orchestrator/pull/0" ;;' \
         '  "issue edit") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/edit-body.txt"; prev="${arg}"; done; [ -f "${GH_FIXTURES}/issue-edit.fail" ] && { cat "${GH_FIXTURES}/issue-edit.fail" >&2; exit 1; }; echo "https://github.com/credfeto/credfeto-orchestrator/issues/0" ;;' \
@@ -2008,7 +2009,7 @@ assert_nothing_created() {
 @test "issue needs a subcommand, and an unknown one is refused" {
     run "${SCRIPT}" issue
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"issue needs a subcommand (create, edit, view, plan-status, list, search, label-history)"* ]]
+    [[ "${output}" == *"issue needs a subcommand (create, edit, view, plan-status, list, search, label-history, reopen, comments)"* ]]
 
     run "${SCRIPT}" issue frobnicate
     [ "${status}" -eq 2 ]
@@ -4318,7 +4319,7 @@ assert_set_to_development() {
         # shellcheck disable=SC2086  # each invocation is split into its words on purpose
         run "${SCRIPT}" ${invocation}
         [ "${status}" -eq 0 ]
-        [[ "${output}" == "Usage: cfwf pr checks"*$'\n'"Run 'cfwf pr create --help' for pr create, which creates a draft pull request on the Workflow board."$'\n'"Run 'cfwf pr edit --help' for pr edit, which changes a pull request's title or body, or assigns the agent."$'\n'"Run 'cfwf branch required-checks --help' for branch required-checks, which lists the checks a branch"$'\n'"requires without judging them." ]]
+        [[ "${output}" == "Usage: cfwf pr checks"*$'\n'"Run 'cfwf pr create --help' for pr create, which creates a draft pull request on the Workflow board."$'\n'"Run 'cfwf pr edit --help' for pr edit, which changes a pull request's title or body, or assigns the agent."$'\n'"Run 'cfwf pr close --help' for pr close, which closes the agent's own pull request without merging it."$'\n'"Run 'cfwf pr reopen --help' for pr reopen, which reopens the agent's own closed pull request."$'\n'"Run 'cfwf branch required-checks --help' for branch required-checks, which lists the checks a branch"$'\n'"requires without judging them." ]]
     done
 
     run "${SCRIPT}" help
@@ -9276,7 +9277,7 @@ read_once_asking_for() {
     run --separate-stderr "${SCRIPT}" pr
     [ "${status}" -eq 2 ]
     [ -z "${output}" ]
-    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, checks-wait, view, list, comments, reply, create, ready-at, diff, edit, hand-off, take-back)"* ]]
+    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, checks-wait, view, list, comments, reply, create, ready-at, diff, edit, hand-off, take-back, close, reopen)"* ]]
     [[ "${stderr}" == *"Usage: cfwf pr checks"*"Run 'cfwf pr view --help' for pr view"* ]]
 
     run --separate-stderr "${SCRIPT}" pr frobnicate
@@ -13323,4 +13324,446 @@ ${HAND_OFF_COMMENT_URL}" ]
     run "${SCRIPT}" help
     [[ "${output}" == *"  pr take-back             Take a PR back from human review"* ]]
     [ ! -s "${GH_LOG}" ]
+}
+
+# --- pr list --label -----------------------------------------------------------
+
+# A pull_request object (the arguments of pull_request) carrying the labels in LABELS, a space-separated list.
+labelled_pull_request() {
+    pull_request "$@" | jq --arg labels "${LABELS}" '. + {labels: ($labels | split(" ") | map(select(. != "") | {name: .}))}'
+}
+
+@test "pr list --label lists only the pull requests carrying every label given, case aside, in the eight-field format, asking gh for them" {
+    local a b c
+    a=$(LABELS="dependencies" labelled_pull_request 3 depends/a main app/dependabot false false "chore: bump a")
+    b=$(LABELS="Dependencies security" labelled_pull_request 5 depends/b main app/dependabot false false "chore: bump b")
+    c=$(LABELS="enhancement" labelled_pull_request 8 feat/8-c main someone false false "feat: c")
+    write_pr_list "${a}" "${b}" "${c}"
+
+    run_pr_list --label dependencies
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    local expected
+    expected="$(pr_list_line 3 depends/a main app/dependabot ready - "chore: bump a")"$'\n'
+    expected+="$(pr_list_line 5 depends/b main app/dependabot ready - "chore: bump b")"
+    [ "${output}" = "${expected}" ]
+    has_eight_field_lines "${output}" 2
+    [ "$(gh_call_count "pr list --repo ${REPO} --state open --limit 1001 --label dependencies --json number,title,author,headRefName,baseRefName,isDraft,isCrossRepository,url,labels --jq ")" -eq 1 ]
+
+    run_pr_list --label DEPENDENCIES --label security
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(pr_list_line 5 depends/b main app/dependabot ready - "chore: bump b")" ]
+
+    run_pr_list --label wontfix
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
+@test "pr list --label refuses (exit 1) an answer with a pull request that lacks a label asked for, printing nothing" {
+    write_pr_list "$(LABELS="enhancement" labelled_pull_request 8 feat/8-c main someone false false "feat: c")"
+    touch "${GH_FIXTURES}/pr-list.ignore-label"
+    run_pr_list --label dependencies
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: gh returned an unexpected result for the open pull requests of ${REPO}" ]
+}
+
+@test "pr list --label combines with --head and --issue, and a label given twice is asked for once" {
+    write_pr_list "$(LABELS="dependencies" labelled_pull_request 3 depends/12-a main app/dependabot false false "chore: bump a")" \
+        "$(LABELS="dependencies" labelled_pull_request 4 depends/13-b main app/dependabot false false "chore: bump b")"
+    run_pr_list --label dependencies --label Dependencies --head depends/12-a --issue 12
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(pr_list_line 3 depends/12-a main app/dependabot ready issue "chore: bump a")" ]
+    [ "$(gh_call_count "--label dependencies --label")" -eq 0 ]
+    [ "$(gh_call_count "--label Dependencies")" -eq 0 ]
+}
+
+@test "pr list refuses (exit 2) a blank, over-long or control-character --label, or one with a double quote or a backslash, before any gh call, never echoing it" {
+    local bad
+    for bad in "" "   " "$(printf 'a%.0s' {1..51})" $'de\x01ps' $'de\tps' 'de"ps' 'de\ps'; do
+        run_pr_list --label "${bad}"
+        [ "${status}" -eq 2 ]
+        [[ "${stderr}" == *"invalid value for --label: it must be a label of at most 50 characters"* ]]
+        if [ -n "${bad// /}" ]; then
+            [[ "${stderr}" != *"${bad}"* ]]
+        fi
+    done
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "pr list help documents --label" {
+    run "${SCRIPT}" pr list --help
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"[--label <name> ...]"* ]]
+    [[ "${output}" == *"must carry every label given"* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+# --- issue reopen ----------------------------------------------------------------
+
+REOPEN_ISSUE=1346
+REOPEN_ISSUE_URL="https://github.com/${REPO}/issues/${REOPEN_ISSUE}"
+
+run_issue_reopen() {
+    run --separate-stderr "${SCRIPT}" issue reopen --repo "${REPO}" --issue "${REOPEN_ISSUE}" "$@"
+}
+
+prepare_issue_reopen() {
+    write_issue "${REOPEN_ISSUE}" "fix: something" "${1:-CLOSED}" "The body."
+    printf '%s#issuecomment-77\n' "${REOPEN_ISSUE_URL}" > "${GH_FIXTURES}/comment.out"
+    printf 'Reopened: the fix was reverted.\n' > "${TEST_TMP}/reason.md"
+}
+
+@test "issue reopen reopens a closed issue and prints its URL and new state, posting no comment without --body-file" {
+    prepare_issue_reopen
+    run_issue_reopen
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "${REOPEN_ISSUE_URL} open" ]
+    [ "$(gh_call_count "issue reopen ${REOPEN_ISSUE} --repo ${REPO}")" -eq 1 ]
+    [ "$(gh_call_count "issue comment")" -eq 0 ]
+}
+
+@test "issue reopen posts the checked --body-file as a comment first, then reopens" {
+    prepare_issue_reopen
+    run_issue_reopen --body-file "${TEST_TMP}/reason.md"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${REOPEN_ISSUE_URL} open" ]
+    cmp "${TEST_TMP}/reason.md" "${GH_FIXTURES}/comment-body.txt"
+    [ "$(gh_line_of "issue comment ${REOPEN_ISSUE}")" -lt "$(gh_line_of "issue reopen ${REOPEN_ISSUE}")" ]
+}
+
+@test "issue reopen leaves an open issue alone, the comment included, and says so" {
+    prepare_issue_reopen OPEN
+    run_issue_reopen --body-file "${TEST_TMP}/reason.md"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${REOPEN_ISSUE_URL} already open" ]
+    [ "$(gh_call_count "issue reopen")" -eq 0 ]
+    [ "$(gh_call_count "issue comment")" -eq 0 ]
+}
+
+@test "issue reopen refuses (exit 8) a body with a leak or a plan-approval keyword before reading or writing anything" {
+    prepare_issue_reopen
+    write_leak_body "token ghp_$(printf 'a%.0s' {1..36})"
+    run_issue_reopen --body-file "${TEST_TMP}/leak.md"
+    [ "${status}" -eq 8 ]
+    [[ "${stderr}" == "cfwf: body refused: "* ]]
+    printf 'Looks good, approved.\n' > "${TEST_TMP}/approved.md"
+    run_issue_reopen --body-file "${TEST_TMP}/approved.md"
+    [ "${status}" -eq 8 ]
+    [[ "${stderr}" == "cfwf: body refused: approval keyword"* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue reopen exits 9 for a number that is no issue or is a pull request's, writing nothing" {
+    run_issue_reopen
+    [ "${status}" -eq 9 ]
+    [ "${stderr}" = "cfwf: ${REPO}#${REOPEN_ISSUE} was not found" ]
+    jq -n --arg url "https://github.com/${REPO}/pull/${REOPEN_ISSUE}" '{url: $url, state: "CLOSED"}' > "$(issue_fixture "${REOPEN_ISSUE}").json"
+    run_issue_reopen
+    [ "${status}" -eq 9 ]
+    [ "${stderr}" = "cfwf: ${REPO}#${REOPEN_ISSUE} is a pull request, not an issue" ]
+    [ "$(gh_call_count "issue reopen")" -eq 0 ]
+}
+
+@test "issue reopen fails (exit 1) naming that the comment was posted when the reopen itself fails" {
+    prepare_issue_reopen
+    echo "HTTP 502: Bad Gateway" > "${GH_FIXTURES}/state-change.fail"
+    run_issue_reopen --body-file "${TEST_TMP}/reason.md"
+    [ "${status}" -eq 1 ]
+    [[ "${stderr}" == "cfwf: could not reopen ${REPO}#${REOPEN_ISSUE} (the comment was posted): "* ]]
+    [ -z "${output}" ]
+}
+
+@test "issue reopen usage errors exit 2 before any gh call" {
+    run --separate-stderr "${SCRIPT}" issue reopen --repo "${REPO}"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == *"missing required option --issue"* ]]
+    run --separate-stderr "${SCRIPT}" issue reopen --issue 1
+    [ "${status}" -eq 2 ]
+    run --separate-stderr "${SCRIPT}" issue reopen --repo "${REPO}" --issue 0
+    [ "${status}" -eq 2 ]
+    run --separate-stderr "${SCRIPT}" issue reopen --repo "${REPO}" --issue 1 --body "x"
+    [ "${status}" -eq 2 ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+# --- pr close and pr reopen ------------------------------------------------------
+
+STATE_PR=1700
+STATE_PR_URL="https://github.com/${REPO}/pull/${STATE_PR}"
+
+# Writes the fixtures of a pr close or pr reopen run: the agent's login and the pull request in the
+# state $1 (open or closed), merged $2 (false by default), opened by $3 (the agent by default) of the
+# account type $4 (User by default), with one commit by $5 (the agent by default).
+prepare_pr_state() {
+    local state="$1" merged="${2:-false}" author="${3:-${AGENT}}" type="${4:-User}" committer="${5:-${AGENT}}"
+    jq -n --arg login "${AGENT}" '{login: $login}' > "${GH_FIXTURES}/api-user.json"
+    jq -n --arg author "${author}" --arg type "${type}" --arg url "${STATE_PR_URL}" --arg state "${state}" --argjson merged "${merged}" \
+        '{number: 1700, user: {login: $author, type: $type}, html_url: $url, commits: 1, state: $state, merged: $merged}' \
+        | write_api "repos/${REPO}/pulls/${STATE_PR}"
+    jq -n --arg login "${committer}" '[{sha: "abc", author: {login: $login}}]' | write_api "repos/${REPO}/pulls/${STATE_PR}/commits"
+    printf '%s#issuecomment-88\n' "${STATE_PR_URL}" > "${GH_FIXTURES}/comment.out"
+    printf 'Superseded by a newer pull request.\n' > "${TEST_TMP}/reason.md"
+}
+
+run_pr_state() {
+    run --separate-stderr "${SCRIPT}" pr "$1" --repo "${REPO}" --pr "${STATE_PR}" "${@:2}"
+}
+
+@test "pr close closes the agent's own open pull request without merging it or deleting its branch, and prints its URL and new state" {
+    prepare_pr_state open
+    run_pr_state close
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "${STATE_PR_URL} closed" ]
+    grep -qxF "pr close ${STATE_PR} --repo ${REPO}" "${GH_LOG}"
+    [ "$(gh_call_count "--delete-branch")" -eq 0 ]
+    [ "$(gh_call_count "pr merge")" -eq 0 ]
+    [ "$(gh_call_count "pr comment")" -eq 0 ]
+}
+
+@test "pr close posts the checked --body-file as a comment first, then closes" {
+    prepare_pr_state open
+    run_pr_state close --body-file "${TEST_TMP}/reason.md"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${STATE_PR_URL} closed" ]
+    cmp "${TEST_TMP}/reason.md" "${GH_FIXTURES}/comment-body.txt"
+    [ "$(gh_line_of "pr comment ${STATE_PR}")" -lt "$(gh_line_of "pr close ${STATE_PR}")" ]
+}
+
+@test "pr close leaves a closed pull request alone and pr reopen an open one, the comment included" {
+    prepare_pr_state closed
+    run_pr_state close --body-file "${TEST_TMP}/reason.md"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${STATE_PR_URL} already closed" ]
+    prepare_pr_state open
+    run_pr_state reopen --body-file "${TEST_TMP}/reason.md"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${STATE_PR_URL} already open" ]
+    [ "$(gh_call_count "pr close")" -eq 0 ]
+    [ "$(gh_call_count "pr reopen")" -eq 0 ]
+    [ "$(gh_call_count "pr comment")" -eq 0 ]
+}
+
+@test "pr reopen reopens the agent's own closed pull request" {
+    prepare_pr_state closed
+    run_pr_state reopen
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${STATE_PR_URL} open" ]
+    grep -qxF "pr reopen ${STATE_PR} --repo ${REPO}" "${GH_LOG}"
+}
+
+@test "pr close and pr reopen refuse (exit 8) a merged pull request, writing nothing" {
+    prepare_pr_state closed true
+    run_pr_state close --body-file "${TEST_TMP}/reason.md"
+    [ "${status}" -eq 8 ]
+    [ "${stderr}" = "cfwf: close refused: the pull request is merged" ]
+    run_pr_state reopen
+    [ "${status}" -eq 8 ]
+    [ "${stderr}" = "cfwf: reopen refused: the pull request is merged" ]
+    [ "$(gh_call_count "pr comment")" -eq 0 ]
+    [ "$(gh_call_count "pr close")" -eq 0 ]
+    [ "$(gh_call_count "pr reopen")" -eq 0 ]
+}
+
+@test "pr close refuses (exit 8) a pull request someone else opened, and a bot's with another author's commit, writing nothing" {
+    prepare_pr_state open false someone-else
+    run_pr_state close --body-file "${TEST_TMP}/reason.md"
+    [ "${status}" -eq 8 ]
+    [ "${stderr}" = "cfwf: close refused: the pull request was opened by someone other than the agent" ]
+    prepare_pr_state open false prpixie User someone-else
+    run_pr_state reopen
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${STATE_PR_URL} already open" ]
+    run_pr_state close
+    [ "${status}" -eq 8 ]
+    [ "${stderr}" = "cfwf: close refused: the pull request has no commit by the agent" ]
+    [ "$(gh_call_count "pr comment")" -eq 0 ]
+    [ "$(gh_call_count "pr close")" -eq 0 ]
+}
+
+@test "pr close closes a bot's pull request whose commits are all the agent's" {
+    prepare_pr_state open false "dependabot[bot]" Bot
+    run_pr_state close
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${STATE_PR_URL} closed" ]
+}
+
+@test "pr close exits 9 for a pull request that does not exist, and refuses a body with a leak (exit 8) before reading it" {
+    jq -n '{id: 1}' | write_api "repos/${REPO}"
+    run_pr_state close
+    [ "${status}" -eq 9 ]
+    [ "${stderr}" = "cfwf: the pull request ${REPO}#${STATE_PR} was not found" ]
+    rm -f "${GH_LOG}"
+    write_leak_body "token ghp_$(printf 'a%.0s' {1..36})"
+    run_pr_state close --body-file "${TEST_TMP}/leak.md"
+    [ "${status}" -eq 8 ]
+    [[ "${stderr}" == "cfwf: body refused: "* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "pr close usage errors exit 2 before any gh call, and the help documents both commands" {
+    run --separate-stderr "${SCRIPT}" pr close --repo "${REPO}"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == *"missing required option --pr"* ]]
+    run --separate-stderr "${SCRIPT}" pr close --repo "${REPO}" --pr 1 --delete-branch
+    [ "${status}" -eq 2 ]
+    run --separate-stderr "${SCRIPT}" pr reopen --pr 1
+    [ "${status}" -eq 2 ]
+    run "${SCRIPT}" pr close --help
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Usage: cfwf pr close --repo <owner/repo> --pr <n> [--body-file <file|->]"* ]]
+    run "${SCRIPT}" help pr reopen
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Usage: cfwf pr reopen"* ]]
+    run "${SCRIPT}" help
+    [[ "${output}" == *"  pr close                 Close the agent's own PR without merging it"* ]]
+    [[ "${output}" == *"  issue reopen             Reopen a closed issue"* ]]
+    [[ "${output}" == *"  issue comments           Print an issue's or PR's top-level comments"* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+# --- issue comments --------------------------------------------------------------
+
+COMMENTS_ISSUE=7
+COMMENTS_ISSUE_URL="https://github.com/${REPO}/issues/${COMMENTS_ISSUE}"
+
+# One comment as GET repos/<repo>/issues/<n>/comments lists it: id $1, author login $2 ("" for a
+# deleted account, whose user GitHub leaves null), account type $3, association $4, created_at $5
+# and body $6.
+rest_comment() {
+    jq -n --argjson id "$1" --arg login "$2" --arg type "$3" --arg association "$4" --arg time "$5" --arg body "$6" --arg repo "${REPO}" \
+        '{id: $id, user: (if $login == "" then null else {login: $login, type: $type} end), author_association: $association,
+          created_at: $time, html_url: "https://github.com/\($repo)/issues/7#issuecomment-\($id)", body: $body}'
+}
+
+# Writes issue 7 (URL $1, the issue's by default) with the comments given, each a rest_comment object.
+write_rest_comments() {
+    local url="${COMMENTS_URL:-${COMMENTS_ISSUE_URL}}"
+    printf '%s\n' "$@" | jq -s '.' | write_api "repos/${REPO}/issues/${COMMENTS_ISSUE}/comments"
+    jq -n --arg url "${url}" --argjson count "$#" '{html_url: $url, comments: $count}' | write_api "repos/${REPO}/issues/${COMMENTS_ISSUE}"
+}
+
+run_issue_comments() {
+    run --separate-stderr "${SCRIPT}" issue comments --repo "${REPO}" --issue "${COMMENTS_ISSUE}" "$@"
+}
+
+@test "issue comments prints each comment's headers and body, oldest first, with control characters made safe, then the summary" {
+    write_rest_comments "$(rest_comment 11 credfeto User OWNER 2026-10-01T10:00:00Z $'A plan reply.\n\n> quoted\twith a tab\r\n')" \
+        "$(rest_comment 12 "github-actions[bot]" Bot NONE 2026-10-02T10:00:00Z $'Build \x1b[31mfailed\x1b[0m')" \
+        "$(rest_comment 13 "" User NONE 2026-10-03T10:00:00Z "")"
+    run_issue_comments
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    local expected
+    expected="issue"$'\t'"${REPO}#7"$'\n'"url"$'\t'"${COMMENTS_ISSUE_URL}"$'\n\n'
+    expected+="comment"$'\t'"11"$'\n'"author"$'\t'"credfeto"$'\n'"association"$'\t'"OWNER"$'\n'"created-at"$'\t'"2026-10-01T10:00:00Z"$'\n'
+    expected+="url"$'\t'"https://github.com/${REPO}/issues/7#issuecomment-11"$'\n'"truncated"$'\t'"no"$'\n'"lines"$'\t'"3"$'\n'
+    expected+="| A plan reply."$'\n'"|"$'\n'"| > quoted with a tab"$'\n\n'
+    expected+="comment"$'\t'"12"$'\n'"author"$'\t'"app/github-actions"$'\n'"association"$'\t'"NONE"$'\n'"created-at"$'\t'"2026-10-02T10:00:00Z"$'\n'
+    expected+="url"$'\t'"https://github.com/${REPO}/issues/7#issuecomment-12"$'\n'"truncated"$'\t'"no"$'\n'"lines"$'\t'"1"$'\n'
+    expected+="| Build  [31mfailed [0m"$'\n\n'
+    expected+="comment"$'\t'"13"$'\n'"author"$'\t'$'\n'"association"$'\t'"NONE"$'\n'"created-at"$'\t'"2026-10-03T10:00:00Z"$'\n'
+    expected+="url"$'\t'"https://github.com/${REPO}/issues/7#issuecomment-13"$'\n'"truncated"$'\t'"no"$'\n'"lines"$'\t'"0"$'\n\n'
+    expected+="summary printed=3 matched=3 total=3 omitted=0"
+    [ "${output}" = "${expected}" ]
+    [ "$(gh_call_count "api repos/${REPO}/issues/7/comments?per_page=100 --paginate --jq ")" -eq 1 ]
+}
+
+@test "issue comments filters by --since (at or after) and --author (case aside), counting what matched" {
+    write_rest_comments "$(rest_comment 1 credfeto User OWNER 2026-10-01T10:00:00Z "one")" \
+        "$(rest_comment 2 someone User NONE 2026-10-02T10:00:00Z "two")" \
+        "$(rest_comment 3 CredFeto User OWNER 2026-10-03T10:00:00Z "three")"
+    run_issue_comments --since 2026-10-02T10:00:00Z
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *$'comment\t1\n'* ]]
+    [[ "${output}" == *$'comment\t2\n'* && "${output}" == *$'comment\t3\n'* ]]
+    [[ "${output}" == *"summary printed=2 matched=2 total=3 omitted=0" ]]
+    run_issue_comments --author credfeto
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *$'comment\t1\n'* && "${output}" == *$'comment\t3\n'* ]]
+    [[ "${output}" != *$'comment\t2\n'* ]]
+    run_issue_comments --author credfeto --since 2026-10-02T00:00:00Z
+    [[ "${output}" == *"summary printed=1 matched=1 total=3 omitted=0" ]]
+}
+
+@test "issue comments prints only the most recent 100 matching comments, saying how many were left out" {
+    local -a all=()
+    local n
+    for ((n = 1; n <= 105; n++)); do
+        all+=("$(rest_comment "${n}" someone User NONE "$(printf '2026-10-01T10:%02d:%02dZ' $((n / 60)) $((n % 60)))" "c${n}")")
+    done
+    write_rest_comments "${all[@]}"
+    run_issue_comments
+    [ "${status}" -eq 0 ]
+    [ "${stderr}" = "cfwf: warning: 105 comments match; only the most recent 100 are printed (narrow the list with --since)" ]
+    [[ "${output}" != *$'comment\t5\n'* ]]
+    [[ "${output}" == *$'comment\t6\n'* && "${output}" == *$'comment\t105\n'* ]]
+    [[ "${output}" == *"summary printed=100 matched=105 total=105 omitted=5" ]]
+}
+
+@test "issue comments prints at most 500 lines of one body and marks it truncated" {
+    write_rest_comments "$(rest_comment 1 someone User NONE 2026-10-01T10:00:00Z "$(seq 1 600)")"
+    run_issue_comments
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *$'truncated\tyes\nlines\t500\n| 1\n'* ]]
+    [[ "${output}" == *$'| 500\n\nsummary'* ]]
+    [[ "${output}" != *"| 501"* ]]
+}
+
+@test "issue comments reads a pull request's number too, every page of comments, and needs no comment read when there are none" {
+    COMMENTS_URL="https://github.com/${REPO}/pull/7" write_rest_comments
+    run_issue_comments
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "issue"$'\t'"${REPO}#7"$'\n'"url"$'\t'"https://github.com/${REPO}/pull/7"$'\n\n'"summary printed=0 matched=0 total=0 omitted=0" ]
+    [ "$(gh_call_count "/comments")" -eq 0 ]
+
+    jq -n '{html_url: "https://github.com/'"${REPO}"'/issues/7", comments: 2}' | write_api "repos/${REPO}/issues/7"
+    jq -n --argjson a "$(rest_comment 1 someone User NONE 2026-10-01T10:00:00Z "first")" \
+        --argjson b "$(rest_comment 2 someone User NONE 2026-10-02T10:00:00Z "second")" '[[$a], [$b]]' \
+        > "$(api_fixture "repos/${REPO}/issues/7/comments").pages"
+    run_issue_comments
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"| first"*"| second"*"summary printed=2 matched=2 total=2 omitted=0" ]]
+}
+
+@test "issue comments prints nothing (exit 1) when the comments read are not as many as the item has" {
+    write_rest_comments "$(rest_comment 1 someone User NONE 2026-10-01T10:00:00Z "one")"
+    jq -n --arg url "${COMMENTS_ISSUE_URL}" '{html_url: $url, comments: 2}' | write_api "repos/${REPO}/issues/7"
+    run_issue_comments
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: the comments of ${REPO}#7 changed while they were read"* ]]
+}
+
+@test "issue comments exits 9 for an item that does not exist, and 1 when the repository is not there" {
+    jq -n '{id: 1}' | write_api "repos/${REPO}"
+    run_issue_comments
+    [ "${status}" -eq 9 ]
+    [ "${stderr}" = "cfwf: ${REPO}#7 was not found" ]
+    rm -f "$(api_fixture "repos/${REPO}").json"
+    run_issue_comments
+    [ "${status}" -eq 1 ]
+}
+
+@test "issue comments usage errors exit 2 before any gh call, never echoing a bad value" {
+    local bad
+    run --separate-stderr "${SCRIPT}" issue comments --repo "${REPO}"
+    [ "${status}" -eq 2 ]
+    for bad in 2026-10-01 "2026-10-01 10:00:00" 2026-10-01T10:00:00+01:00; do
+        run_issue_comments --since "${bad}"
+        [ "${status}" -eq 2 ]
+        [[ "${stderr}" == *"invalid value for --since: it must be a UTC time, YYYY-MM-DDTHH:MM:SSZ"* ]]
+    done
+    for bad in "two words" "a;b" "App/x/y" ""; do
+        run_issue_comments --author "${bad}"
+        [ "${status}" -eq 2 ]
+    done
+    run_issue_comments --since 2026-10-01T10:00:00Z --since 2026-10-01T10:00:00Z
+    [ "${status}" -eq 2 ]
+    [ ! -f "${GH_LOG}" ]
+    run "${SCRIPT}" issue comments --help
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Usage: cfwf issue comments --repo <owner/repo> --issue <n> [--since <time>] [--author <login>]"* ]]
 }

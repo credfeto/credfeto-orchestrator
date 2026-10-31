@@ -23,6 +23,8 @@ cfwf issue plan-status       --repo <owner/repo> --issue <n>
 cfwf issue list              --repo <owner/repo>
 cfwf issue search            --repo <owner/repo> --text <words> [--state open|closed|all] [--limit <n>]
 cfwf issue label-history     --repo <owner/repo> (--issue <n> | --pr <n>) [--label <name>]
+cfwf issue reopen            --repo <owner/repo> --issue <n> [--body-file <file|->]
+cfwf issue comments          --repo <owner/repo> --issue <n> [--since <YYYY-MM-DDTHH:MM:SSZ>] [--author <login>]
 cfwf body check              --repo <owner/repo> --body-file <file|->
 cfwf repo view               --repo <owner/repo>
 cfwf repo collaborators      --repo <owner/repo>
@@ -35,11 +37,13 @@ cfwf pr checks-wait          --repo <owner/repo> --pr <n> [--timeout-minutes <m>
 cfwf pr view                 --repo <owner/repo> --pr <n> [--field <name> ...]
 cfwf pr ready-at             --repo <owner/repo> --pr <n>
 cfwf pr diff                 --repo <owner/repo> --pr <n> [--name-only | --stat]
-cfwf pr list                 --repo <owner/repo> [--issue <n>] [--head <branch>]
+cfwf pr list                 --repo <owner/repo> [--issue <n>] [--head <branch>] [--label <name> ...]
 cfwf pr create               --repo <owner/repo> --head <branch> --title <title> --body-file <file|-> [--base <branch>]
 cfwf pr edit                 --repo <owner/repo> --pr <n> [--title <title>] [--body-file <file|->] [--assign-self]
 cfwf pr hand-off             --repo <owner/repo> --pr <n> --title <title> --description-file <file|-> --body-file <file|->
 cfwf pr take-back            --repo <owner/repo> --pr <n> --body-file <file|->
+cfwf pr close                --repo <owner/repo> --pr <n> [--body-file <file|->]
+cfwf pr reopen               --repo <owner/repo> --pr <n> [--body-file <file|->]
 cfwf pr comments             --repo <owner/repo> --pr <n>
 cfwf pr reply                --repo <owner/repo> --pr <n> --comment-id <id> --body-file <file|->
 cfwf comment add             --repo <owner/repo> (--pr <n> | --issue <n>) --body-file <file|->
@@ -518,6 +522,29 @@ A successful run makes four `gh` calls: the run, the repository, `pr list` and t
 4. The issue, read once with `read_issue` (`gh issue view --json url,number`). A number that is no issue, or is a pull request's, exits 9 with nothing written (`<repo>#<n> was not found`, `<repo>#<n> is a pull request, not an issue`). The URL must be this issue's (`.../issues/<n>`), or the run dies.
 
 There is no ownership rule, unlike `pr edit`: the spec (#1596) refuses only on the leak check. `gh issue edit --body-file` replaces the whole body, and editing the body does not revise an implementation plan, which is a comment. A failed edit is exit 1 quoting gh (`could not edit <repo>#<n>: ...`). Tests: the `issue edit` tests in `test/cfwf.bats`, whose gh stub has an `issue edit` arm that keeps the body it was given in `edit-body.txt`.
+
+### Closing and reopening
+
+`issue reopen` (`issue_reopen`), `pr close` and `pr reopen` (`pr_set_state`) change an item's state, and with `--body-file` first post the reason as a comment (`post_state_comment`), so the reason is on the item before its state changes. Everything is checked before anything is written:
+
+1. The options, then `require_gh`, then the optional body (`check_state_comment_body`): `resolve_body` (the [body leak check](#body-leak-check)) and the plan-approval keyword refusal `comment add` applies. A refusal is exit 8.
+2. The item, read once. For `issue reopen` that is `read_issue` (`gh issue view --json url,state`), so a missing number, or one that is a pull request's, exits 9. For the pull request commands it is one REST read of `repos/<repo>/pulls/<n>` (`read_pull_request_for_state`): author, account type, `html_url`, commits, `state` and `merged`. A 404 is exit 9 once the repository has been read and found.
+3. A merged pull request is refused (`cfwf: close refused: the pull request is merged`, exit 8). An item already in the target state is left alone, the comment included, and prints `<url> already <state>` with exit 0.
+4. For a pull request, the ownership rule of `pr edit` (`check_edit_ownership`, after `read_agent_login`), naming the command's own verb (`OWNERSHIP_SUBJECT`): `cfwf: close refused: ...` or `cfwf: reopen refused: ...`. An issue has no ownership rule, as for `issue edit`.
+
+Then the comment (when given), then `gh issue reopen`, `gh pr close` or `gh pr reopen`. `gh pr close` is run without `--delete-branch`, and closing never merges. The output is one line, `<url> open` or `<url> closed`. When the comment was posted and the state change then fails, the message says so (`could not close <repo>#<n> (the comment was posted): ...`, exit 1).
+
+### Reading an issue's comments
+
+`issue comments` (`issue_comments`) prints the top-level comments of an issue, or of a pull request (its conversation comments; `pr comments` prints reviews and inline comments too), in the block format of [`pr comments`](#the-format-of-pr-comments): header lines (`comment`, `author`, `association`, `created-at`, `url`, `truncated`, `lines`), then the body's lines each starting with `| `, and a final `summary printed=<a> matched=<b> total=<c> omitted=<d>` line. Its jq program (`ISSUE_COMMENTS_FILTER`) uses the same `text`, `who`, `header` and `body_lines` as `PR_DISCUSSION_FILTER`, for REST's field names; a bot's REST login ends in `[bot]`, which is dropped so it prints as `app/<slug>`.
+
+It reads the item once (`repos/<repo>/issues/<n>`: its `html_url`, which may be an `/issues/` or a `/pull/` URL, and its `comments` count; a 404 is exit 9), then every page of `repos/<repo>/issues/<n>/comments` with `--paginate`. Nothing is printed unless the comments read are as many as the count (`record_issue_comments` builds one block per control row). An item with more than `ISSUE_COMMENTS_READ_LIMIT` (10000) comments is a runtime failure.
+
+`--since` (GitHub's own `YYYY-MM-DDTHH:MM:SSZ`, compared with `created_at` as text) and `--author` (compared lower-cased with the printed author) filter what is printed. At most `ISSUE_COMMENTS_LIMIT` (100) matching comments are printed, the most recent ones, with a stderr warning and `omitted` in the summary; at most `COMMENT_BODY_LINE_LIMIT` (500) lines of one body, with `truncated yes`. It prints data only: it makes no plan-approval decision, and `issue plan-status` is not changed by it.
+
+### Listing pull requests by label
+
+`pr list --label <name>` (repeatable) passes each label to `gh pr list --label`, so the `PR_LIST_LIMIT` refusal applies to the filtered list, and adds `labels` to the fields read. `pr_list_program` then writes a ninth field holding each pull request's labels (printable, lower-cased in ASCII, joined by `ROW_SEPARATOR`), and `keep_rows_with_list_labels` checks every row has every label asked for before dropping that field: a row without one is an unexpected answer and nothing is printed. A label is checked first (`add_list_label`): not blank, at most 50 characters, no control character, and no double quote or backslash, because gh puts it in a search query between double quotes. A label given twice, case aside, is asked for once.
 
 ### Waiting for a background command
 
