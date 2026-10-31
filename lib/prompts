@@ -505,10 +505,9 @@ Steps:
    a FAILED required check always takes priority over "auto-merge is enabled" below:
    - If any required check has FAILED: stop without taking action. The orchestrator gives a PR with a failed required check the full flow, which fixes the build, so the next cycle handles it.
    - Else if auto-merge is already enabled (cfwf pr view --repo ${REPO_FULL} --pr ${item_id} --field auto-merge prints on): $(_build_placeholder_disarm_note "${item_id}") Otherwise stop — nothing more to do.
-   - Else if ALL required checks have passed: $(_build_placeholder_guard_note "${item_id}") Otherwise mark the PR ready if it is still a draft (GitHub refuses auto-merge on a draft PR), then enable auto-merge, and stop:
-     gh pr ready ${item_id} --repo ${REPO_FULL}
-     gh pr merge --auto --merge ${item_id} --repo ${REPO_FULL}
-     If the auto-merge command fails because the repo does not support auto-merge, leave the PR ready without auto-merge.
+   - Else if ALL required checks have passed: $(_build_placeholder_guard_note "${item_id}") Otherwise finalise it in one command, which marks it ready if it is still a draft and then enables auto-merge (it never touches the title, description or board), and stop:
+     cfwf pr finalise-dependency --repo ${REPO_FULL} --pr ${item_id}
+     Exit 0: done (auto-merge on, or unavailable on the repository, which leaves the PR ready without auto-merge). Exit 7: ready, auto-merge deferred until the post-ready checks finish; the next cycle runs it again. Exit 8: refused, nothing written; read the reason on stderr, post it as a PR comment and stop.
    - Else (checks are still PENDING): stop without taking action — the next cycle will re-evaluate.
 4. All interaction with humans must be made as a comment to the pull request (the one exception is the denied-command report on credfeto/credfeto-orchestrator#1167 in step 5). Do NOT open issues.
 5. $(_build_permission_denial_rule pr "${item_id}")
@@ -601,8 +600,10 @@ $(_build_round_cap_check_line "${MAX_COVERAGE_ITERATIONS}" "coverage rounds" "${
 PHASE H: Finalize (do this ONLY when everything above has passed / board is at "Human Review" and auto-merge is not yet enabled):
   - $(_build_placeholder_guard_note "${item_id}" remove)
   - Otherwise hand the PR off in one command. It sets the PR's final title and description, moves the board to Human Review, marks it ready, posts the review record and enables auto-merge once the checks have passed since it was marked ready:
-      cfwf pr hand-off --repo ${REPO_FULL} --pr ${item_id} --title "<type>(<scope>): <description>" --description-file - --body-file <review-record file>
-    The title is a Conventional Commits title for the whole change. The description (on stdin) replaces the placeholder the PR was opened with: summarise what the PR does and why, and keep every "Closes #<issue>" line it had. The review record file (written first under \$TMPDIR) holds a short summary of the review rounds; cfwf adds the reviewed head SHA itself.
+      cfwf pr hand-off --repo ${REPO_FULL} --pr ${item_id} --title "<type>(<scope>): <description>" --description-file - <<'DESCRIPTION'
+      <what the PR does and why, keeping every "Closes #<issue>" line>
+      DESCRIPTION
+    Run it as that ONE Bash call, with the description in the heredoc: do not write a file first and do not chain other commands onto it. The title is a Conventional Commits title for the whole change. The description replaces the placeholder the PR was opened with: summarise what the PR does and why, and keep every "Closes #<issue>" line it had; it must not be empty. cfwf writes the review record itself, naming the reviewed head SHA, so no --body-file is needed.
     Exit 0: handed off (auto-merge on, or unavailable on the repository, which leaves the PR ready for a human to merge). Exit 7: ready and recorded, auto-merge deferred until the post-ready checks finish; the next cycle runs it again. Exit 8: refused, nothing written; read the reason on stderr and fix it or mark Blocked with a comment.
   - The review record is the status comment for this phase: do not post another. Then STOP.
 

@@ -630,16 +630,20 @@ teardown() {
 @test "build_pr_claude_md hands regular PRs off with cfwf pr hand-off, never raw gh pr ready or merge (#1761)" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"cfwf pr hand-off --repo ${REPO_FULL} --pr 7 --title"*"--description-file -"*"--body-file"* ]]
+    [[ "${output}" == *"cfwf pr hand-off --repo ${REPO_FULL} --pr 7 --title"*"--description-file - <<'DESCRIPTION'"* ]]
+    # One call with the description on stdin: no review-record file to write first (#1775).
+    [[ "${output}" != *"--body-file <review-record file>"* ]]
+    [[ "${output}" == *"ONE Bash call"* ]]
     [[ "${output}" != *"gh pr merge --auto"* ]]
     [[ "${output}" != *"gh pr ready"* ]]
 }
 
-@test "build_pr_claude_md dependency PRs still mark ready and enable auto-merge without a hand-off (#1761)" {
+@test "build_pr_claude_md dependency PRs finalise with cfwf pr finalise-dependency, never a hand-off or raw gh (#1771)" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "true"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"gh pr merge --auto --merge 7 --repo ${REPO_FULL}"* ]]
-    [[ "${output}" == *"gh pr ready 7 --repo ${REPO_FULL}"* ]]
+    [[ "${output}" == *"cfwf pr finalise-dependency --repo ${REPO_FULL} --pr 7"* ]]
+    [[ "${output}" != *"gh pr merge"* ]]
+    [[ "${output}" != *"gh pr ready"* ]]
     [[ "${output}" != *"cfwf pr hand-off"* ]]
 }
 
@@ -655,15 +659,15 @@ teardown() {
     [[ "${phase_h}" == *"unavailable on the repository, which leaves the PR ready for a human to merge"* ]]
 }
 
-@test "build_pr_claude_md dependency PR marks the PR ready before enabling auto-merge (#1651)" {
+@test "build_pr_claude_md dependency PR is marked ready before auto-merge, in one finalise-dependency call (#1651, #1771)" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "true"
     [ "${status}" -eq 0 ]
     local step="${output#*Else if ALL required checks have passed}"
     step="${step%%Else (checks are still PENDING)*}"
-    [[ "${step}" == *"gh pr merge --auto --merge 7 --repo ${REPO_FULL}"* ]]
-    local before_merge="${step%%gh pr merge --auto --merge 7*}"
-    [[ "${before_merge}" == *"gh pr ready 7 --repo ${REPO_FULL}"* ]]
-    [[ "${step}" == *"leave the PR ready without auto-merge"* ]]
+    [[ "${step}" == *"marks it ready if it is still a draft and then enables auto-merge"* ]]
+    [[ "${step}" == *"cfwf pr finalise-dependency --repo ${REPO_FULL} --pr 7"* ]]
+    [[ "${step}" == *"leaves the PR ready without auto-merge"* ]]
+    [[ "${step}" == *"Exit 7"*"Exit 8"* ]]
 }
 
 @test "build_pr_claude_md for dependency PR generates compact instructions without code-work steps" {
@@ -671,7 +675,7 @@ teardown() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"dependency update PR"* ]]
     [[ "${output}" == *"Do NOT make any code changes"* ]]
-    [[ "${output}" == *"gh pr merge --auto --merge 7 --repo ${REPO_FULL}"* ]]
+    [[ "${output}" == *"cfwf pr finalise-dependency --repo ${REPO_FULL} --pr 7"* ]]
     [[ "${output}" == *"If any required check has FAILED: stop without taking action"* ]]
     [[ "${output}" != *"mandatory rules from the AI instructions"* ]]
     [[ "${output}" != *"force-with-lease"* ]]
