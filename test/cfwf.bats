@@ -53,6 +53,8 @@ setup() {
         '  "run rerun") [ -f "${GH_FIXTURES}/run-rerun.fail" ] && { cat "${GH_FIXTURES}/run-rerun.fail" >&2; exit 1; }; echo "stub: requested a rerun"; exit 0 ;;' \
         '  "pr edit") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/edit-body.txt"; prev="${arg}"; done; [ -f "${GH_FIXTURES}/pr-edit.fail" ] && { cat "${GH_FIXTURES}/pr-edit.fail" >&2; exit 1; }; echo "https://github.com/credfeto/credfeto-orchestrator/pull/0" ;;' \
         '  "issue edit") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/edit-body.txt"; prev="${arg}"; done; [ -f "${GH_FIXTURES}/issue-edit.fail" ] && { cat "${GH_FIXTURES}/issue-edit.fail" >&2; exit 1; }; echo "https://github.com/credfeto/credfeto-orchestrator/issues/0" ;;' \
+        '  "run list") f="${GH_FIXTURES}/run-list"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; lim=30; asked=""; prev=""; for arg in "$@"; do [ "${prev}" = "--limit" ] && lim="${arg}"; [ "${prev}" = "--json" ] && asked="${arg}"; prev="${arg}"; done; jq --argjson lim "${lim}" --arg asked "${asked}" ".[:\$lim] | map(with_entries(select(.key as \$key | (\$asked | split(\",\")) | index(\$key))))" "${f}.json" > "${f}.asked.json" || exit 1; emit "${f}.asked.json" ;;' \
+        '  "run view") job=""; prev=""; for arg in "$@"; do [ "${prev}" = "--job" ] && job="${arg}"; prev="${arg}"; done; if [ -n "${job}" ]; then f="${GH_FIXTURES}/run-log-job-${job}"; else f="${GH_FIXTURES}/run-log-$3"; fi; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.txt" ] || { echo "stub: no log" >&2; exit 1; }; cat "${f}.txt" ;;' \
         '  *) echo "gh stub: unexpected call: $*" >&2; exit 99 ;;' \
         'esac'
 
@@ -9618,6 +9620,9 @@ run_tag_view() {
     listed+="  release view             Print a repository's latest release, one key and value a line (exit 9 when it has none)"$'\n'
     listed+="  release list             List a repository's releases, newest first, one line each"$'\n'
     listed+="  tag view                 Print the commit a repository's tag points to (exit 9 when not found)"$'\n'
+    listed+="  run list                 List a repository's Actions runs for a branch or a commit, newest first"$'\n'
+    listed+="  run view                 Print an Actions run's status and jobs (exit 9 when not found)"$'\n'
+    listed+="  run log                  Print the tail of a run's failed steps' logs (exit 4 while it runs, 9 when not found)"$'\n'
     listed+="  run rerun                Rerun the failed jobs of a pull request's run (exit 4 while it runs, 8 when refused, 9 when not found)"$'\n'
     listed+="  task wait                Wait, in one call, for a background command to finish (exit 4 while it runs, 9 when not found)"$'\n'
     listed+="  help [command]           Show this help, or the help for one command"$'\n'
@@ -10773,7 +10778,7 @@ assert_unexpected_run() {
 
 @test "run rerun help, from -h, --help and help, gives the usage, the rules in their order, the output and the exit codes, and none calls gh" {
     local invocation
-    for invocation in "run rerun -h" "run rerun --help" "help run rerun" "help run" "run -h" "run --help" "run rerun --repo ${REPO} --help --bogus"; do
+    for invocation in "run rerun -h" "run rerun --help" "help run rerun" "run rerun --repo ${REPO} --help --bogus"; do
         # shellcheck disable=SC2086  # each invocation is split into its words on purpose
         run "${SCRIPT}" ${invocation}
         [ "${status}" -eq 0 ] || { echo "${invocation}: ${status}" >&2; return 1; }
@@ -10794,12 +10799,12 @@ assert_unexpected_run() {
     run --separate-stderr "${SCRIPT}" run
     [ "${status}" -eq 2 ]
     [ -z "${output}" ]
-    [[ "${stderr}" == "cfwf: run needs a subcommand (rerun)"$'\n\n'"${RUN_RERUN_USAGE}"$'\n'* ]]
+    [[ "${stderr}" == "cfwf: run needs a subcommand (list, view, log, rerun)"$'\n\n'"${RUN_LIST_USAGE}"$'\n'* ]]
 
     run --separate-stderr "${SCRIPT}" run cancel --repo "${REPO}" --run 123
     [ "${status}" -eq 2 ]
     [ -z "${output}" ]
-    [[ "${stderr}" == "cfwf: unknown run subcommand (argument 2; its value is not shown)"$'\n\n'"${RUN_RERUN_USAGE}"$'\n'* ]]
+    [[ "${stderr}" == "cfwf: unknown run subcommand (argument 2; its value is not shown)"$'\n\n'"${RUN_LIST_USAGE}"$'\n'* ]]
     [ ! -f "${GH_LOG}" ]
 }
 
@@ -11223,6 +11228,452 @@ assert_unexpected_run() {
         [[ "${output}" == *"4  it is still running at the timeout"* ]]
     done
     [ ! -f "${GH_LOG}" ]
+}
+
+# --- run list, run view and run log ---------------------------------------------
+
+RUN_LIST_USAGE="Usage: cfwf run list --repo <owner/repo> --branch <name> [--workflow <name>] [--limit <n>]"
+RUN_VIEW_USAGE="Usage: cfwf run view --repo <owner/repo> --run <id>"
+RUN_LOG_USAGE="Usage: cfwf run log --repo <owner/repo> --run <id> [--job <id>] [--lines <n>]"
+RUN_CREATED="2026-10-30T10:00:00Z"
+
+# Writes the run $1 as the REST API gives it: status $2, conclusion $3 ("" for null), head branch $4
+# ("" for null), workflow name $5 (build) and event $6 (push).
+write_view_run() {
+    jq -n --argjson id "$1" --arg status "$2" --arg conclusion "$3" --arg sha "${RUN_SHA}" --arg branch "$4" \
+        --arg name "${5-build}" --arg event "${6:-push}" --arg created "${RUN_CREATED}" \
+        '{id: $id, name: $name, event: $event, status: $status,
+          conclusion: (if $conclusion == "" then null else $conclusion end), head_sha: $sha,
+          head_branch: (if $branch == "" then null else $branch end), run_attempt: 1, created_at: $created}' \
+        | write_api "repos/${REPO}/actions/runs/$1"
+}
+
+# Writes the jobs of the run $1: each further argument is "id|name|status|conclusion" (conclusion
+# "" for null); the total GitHub gives is the number of them unless RUN_JOBS_TOTAL is set.
+write_run_jobs() {
+    local run="$1" job
+    shift
+    for job in "$@"; do
+        IFS='|' read -r id name status conclusion <<< "${job}"
+        jq -n --argjson id "${id}" --arg name "${name}" --arg status "${status}" --arg conclusion "${conclusion}" \
+            '{id: $id, name: $name, status: $status, conclusion: (if $conclusion == "" then null else $conclusion end), run_id: 1}'
+    done | jq -s --argjson total "${RUN_JOBS_TOTAL:--1}" '{total_count: (if $total < 0 then length else $total end), jobs: .}' \
+        | write_api "repos/${REPO}/actions/runs/${run}/jobs"
+}
+
+# Writes the job $1 of the run $2 with the status $3 (completed).
+write_run_job() {
+    jq -n --argjson id "$1" --argjson run "$2" --arg status "${3:-completed}" '{id: $id, run_id: $run, status: $status, name: "test"}' \
+        | write_api "repos/${REPO}/actions/jobs/$1"
+}
+
+# Writes the --log-failed answer for the run $1 (or, as job-$1, for that job) from stdin.
+write_run_log() {
+    cat > "${GH_FIXTURES}/run-log-$1.txt"
+}
+
+# Writes the run list answer: each argument is "id|workflow|status|conclusion|sha|branch|event|created".
+write_run_list() {
+    local row
+    for row in "$@"; do
+        IFS='|' read -r id workflow status conclusion sha branch event created <<< "${row}"
+        jq -n --argjson id "${id}" --arg workflow "${workflow}" --arg status "${status}" --arg conclusion "${conclusion}" \
+            --arg sha "${sha}" --arg branch "${branch}" --arg event "${event}" --arg created "${created}" \
+            '{databaseId: $id, workflowName: $workflow, status: $status, conclusion: (if $conclusion == "" then null else $conclusion end),
+              headSha: $sha, headBranch: $branch, event: $event, createdAt: $created, url: "https://example.invalid", number: 9}'
+    done | jq -s . > "${GH_FIXTURES}/run-list.json"
+}
+
+run_cfwf_run() {
+    run --separate-stderr "${SCRIPT}" run "$@"
+}
+
+@test "run list, run view and run log help, from -h, --help and help, give each usage and none calls gh; help run gives all four" {
+    local invocation
+    for invocation in "run list -h" "run list --help" "help run list"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == "${RUN_LIST_USAGE}"$'\n'* ]]
+        [[ "${output}" == *"there is never an event filter."* ]]
+        [[ "${output}" == *"--limit     The most runs listed, from 1 to 50 (default 20)."* ]]
+        [[ "${output}" == *"  <run id>  <workflow>  <status>  <conclusion>  <head SHA>  <event>  <created at>"* ]]
+        [[ "${output}" == *"Exit codes: 0 listed (none included); 9 the repository has no workflow of that --workflow; 1 a"* ]]
+    done
+    for invocation in "run view -h" "run view --help" "help run view"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == "${RUN_VIEW_USAGE}"$'\n'* ]]
+        [[ "${output}" == *"  head_sha     the run's head commit: 40 hexadecimal digits"* ]]
+        [[ "${output}" == *"  job  <job id>  <name>  <status>  <conclusion>"* ]]
+        [[ "${output}" == *"Exit codes: 0 printed; 9 the run was not found in the repository; 1 a runtime failure"* ]]
+    done
+    for invocation in "run log -h" "run log --help" "help run log"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == "${RUN_LOG_USAGE}"$'\n'* ]]
+        [[ "${output}" == *"--lines  The most of the last lines of each failed step kept, from 1 to 2000 (default 200)."* ]]
+        [[ "${output}" == *"  summary jobs=<a> steps=<b> lines=<c> redacted=<d> masked=<e>"* ]]
+        [[ "${output}" == *"[cfwf: line redacted: token]"* ]]
+        [[ "${output}" == *"A 40-digit"$'\n'"              commit SHA is kept"* ]]
+        [[ "${output}" == *"Output over 262144 bytes (256 KiB) is refused (exit 1) and none of it is printed"* ]]
+        [[ "${output}" == *"Exit codes: 0 printed; 4 the run or the job has not completed; 9 the run or the job was not found"* ]]
+    done
+    for invocation in "help run" "run -h" "run --help"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == "${RUN_LIST_USAGE}"$'\n'*$'\n\n'"${RUN_VIEW_USAGE}"$'\n'*$'\n\n'"${RUN_LOG_USAGE}"$'\n'*$'\n\n'"${RUN_RERUN_USAGE}"$'\n'* ]]
+    done
+    run "${SCRIPT}" help
+    local listed=$'\n'"  run list                 List a repository's Actions runs for a branch or a commit, newest first"$'\n'
+    listed+="  run view                 Print an Actions run's status and jobs (exit 9 when not found)"$'\n'
+    listed+="  run log                  Print the tail of a run's failed steps' logs (exit 4 while it runs, 9 when not found)"$'\n'
+    listed+="  run rerun                Rerun"
+    [[ "${output}" == *"${listed}"* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "run list, run view and run log usage errors exit 2 with that subcommand's usage and nothing on stdout, never echoing a value, before any gh call" {
+    local repo="--repo ${REPO}" args
+    local -a list_cases=(
+        "" "--branch main" "${repo}" "${repo} --branch main --sha ${RUN_SHA}" "${repo} --sha ${RUN_SHA:1}"
+        "${repo} --sha ${RUN_SHA}g" "${repo} --branch -x" "${repo} --branch a..b" "${repo} --branch main --branch main"
+        "${repo} --branch main --workflow -x" "${repo} --branch main --limit 0" "${repo} --branch main --limit 51"
+        "${repo} --branch main --limit 99999999999999999999" "${repo} --branch main --limit x"
+        "${repo} --branch main --json x" "${repo} --branch main --jq x" "${repo} --branch main --template x"
+        "${repo} --branch main --paginate" "${repo} --branch main --event push" "${repo} --branch main --run 1"
+        "${repo} --branch main --lines 3"
+    )
+    for args in "${list_cases[@]}"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run --separate-stderr "${SCRIPT}" run list ${args}
+        [ "${status}" -eq 2 ] || { echo "run list accepted: ${args} (${status})" >&2; return 1; }
+        [ -z "${output}" ]
+        [[ "${stderr}" == "cfwf: "*$'\n\n'"${RUN_LIST_USAGE}"$'\n'* ]]
+    done
+    run_cfwf_run list --repo "${REPO}" --branch $'feat/\xc2\x9bx'
+    [ "${status}" -eq 2 ]
+    run_cfwf_run list --repo "${REPO}" --branch main --workflow $'build\x01'
+    [ "${status}" -eq 2 ]
+    run_cfwf_run list --repo "${REPO}" --branch main --workflow "   "
+    [ "${status}" -eq 2 ]
+    run_cfwf_run list --repo "${REPO}"
+    [[ "${stderr}" == "cfwf: one of --branch or --sha is required"$'\n'* ]]
+    run_cfwf_run list --repo "${REPO}" --branch main --sha "${RUN_SHA}"
+    [[ "${stderr}" == "cfwf: --branch and --sha cannot be given together"$'\n'* ]]
+    run_cfwf_run list --repo "${REPO}" --branch main --limit 51
+    [[ "${stderr}" == "cfwf: invalid value for --limit: it must be a number from 1 to 50"$'\n'* ]]
+
+    local -a view_cases=("" "${repo}" "--run 123" "${repo} --run 0" "${repo} --run abc" "${repo} --run 12345678901234567890"
+        "${repo} --run 1 --run 2" "${repo} --run 1 --json x" "${repo} --run 1 --log" "${repo} --run 1 --job 2" "${repo} --run 1 --attempt 1")
+    for args in "${view_cases[@]}"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run --separate-stderr "${SCRIPT}" run view ${args}
+        [ "${status}" -eq 2 ] || { echo "run view accepted: ${args} (${status})" >&2; return 1; }
+        [ -z "${output}" ]
+        [[ "${stderr}" == "cfwf: "*$'\n\n'"${RUN_VIEW_USAGE}"$'\n'* ]]
+    done
+
+    local -a log_cases=("" "${repo}" "--run 123" "${repo} --run 0" "${repo} --run 1 --job 0" "${repo} --run 1 --job x"
+        "${repo} --run 1 --lines 0" "${repo} --run 1 --lines 2001" "${repo} --run 1 --lines 1 --lines 2"
+        "${repo} --run 1 --log" "${repo} --run 1 --json x" "${repo} --run 1 --attempt 1" "${repo} --run 1 --branch main")
+    for args in "${log_cases[@]}"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run --separate-stderr "${SCRIPT}" run log ${args}
+        [ "${status}" -eq 2 ] || { echo "run log accepted: ${args} (${status})" >&2; return 1; }
+        [ -z "${output}" ]
+        [[ "${stderr}" == "cfwf: "*$'\n\n'"${RUN_LOG_USAGE}"$'\n'* ]]
+    done
+    run_cfwf_run log --repo "${REPO}" --run 1 --lines 2001
+    [[ "${stderr}" == "cfwf: invalid value for --lines: it must be a number from 1 to 2000"$'\n'* ]]
+
+    local secret="ghp_${RANDOM}abcdefghijklmnopqrstuvwxyz0123456789"
+    run_cfwf_run list --repo "${REPO}" --branch main "${secret}"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" != *"${secret}"* ]]
+    run_cfwf_run log --repo "${REPO}" --run "${secret}"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" != *"${secret}"* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "run list --branch main lists the runs started by any event, newest first, with no event filter, in one read" {
+    write_run_list "11|build|completed|success|${RUN_SHA}|main|push|2026-10-30T09:00:00Z" \
+        "12|deploy|completed||${RUN_SHA}|main|workflow_dispatch|2026-10-30T09:05:00Z" \
+        $'13|lint\x1bx|in_progress||'"${RUN_SHA}|main|push|2026-10-30T09:10:00Z"
+    run_cfwf_run list --repo "${REPO}" --branch main
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    local expected="13"$'\t'"lint x"$'\t'"in_progress"$'\t'"-"$'\t'"${RUN_SHA}"$'\t'"push"$'\t'"2026-10-30T09:10:00Z"$'\n'
+    expected+="12"$'\t'"deploy"$'\t'"completed"$'\t'"-"$'\t'"${RUN_SHA}"$'\t'"workflow_dispatch"$'\t'"2026-10-30T09:05:00Z"$'\n'
+    expected+="11"$'\t'"build"$'\t'"completed"$'\t'"success"$'\t'"${RUN_SHA}"$'\t'"push"$'\t'"2026-10-30T09:00:00Z"
+    [ "${output}" = "${expected}" ]
+    [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
+    grep -qF -- "run list --repo ${REPO} --branch=main --all --limit 20 --json databaseId,workflowName,status,conclusion,headSha,headBranch,event,createdAt --jq" "${GH_LOG}"
+    [ "$(sed 's/--json [^ ]*//' "${GH_LOG}" | grep -cE -- "--event|event=")" -eq 0 ]
+}
+
+@test "run list --sha asks for the commit, passes --workflow and --limit with = and as given, and an empty list prints nothing" {
+    write_run_list
+    run_cfwf_run list --repo "${REPO}" --sha "${RUN_SHA^^}" --workflow "Build and test" --limit 50
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    grep -qF -- "run list --repo ${REPO} --commit=${RUN_SHA} --workflow=Build and test --all --limit 50 " "${GH_LOG}"
+}
+
+@test "run list exits 1 with nothing printed for a row whose head branch or commit is not the one asked for, or an answer that is not what it expects" {
+    write_run_list "11|build|completed|success|${RUN_SHA}|feat/x|push|2026-10-30T09:00:00Z"
+    run_cfwf_run list --repo "${REPO}" --branch main
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: gh returned an unexpected result for the runs of ${REPO}" ]
+
+    write_run_list "11|build|completed|success|${MOVED_SHA}|main|push|2026-10-30T09:00:00Z"
+    run_cfwf_run list --repo "${REPO}" --sha "${RUN_SHA}"
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+
+    printf '2\n11\tbuild\tcompleted\tsuccess\t%s\tpush\t2026-10-30T09:00:00Z\tmain\n' "${RUN_SHA}" > "${GH_FIXTURES}/run-list.out"
+    run_cfwf_run list --repo "${REPO}" --branch main
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+
+    printf '1\n11\tbuild\tCompleted\tsuccess\t%s\tpush\t2026-10-30T09:00:00Z\tmain\n' "${RUN_SHA}" > "${GH_FIXTURES}/run-list.out"
+    run_cfwf_run list --repo "${REPO}" --branch main
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+}
+
+@test "run list exits 9 for a workflow the repository does not have, 1 when the repository is not there, and 1 quoting gh for any other failure" {
+    write_run_repository
+    printf 'could not find any workflows named nope\n' > "${GH_FIXTURES}/run-list.fail"
+    run_cfwf_run list --repo "${REPO}" --branch main --workflow nope
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the --workflow was not found in ${REPO}" ]
+
+    rm -f "$(api_fixture "repos/${REPO}").json"
+    run_cfwf_run list --repo "${REPO}" --branch main --workflow nope
+    [ "${status}" -eq 1 ]
+    [[ "${stderr}" == "cfwf: "* && "${stderr}" != *"--workflow was not found"* ]]
+
+    printf 'HTTP 502: Bad Gateway\nsecond line\n' > "${GH_FIXTURES}/run-list.fail"
+    run_cfwf_run list --repo "${REPO}" --branch main
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not list the runs of ${REPO}: HTTP 502: Bad Gateway" ]
+}
+
+@test "run view prints the run's eight keys then its jobs sorted by id, - for none, every value printable, from the run and every page of its jobs" {
+    write_view_run 123 completed failure feat/x $'build\x1b[31m and test'
+    write_run_jobs 123 "30|test|completed|failure" "4|lint|completed|success" $'200|deploy\x01it|queued|'
+    run_cfwf_run view --repo "${REPO}" --run 123
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    local expected="status"$'\t'"completed"$'\n'"conclusion"$'\t'"failure"$'\n'"head_sha"$'\t'"${RUN_SHA}"$'\n'
+    expected+="head_branch"$'\t'"feat/x"$'\n'"workflow"$'\t'"build [31m and test"$'\n'"event"$'\t'"push"$'\n'
+    expected+="attempt"$'\t'"1"$'\n'"created_at"$'\t'"${RUN_CREATED}"$'\n'
+    expected+="job"$'\t'"4"$'\t'"lint"$'\t'"completed"$'\t'"success"$'\n'
+    expected+="job"$'\t'"30"$'\t'"test"$'\t'"completed"$'\t'"failure"$'\n'
+    expected+="job"$'\t'"200"$'\t'"deploy it"$'\t'"queued"$'\t'"-"
+    [ "${output}" = "${expected}" ]
+    grep -qF -- "api repos/${REPO}/actions/runs/123/jobs?per_page=100&filter=latest --paginate --jq" "${GH_LOG}"
+
+    write_view_run 124 in_progress "" ""
+    write_run_jobs 124
+    run_cfwf_run view --repo "${REPO}" --run 124
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"conclusion"$'\t'"-"$'\n'"head_sha"* && "${output}" == *"head_branch"$'\t'"-"$'\n'* && "${output}" != *"job"$'\t'* ]]
+}
+
+@test "run view exits 9 for a run that is not there, 1 when the repository is not there, and 1 for jobs that do not add up or a failed read" {
+    write_run_repository
+    run_cfwf_run view --repo "${REPO}" --run 123
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the run 123 was not found in ${REPO}" ]
+
+    rm -f "$(api_fixture "repos/${REPO}").json"
+    run_cfwf_run view --repo "${REPO}" --run 123
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+
+    write_view_run 123 completed failure feat/x
+    RUN_JOBS_TOTAL=3 write_run_jobs 123 "30|test|completed|failure"
+    run_cfwf_run view --repo "${REPO}" --run 123
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: gh returned an unexpected result for the run 123 of ${REPO}" ]
+
+    fail_api "repos/${REPO}/actions/runs/123/jobs"
+    run_cfwf_run view --repo "${REPO}" --run 123
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read the jobs of the run 123 of ${REPO}: gh: Bad Gateway (HTTP 502)" ]
+}
+
+@test "run log prints each failed step's header in the order the log gives them, its lines after |, and the summary last" {
+    write_view_run 123 completed failure feat/x
+    printf 'build\tRun tests\tone\nbuild\tRun tests\t\nlint\tCheck\tthree\nbuild\tRun tests\ttwo\nbuild\tUNKNOWN STEP\tfour\n' | write_run_log 123
+    run_cfwf_run log --repo "${REPO}" --run 123
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    local expected=$'== job build step Run tests\n| one\n|\n| two\n== job lint step Check\n| three\n== job build step UNKNOWN STEP\n| four\n'
+    expected+="summary jobs=2 steps=3 lines=5 redacted=0 masked=0"
+    [ "${output}" = "${expected}" ]
+    [ "$(gh_call_count "run view 123 --repo ${REPO} --log-failed")" -eq 1 ]
+}
+
+@test "run log keeps only the last --lines lines of each step and cuts a long line at a character boundary" {
+    write_view_run 123 completed failure feat/x
+    {
+        local n
+        for n in 1 2 3 4 5; do printf 'build\tstep\tline %s\n' "${n}"; done
+        printf 'build\tlong\t%s\n' "$(printf 'x%.0s' $(seq 1 999))é and more"
+    } | write_run_log 123
+    run_cfwf_run log --repo "${REPO}" --run 123 --lines 3
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == $'== job build step step\n| line 3\n| line 4\n| line 5\n== job build step long\n| '* ]]
+    local long
+    long="$(sed -n 6p <<< "${output}")"
+    [ "${long}" = "| $(printf 'x%.0s' $(seq 1 999)) [cut]" ]
+    [[ "${output}" == *$'\n'"summary jobs=1 steps=2 lines=4 redacted=0 masked=0" ]]
+}
+
+@test "run log replaces a line holding a token whole, masks long hex and base64 runs, and keeps a commit SHA, *** and host paths" {
+    write_view_run 123 completed failure feat/x
+    local token="ghp_${RANDOM}abcdefghijklmnopqrstuvwxyz0123456789"
+    {
+        printf 'build\tstep\tusing %s here\n' "${token}"
+        printf 'build\tstep\tcommit %s kept\n' "${RUN_SHA}"
+        printf 'build\tstep\thex %s1 masked\n' "${RUN_SHA}"
+        printf 'build\tstep\tdigest sha256:%s\n' "$(printf 'ab%.0s' $(seq 1 32))"
+        printf 'build\tstep\tb64 QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAx== end\n'
+        printf 'build\tstep\tpath /home/runner/work/credfeto-orchestrator/credfeto-orchestrator and ***\n'
+    } | write_run_log 123
+    run_cfwf_run log --repo "${REPO}" --run 123
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"${token}"* ]]
+    local expected=$'== job build step step\n| [cfwf: line redacted: token]\n'
+    expected+="| commit ${RUN_SHA} kept"$'\n'"| hex *** masked"$'\n'"| digest sha256:***"$'\n'"| b64 *** end"$'\n'
+    expected+="| path /home/runner/work/credfeto-orchestrator/credfeto-orchestrator and ***"$'\n'
+    expected+="summary jobs=1 steps=1 lines=6 redacted=1 masked=3"
+    [ "${output}" = "${expected}" ]
+}
+
+@test "run log removes ANSI sequences, turns controls into spaces, prints bytes of invalid UTF-8 as ? and never lets a line pass for a header" {
+    write_view_run 123 completed failure feat/x
+    printf 'build\tstep\t\033[31mred\033[0m a\rb c\302\233d\342\200\250e\nbuild\tstep\tbad \377 é\nbuild\tstep\t== job fake step x\nbuild\tstep\tsummary jobs=9\n' | write_run_log 123
+    run_cfwf_run log --repo "${REPO}" --run 123
+    [ "${status}" -eq 0 ]
+    local expected=$'== job build step step\n| red a b c d e\n| bad ? ??\n| == job fake step x\n| summary jobs=9\n'
+    expected+="summary jobs=1 steps=1 lines=4 redacted=0 masked=0"
+    [ "${output}" = "${expected}" ]
+}
+
+@test "run log exits 4 for a run that has not completed before reading any log, and when gh says it is still in progress" {
+    write_view_run 123 in_progress "" feat/x
+    run_cfwf_run log --repo "${REPO}" --run 123
+    [ "${status}" -eq 4 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the run 123 of ${REPO} is in_progress; its logs can be read once it is complete" ]
+    [ "$(gh_call_count "run view ")" -eq 0 ]
+
+    write_view_run 123 completed failure feat/x
+    printf 'run 123 is still in progress; logs will be available when it is complete\n' > "${GH_FIXTURES}/run-log-123.fail"
+    run_cfwf_run log --repo "${REPO}" --run 123
+    [ "${status}" -eq 4 ]
+    [ -z "${output}" ]
+}
+
+@test "run log --job reads only that job's failed steps, and exits 9 for a job that is not there or not of the run, and 4 while it runs" {
+    write_view_run 123 completed failure feat/x
+    write_run_repository
+    write_run_job 456 123
+    printf 'test\tstep\tonly this job\n' | write_run_log job-456
+    run_cfwf_run log --repo "${REPO}" --run 123 --job 456
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'== job test step step\n| only this job\nsummary jobs=1 steps=1 lines=1 redacted=0 masked=0' ]
+    [ "$(gh_call_count "run view --job 456 --repo ${REPO} --log-failed")" -eq 1 ]
+
+    write_run_job 457 999
+    run_cfwf_run log --repo "${REPO}" --run 123 --job 457
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the job 457 is not a job of the run 123 of ${REPO}" ]
+
+    run_cfwf_run log --repo "${REPO}" --run 123 --job 458
+    [ "${status}" -eq 9 ]
+    [ "${stderr}" = "cfwf: the job 458 was not found in ${REPO}" ]
+
+    write_run_job 459 123 in_progress
+    run_cfwf_run log --repo "${REPO}" --run 123 --job 459
+    [ "${status}" -eq 4 ]
+    [ "$(gh_call_count "run view --job 459")" -eq 0 ]
+}
+
+@test "run log exits 9 for a run that is not there, 1 when the repository is not, 1 with nothing printed when gh fails or the log is not what it expects, and prints only the zero summary for no failed step" {
+    write_run_repository
+    run_cfwf_run log --repo "${REPO}" --run 123
+    [ "${status}" -eq 9 ]
+    [ "${stderr}" = "cfwf: the run 123 was not found in ${REPO}" ]
+
+    write_view_run 123 completed failure feat/x
+    printf 'HTTP 410: logs have expired\n' > "${GH_FIXTURES}/run-log-123.fail"
+    run_cfwf_run log --repo "${REPO}" --run 123
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read the logs of the run 123 of ${REPO}: HTTP 410: logs have expired" ]
+
+    rm -f "${GH_FIXTURES}/run-log-123.fail"
+    printf 'build\tstep\tfine\nno tabs here\n' | write_run_log 123
+    run_cfwf_run log --repo "${REPO}" --run 123
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: gh returned an unexpected log for the run 123 of ${REPO}" ]
+
+    : | write_run_log 123
+    run_cfwf_run log --repo "${REPO}" --run 123
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "summary jobs=0 steps=0 lines=0 redacted=0 masked=0" ]
+
+    rm -f "$(api_fixture "repos/${REPO}").json" "$(api_fixture "repos/${REPO}/actions/runs/123").json"
+    run_cfwf_run log --repo "${REPO}" --run 123
+    [ "${status}" -eq 1 ]
+}
+
+@test "run log refuses output over 256 KiB whole, printing none of it" {
+    write_view_run 123 completed failure feat/x
+    local step
+    for step in 1 2 3 4 5 6; do
+        printf 'build\tstep %s\t%s\n' "${step}" "$(printf 'y%.0s' $(seq 1 900))"
+    done > "${TEST_TMP}/one.txt"
+    local n
+    for n in $(seq 1 60); do cat "${TEST_TMP}/one.txt"; done | write_run_log 123
+    run_cfwf_run log --repo "${REPO}" --run 123 --lines 2000
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: the failed steps' logs of the run 123 of ${REPO} are "*" bytes, more than the 262144 cfwf prints, so none is printed; use a smaller --lines, or --job for one job" ]]
+
+    run_cfwf_run log --repo "${REPO}" --run 123 --lines 40
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *$'\n'"summary jobs=1 steps=6 lines=240 redacted=0 masked=0" ]]
+}
+
+@test "run list, run view and run log fail (exit 1) when gh is not installed, after the options are checked" {
+    mkdir -p "${TEST_TMP}/git-only"
+    ln -s "$(command -v git)" "${TEST_TMP}/git-only/git"
+    local bash_path command
+    bash_path="$(command -v bash)"
+    for command in "run list --branch main" "run view --run 1" "run log --run 1"; do
+        # shellcheck disable=SC2086  # each command is split into its words on purpose
+        run --separate-stderr env PATH="${TEST_TMP}/git-only" "${bash_path}" "${SCRIPT}" ${command} --repo "${REPO}"
+        [ "${status}" -eq 1 ] || { echo "${command}: ${status}" >&2; return 1; }
+        [[ "${stderr}" == "cfwf: gh is not installed"* ]]
+    done
 }
 
 # --- pr checks-wait ------------------------------------------------------------
