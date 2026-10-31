@@ -22,6 +22,9 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - `cfwf pr take-back --repo <owner/repo> --pr <n> --body-file <file|->` takes a pull request back from human review before new work is added to it, in a fixed order: auto-merge off (only when it is on; a failure stops before anything else), back to a draft, Development on the board, then a comment from the body file saying why. Each step is idempotent, a pull request that is not open is refused (exit 8, nothing written), and a failure part way names the steps already done (#1602)
 - TBD - to be finalized after review
 - cfwf advisory view: look up a global security advisory by its GHSA id, printing its severity, summary, published and withdrawn times and each affected package with its vulnerable range and first patched version (#1746)
+- cfwf issue reopen, pr close and pr reopen to change an issue's or the agent's own pull request's state without merging, with an optional checked comment first (#1762)
+- cfwf issue comments to read an issue's or pull request's top-level comments with their bodies, filtered by --since and --author, capped and count-checked (#1764)
+- cfwf pr list --label to list only the open pull requests carrying every given label (#1767)
 ### Fixed
 - CI: workflow expressions in run and script bodies are passed through env, so the no-expressions-in-scripts check passes
 - CI: the remaining workflow expressions in run bodies (image summaries, dispatch-secret check, runner name) are passed through env
