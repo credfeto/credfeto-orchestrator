@@ -2752,7 +2752,7 @@ teardown() {
 }
 
 @test "issue_json_has_human_plan_approval is true for a trusted human approval comment posted after the plan" {
-    local issue='{"comments":[{"author":{"login":"bot"},"body":"## Implementation Plan\n..."},{"author":{"login":"credfeto"},"body":"approved"}]}'
+    local issue='{"comments":[{"author":{"login":"bot"},"body":"## Implementation Plan\n..."},{"author":{"login":"credfeto"},"authorAssociation":"OWNER","body":"approved"}]}'
     run issue_json_has_human_plan_approval "${issue}" "bot" '["credfeto"]'
     [ "${status}" -eq 0 ]
 }
@@ -2791,7 +2791,7 @@ teardown() {
 }
 
 @test "issue_plan_awaiting_human_approval is false once a trusted human approves" {
-    local issue='{"comments":[{"author":{"login":"bot"},"body":"## Implementation Plan\n..."},{"author":{"login":"credfeto"},"body":"go ahead"}]}'
+    local issue='{"comments":[{"author":{"login":"bot"},"body":"## Implementation Plan\n..."},{"author":{"login":"credfeto"},"authorAssociation":"OWNER","body":"lgtm"}]}'
     run issue_plan_awaiting_human_approval "${issue}" "bot" '["credfeto"]'
     [ "${status}" -ne 0 ]
 }
@@ -2804,14 +2804,109 @@ teardown() {
     [ "${status}" -ne 0 ]
 }
 
-@test "human_plan_approval_jq_literal bakes in the login and trusted-logins literals and matches issue_json_has_human_plan_approval's own verdict" {
-    local issue='{"comments":[{"author":{"login":"bot"},"body":"## Implementation Plan\n..."},{"author":{"login":"bot"},"body":"not approved yet"}]}'
-    local jq_expr
-    jq_expr=$(human_plan_approval_jq_literal "bot" '["credfeto"]')
-    [[ "${jq_expr}" == *'"bot"'* ]]
-    [[ "${jq_expr}" == *'["credfeto"]'* ]]
-    run bash -c 'printf "%s" "$1" | jq -e "$2"' -- "${issue}" "${jq_expr}"
+@test "the plan-approval patterns in lib/globals are identical to cfwf's, which issue plan-status --approval applies (#1772)" {
+    local name cfwf_line lib_line cfwf="${BATS_TEST_DIRNAME}/../containers/base/development-full/scripts/cfwf"
+    for name in LOOSE_PLAN_HEADING_PATTERN APPROVAL_LINE_KEYWORD_PATTERN APPROVAL_NEGATION_PATTERN APPROVER_ASSOCIATIONS; do
+        cfwf_line=$(grep -E "^readonly ${name}=" "${cfwf}")
+        lib_line=$(grep -E "^${name}=" "${BATS_TEST_DIRNAME}/../lib/globals")
+        [ -n "${cfwf_line}" ] && [ "${cfwf_line#readonly }" = "${lib_line}" ] || { echo "${name} differs" >&2; return 1; }
+    done
+}
+
+# Prints yes or no: whether issue_json_has_human_plan_approval approves an issue whose plan is by
+# planner and whose one later comment has body $1, author $2 (default credfeto) and association $3
+# (default OWNER), for the orchestrator login bot and the trusted logins credfeto, someone, planner,
+# bot and the two trusted GitHub bots.
+host_approval_of() {
+    local issue
+    issue=$(jq -n --arg body "$1" --arg login "${2-credfeto}" --arg association "${3:-OWNER}" \
+        '{comments: [{author: {login: "planner"}, authorAssociation: "COLLABORATOR", body: "## Implementation Plan\nThe plan."},
+                     {author: (if $login == "" then null else {login: $login} end), authorAssociation: $association, body: $body}]}')
+    if issue_json_has_human_plan_approval "${issue}" "bot" '["credfeto","someone","planner","bot","copilot-pull-request-reviewer","github-advanced-security[bot]"]'; then
+        echo yes
+    else
+        echo no
+    fi
+}
+
+@test "issue_json_has_human_plan_approval takes approved or lgtm on a line of its own making, from a collaborator or the owner" {
+    local body
+    for body in "approved" "LGTM" "Approved." "Thanks, lgtm!" "(approved)" "**approved**" "Read it."$'\n'"approved, ship it" "approved"$'\n'"No objections."; do
+        [ "$(host_approval_of "${body}")" = yes ] || { echo "not approved: ${body}" >&2; return 1; }
+    done
+    [ "$(host_approval_of approved someone COLLABORATOR)" = yes ]
+    [ "$(host_approval_of approved someone MEMBER)" = yes ]
+}
+
+@test "issue_json_has_human_plan_approval refuses what either old rule refused, negations, questions and conditions, and every author but a human collaborator (#1772)" {
+    local body
+    for body in "go ahead" "looks good" "_approved_" "__LGTM__" "> approved" "plan_approved" "disapproved" "not approved yet" "approved?" \
+        "Is this approved?" "approved if you fix the tests" "approved once CI passes" "I don't think it is approved" "can't say lgtm" \
+        "never approved" "approved - pending review" "nearly approved" "approved. No objections." ""; do
+        [ "$(host_approval_of "${body}")" = no ] || { echo "approved: ${body}" >&2; return 1; }
+    done
+    [ "$(host_approval_of approved stranger NONE)" = no ]
+    [ "$(host_approval_of approved stranger COLLABORATOR)" = no ]
+    [ "$(host_approval_of approved someone CONTRIBUTOR)" = no ]
+    [ "$(host_approval_of approved someone NONE)" = no ]
+    [ "$(host_approval_of approved bot COLLABORATOR)" = no ]
+    [ "$(host_approval_of approved planner COLLABORATOR)" = no ]
+    [ "$(host_approval_of approved copilot-pull-request-reviewer NONE)" = no ]
+    [ "$(host_approval_of approved "github-advanced-security[bot]" COLLABORATOR)" = no ]
+    [ "$(host_approval_of approved "" NONE)" = no ]
+}
+
+@test "issue_json_has_human_plan_approval needs the approval after the latest plan, a revised one included (#1772)" {
+    local issue
+    issue='{"comments":[{"author":{"login":"bot"},"body":"## Implementation Plan\nfirst"},{"author":{"login":"credfeto"},"authorAssociation":"OWNER","body":"approved"},{"author":{"login":"bot"},"body":"## Implementation Plan\nrevised"}]}'
+    run issue_json_has_human_plan_approval "${issue}" "bot" '["credfeto"]'
     [ "${status}" -ne 0 ]
+    issue='{"comments":[{"author":{"login":"bot"},"body":"## Implementation Plan\nfirst"},{"author":{"login":"credfeto"},"authorAssociation":"OWNER","body":"approved"},{"author":{"login":"bot"},"body":"The ##implementation plan, revised"}]}'
+    run issue_json_has_human_plan_approval "${issue}" "bot" '["credfeto"]'
+    [ "${status}" -ne 0 ]
+    issue='{"comments":[{"author":{"login":"bot"},"body":"## Implementation Plan\nfirst"},{"author":{"login":"bot"},"body":"## Implementation Plan\nrevised"},{"author":{"login":"credfeto"},"authorAssociation":"OWNER","body":"approved"}]}'
+    run issue_json_has_human_plan_approval "${issue}" "bot" '["credfeto"]'
+    [ "${status}" -eq 0 ]
+}
+
+# The approval jq the orchestrator used before #1772 (issue_json_has_human_plan_approval's old filter).
+old_host_approval() {
+    printf '%s' "$1" | jq -e --arg me "$2" --argjson trusted "$3" '
+        (.comments) as $c
+        | (first(range($c|length) | select($c[.].body // "" | test("##\\s*Implementation Plan";"i"))) // -1) as $i
+        | if $i >= 0 then
+            $c[($i+1):]
+            | map(select(.author.login as $login | $login != $me and (($trusted // []) | index($login)) != null))
+            | any(.[]; .body // "" | test("\\b(approved|go ahead|looks good|lgtm)\\b";"i"))
+          else
+            false
+          end
+    ' > /dev/null 2>&1
+}
+
+@test "issue_json_has_human_plan_approval never approves an issue the old check refused (#1772 regression)" {
+    local body author issue trusted='["credfeto","someone","planner","bot","copilot-pull-request-reviewer"]'
+    local -i refused_by_old=0 accepted_by_old=0
+    for body in "approved" "lgtm" "go ahead" "_approved_" "not approved yet" "> approved" "plan_approved" "approved?" "nothing"; do
+        for author in "credfeto OWNER" "someone COLLABORATOR" "stranger NONE" "bot COLLABORATOR" "planner COLLABORATOR" "copilot-pull-request-reviewer NONE"; do
+            for order in after before revised; do
+                issue=$(jq -n --arg body "${body}" --arg login "${author% *}" --arg association "${author#* }" --arg order "${order}" '
+                    {author: {login: "planner"}, authorAssociation: "COLLABORATOR", body: "## Implementation Plan\nplan"} as $plan
+                    | {author: {login: $login}, authorAssociation: $association, body: $body} as $comment
+                    | {comments: (if $order == "after" then [$plan, $comment]
+                                  elif $order == "before" then [$comment, $plan]
+                                  else [$plan, $comment, ($plan | .body = "## Implementation Plan\nrevised")] end)}')
+                if old_host_approval "${issue}" bot "${trusted}"; then
+                    accepted_by_old+=1
+                else
+                    refused_by_old+=1
+                    run issue_json_has_human_plan_approval "${issue}" bot "${trusted}"
+                    [ "${status}" -ne 0 ] || { echo "old refused, new accepts: ${author} ${order}: ${body}" >&2; return 1; }
+                fi
+            done
+        done
+    done
+    [ "${refused_by_old}" -gt 0 ] && [ "${accepted_by_old}" -gt 0 ]
 }
 
 @test "fingerprint_issue_json with trusted logins: trusted comment changes fingerprint" {
@@ -13992,22 +14087,26 @@ STUBEOF
     [[ "${output}" != *"--pr 42"* ]]
 }
 
-@test "build_issue_claude_md without board uses comment-based approval fallback" {
+@test "build_issue_claude_md without board uses the comment-based approval check, cfwf issue plan-status --approval (#1772)" {
     _WF_PROJECT_ID=""
     run build_issue_claude_md 42 "/resolved/.ai-instructions" "" "false"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"approved|go ahead|looks good|lgtm"* ]]
+    [[ "${output}" == *"cfwf issue plan-status --repo ${REPO_FULL} --issue 42 --approval"* ]]
+    [[ "${output}" == *'"approved<TAB>yes"'* ]]
     [[ "${output}" != *"approved on the Workflow board"* ]]
+    [[ "${output}" != *"go ahead"* && "${output}" != *"looks good"* ]]
+    [[ "${output}" != *"gh issue view 42"* ]]
 }
 
-@test "build_issue_claude_md without board bakes the current bot login and trusted logins into the printed approval-check jq, excluding the bot's own comments (#1286)" {
+@test "build_issue_claude_md without board leaves the approval decision to cfwf, with no login or keyword list of its own (#1286, #1772)" {
     _WF_PROJECT_ID=""
     _GH_ME="the-bot"
     run build_issue_claude_md 42 "/resolved/.ai-instructions" "" "false" '["credfeto"]'
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *'"the-bot"'* ]]
-    [[ "${output}" == *'["credfeto"]'* ]]
+    [[ "${output}" != *'"the-bot"'* ]]
+    [[ "${output}" != *'["credfeto"]'* ]]
     [[ "${output}" == *"your own prior comments never count"* ]]
+    [[ "${output}" == *"never judge the comments yourself"* ]]
 }
 
 @test "build_issue_claude_md with board and plan not approved shows board-pending text" {
@@ -14015,7 +14114,7 @@ STUBEOF
     run build_issue_claude_md 42 "/resolved/.ai-instructions" "" "false"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"Workflow board"* ]]
-    [[ "${output}" != *"approved|go ahead"* ]]
+    [[ "${output}" != *"--approval"* ]]
 }
 
 @test "build_issue_claude_md with plan_approved=true shows board-approved text" {
