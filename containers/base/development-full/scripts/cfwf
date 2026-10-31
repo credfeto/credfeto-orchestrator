@@ -353,6 +353,7 @@ Commands:
   issue edit               Change an issue's title or body, or assign the agent (exit 8 when refused, 9 when not found)
   issue reopen             Reopen a closed issue, with an optional comment first (exit 8 when refused, 9 when not found)
   issue comments           Print an issue's or PR's top-level comments with their bodies, oldest first (exit 9 when not found)
+  issue add-sub-issue      Link an issue to a parent issue as its sub-issue (exit 8 when refused, 9 when not found)
   body check               Check a body for leaks without posting it (exit 8 when refused)
   repo view                Print a repository's default branch, visibility, merge methods and description
   repo collaborators       List a repository's collaborators and their roles, sorted by login in the C locale
@@ -369,6 +370,7 @@ Commands:
   pr take-back             Take a PR back from human review: auto-merge off, draft, board Development, then a comment (exit 8 refused)
   pr view                  Print a PR's state and metadata, one key and value a line (exit 9 when not found)
   pr ready-at              Print when a PR was last marked ready for review, or when it was created (exit 9 when not found)
+  pr auto-merge-at         Print when auto-merge was last enabled on a PR and its last change (exit 9 when not found)
   pr diff                  Print a PR's diff, its changed files or a per-file line count (exit 9 when not found)
   pr list                  List a repository's open pull requests, one line each
   pr create                Create a draft PR and put it on the Workflow board as Development (prints the existing one's URL if the branch has one)
@@ -376,6 +378,7 @@ Commands:
   pr close                 Close the agent's own PR without merging it, with an optional comment first (exit 8 refused, 9 not found)
   pr reopen                Reopen the agent's own closed PR, with an optional comment first (exit 8 refused, 9 not found)
   comment add              Post a comment on a PR or an issue and print its URL
+  label create             Create one of the standard labels in a repository (exit 8 for any other name)
   release view             Print a repository's latest release, one key and value a line (exit 9 when it has none)
   release list             List a repository's releases, newest first, one line each
   tag view                 Print the commit a repository's tag points to (exit 9 when not found)
@@ -767,6 +770,38 @@ or pull request does not exist.
 USAGE
 }
 
+usage_issue_add_sub_issue() {
+    cat << USAGE
+Usage: cfwf issue add-sub-issue --repo <owner/repo> --issue <parent> --sub-issue <child>
+
+Links an issue to a parent issue as one of its sub-issues, with GitHub's REST sub-issues endpoint,
+then prints both issues' URLs.
+
+--repo       Always required; never taken from the current directory. Both issues are in it: a
+             sub-issue in another repository is not an option.
+--issue      Always required: the parent issue's number, above 0.
+--sub-issue  Always required: the child issue's number, above 0, and not the parent's own.
+--replace-parent, --json and --jq are not options: a child that already has another parent keeps
+it, and the output has one fixed format.
+
+Nothing is written until everything has been read: both numbers (so a pull request's number, or
+one that is not there, is never linked), then every page of the parent's sub-issues, so a child
+that is already one of them is left as it is.
+
+Output, three lines, each <field><TAB><value>:
+  parent     the parent issue's URL
+  sub-issue  the child issue's URL
+  result     linked, or already-linked when the child was a sub-issue of the parent already (then
+             nothing was written)
+At most ${SUB_ISSUE_LIMIT} sub-issues of the parent are read; more is a runtime failure and nothing is written.
+
+Exit codes: 0 linked, or already linked; ${POLICY_REFUSED_EXIT} GitHub refused the link (for example the child already
+has another parent, or the parent has as many sub-issues as GitHub allows), so nothing was linked;
+${ISSUE_NOT_FOUND_EXIT} an issue does not exist, or a number is a pull request's; 1 a runtime failure, such as a gh or
+network error or a repository that was not found, prefixed "cfwf:"; 2 a usage error.
+USAGE
+}
+
 usage_issue() {
     usage_issue_create
     printf '\n'
@@ -785,6 +820,45 @@ usage_issue() {
     usage_issue_reopen
     printf '\n'
     usage_issue_comments
+    printf '\n'
+    usage_issue_add_sub_issue
+}
+
+usage_label_create() {
+    cat << USAGE
+Usage: cfwf label create --repo <owner/repo> --name <name> [--color <hex>] [--description <text>]
+
+Creates one of the labels the repositories share (the copy of .github/labels.yml cfwf carries,
+which has every priority and workflow label), or reports that the repository has it already. A
+label that is there is never changed.
+
+--repo         Always required; never taken from the current directory.
+--name         Always required: a standard label's name, matched without regard to case and
+               created in its standard spelling. Any other name is refused (exit ${POLICY_REFUSED_EXIT}) before any gh
+               call. It must not be blank, hold a control character or be longer than ${LABEL_NAME_LIMIT} characters.
+--color        Optional: exactly six hexadecimal digits, with no #. The standard colour when not given.
+--description  Optional: at most ${LABEL_DESCRIPTION_LIMIT} characters with no control character, checked for leaks as a
+               title is. The standard description when not given.
+--json, --jq and --force are not options.
+
+The label is read first (repos/<repo>/labels/<name>). When it is not there the repository is read,
+so a repository that is not there is never taken for a missing label, and the label is created
+with one REST call. A label that turns up between the read and the create is reported as there.
+
+Output, four lines, each <field><TAB><value>:
+  label        the label's name as the repository has it
+  color        its colour, six hexadecimal digits
+  description  its description, each control character in it printed as a space
+  result       created; exists when the repository had it with this colour and description; or
+               exists-different when it had it with another colour or description, which is left
+               as it is
+color and description are the repository's own for exists and exists-different.
+
+Exit codes: 0 created or there already; ${POLICY_REFUSED_EXIT} the name is not a standard label, or the description
+was refused by the leak check; 1 a runtime failure, such as a gh or network error or a repository
+that was not found, prefixed "cfwf:"; 2 a usage error, a colour that is not six hexadecimal digits
+included.
+USAGE
 }
 
 usage_body() {
@@ -1138,6 +1212,8 @@ review threads.
 Run 'cfwf pr reply --help' for pr reply, which replies to an inline review comment.
 Run 'cfwf pr ready-at --help' for pr ready-at, which prints when a pull request was last marked
 ready for review.
+Run 'cfwf pr auto-merge-at --help' for pr auto-merge-at, which prints when auto-merge was last
+enabled on a pull request.
 Run 'cfwf pr hand-off --help' for pr hand-off, which hands a pull request off to human review in one
 step, enabling auto-merge once its checks have passed since it was marked ready.
 Run 'cfwf pr finalise-dependency --help' for pr finalise-dependency, which marks a bot dependency-update
@@ -1504,6 +1580,34 @@ Output, one line a step:
 Exit codes: 0 taken back; 1 a runtime failure, such as a gh or network error, prefixed "cfwf:",
 naming the steps already done when it fails part way; 2 a usage error; ${POLICY_REFUSED_EXIT} refused, nothing
 written; ${PR_NOT_FOUND_EXIT} the pull request does not exist (the number of an issue included).
+USAGE
+}
+
+usage_pr_auto_merge_at() {
+    cat << USAGE
+Usage: cfwf pr auto-merge-at --repo <owner/repo> --pr <n>
+
+Prints when auto-merge was last enabled on a pull request, and its last change, read from its
+timeline. It only reads: 'cfwf pr view --field auto-merge' gives whether it is on now.
+
+--repo  Always required; never taken from the current directory.
+--pr    The pull request's number, above 0.
+--json, --jq and --paginate are not options: every page of the timeline is read, and the output
+has one fixed format.
+
+Output, five lines, each <field><TAB><value>, "-" for a value there is none of:
+  enabled-at      the time of the last auto_merge_enabled, auto_squash_enabled or
+                  auto_rebase_enabled event, ISO 8601 in UTC
+  enabled-by      the login of whoever enabled it then, as GitHub gives it
+  last-change     enabled or disabled: the kind of the last of those events or auto_merge_disabled
+  last-change-at  its time
+  last-change-by  the login of whoever made it
+A pull request that never had auto-merge prints "-" on every line. At most ${AUTO_MERGE_EVENT_LIMIT} auto-merge
+events are read; more is a runtime failure and nothing is printed.
+
+Exit codes: 0 printed; ${PR_NOT_FOUND_EXIT} the pull request does not exist (the number of an issue included); 1 a
+runtime failure, such as a gh or network error or a repository that was not found, prefixed
+"cfwf:"; 2 a usage error.
 USAGE
 }
 
@@ -2097,6 +2201,7 @@ usage_for() {
         "issue list") usage_issue_list ;;
         "issue search") usage_issue_search ;;
         "issue label-history") usage_issue_label_history ;;
+        "issue add-sub-issue") usage_issue_add_sub_issue ;;
         "issue reopen") usage_issue_reopen ;;
         "issue comments") usage_issue_comments ;;
         body | "body check") usage_body ;;
@@ -2110,6 +2215,7 @@ usage_for() {
         "pr checks-wait") usage_pr_checks_wait ;;
         "pr view") usage_pr_view ;;
         "pr ready-at") usage_pr_ready_at ;;
+        "pr auto-merge-at") usage_pr_auto_merge_at ;;
         "pr diff") usage_pr_diff ;;
         "pr list") usage_pr_list ;;
         "pr create") usage_pr_create ;;
@@ -2122,6 +2228,7 @@ usage_for() {
         "pr comments") usage_pr_comments ;;
         "pr reply") usage_pr_reply ;;
         comment | "comment add") usage_comment ;;
+        label | "label create") usage_label_create ;;
         release) usage_release ;;
         "release view") usage_release_view ;;
         "release list") usage_release_list ;;
@@ -3670,10 +3777,108 @@ issue_comments() {
     printf '\nsummary printed=%s matched=%s total=%s omitted=%s\n' "${printed}" "${matched}" "${total}" "${omitted}"
 }
 
+# issue add-sub-issue: the child's number, and the id and URL of the issue read last.
+SUB_ISSUE=""
+SUB_READ_ID=""
+SUB_READ_URL=""
+# The most sub-issues of a parent read before linking. More are refused and nothing is written.
+readonly SUB_ISSUE_LIMIT=1000
+
+assign_sub_issue_option() {
+    local flag="$1" value="$2"
+    case "${flag}" in
+        --repo) assign_repository_option "${flag}" "${value}" ;;
+        --issue)
+            assign_once ISSUE "${flag}"
+            assign_option "${flag}" "${value}"
+            require_number_above_zero "${flag}" "${ISSUE}"
+            ;;
+        --sub-issue)
+            assign_once SUB_ISSUE "${flag}"
+            validate "${value}" '^[0-9]+$' "${flag}" "it must be a number"
+            SUB_ISSUE=$(without_leading_zeros "${value}")
+            require_number_above_zero "${flag}" "${SUB_ISSUE}"
+            ;;
+    esac
+}
+
+# Reads the number $1 of REPO through the issues endpoint, which answers for an issue and a pull
+# request alike, and sets SUB_READ_ID (GitHub's id, which the sub-issues endpoint takes) and
+# SUB_READ_URL. A number that is not there, or a pull request's, exits 9; a repository that is not
+# there is a failed read.
+read_issue_for_sub_issue() {
+    local number="$1" kind id url end
+    api_read "could not read ${REPO}#${number}" "repos/${REPO}/issues/${number}" \
+        "${FIELDS_ROW_DEF} [(if .pull_request == null then \"issue\" else \"pull\" end), .id, .html_url, \"end\"] | fields_row" \
+        || not_found_in_repository "${ISSUE_NOT_FOUND_EXIT}" "${REPO}#${number} was not found"
+    IFS="${ROW_SEPARATOR}" read -r kind id url end <<< "${GH_OUTPUT}"
+    if [[ ! "${kind}" =~ ^(issue|pull)$ ]] || [ "${end}" != end ] || [[ ! "${id}" =~ ^[1-9][0-9]*$ ]]; then
+        die "gh returned an unexpected result for ${REPO}#${number}"
+    fi
+    [ "${kind}" = issue ] || issue_not_found "${REPO}#${number} is a pull request, not an issue"
+    [[ "${url}" =~ ${REPOSITORY_URL_PATTERN}/issues/${number}$ ]] || die "gh returned an unexpected result for ${REPO}#${number}"
+    SUB_READ_ID="${id}"
+    SUB_READ_URL="${url}"
+}
+
+print_sub_issue_result() {
+    printf 'parent\t%s\nsub-issue\t%s\nresult\t%s\n' "$1" "$2" "$3"
+}
+
+# Links SUB_ISSUE to ISSUE as its sub-issue, once both are read and found to be issues of REPO and
+# the parent's sub-issues are read and do not hold the child already. The link is one REST call,
+# never tried again: GitHub answers 422 when it will not make it (the child has another parent, or
+# the parent is full), and that is a refusal; after any other failure the link may be there.
+issue_add_sub_issue() {
+    local parent_url child_url child_id row number end unexpected
+    local -a rows=()
+    parse_command_options assign_sub_issue_option "--repo --issue --sub-issue" "" "$@"
+    require REPO --repo
+    require ISSUE --issue
+    require SUB_ISSUE --sub-issue
+    [ "${ISSUE}" != "${SUB_ISSUE}" ] || usage_error "invalid value for --sub-issue: it must not be the --issue itself"
+    require_gh
+
+    read_issue_for_sub_issue "${ISSUE}"
+    parent_url="${SUB_READ_URL}"
+    read_issue_for_sub_issue "${SUB_ISSUE}"
+    child_url="${SUB_READ_URL}"
+    child_id="${SUB_READ_ID}"
+
+    unexpected="gh returned an unexpected result for the sub-issues of ${REPO}#${ISSUE}"
+    api_read "could not read the sub-issues of ${REPO}#${ISSUE}" \
+        "repos/${REPO}/issues/${ISSUE}/sub_issues?per_page=${API_PAGE_SIZE}" "${FIELDS_ROW_DEF} .[] | [.number, \"end\"] | fields_row" --paginate \
+        || die "${unexpected}"
+    if [ -n "${GH_OUTPUT}" ]; then
+        mapfile -t rows <<< "${GH_OUTPUT}"
+        [ "${#rows[@]}" -le "${SUB_ISSUE_LIMIT}" ] \
+            || die "${REPO}#${ISSUE} has more than ${SUB_ISSUE_LIMIT} sub-issues, so nothing is linked"
+        for row in "${rows[@]}"; do
+            IFS="${ROW_SEPARATOR}" read -r number end <<< "${row}"
+            [[ "${number}" =~ ^[1-9][0-9]*$ && "${end}" = end ]] || die "${unexpected}"
+            if [ "${number}" = "${SUB_ISSUE}" ]; then
+                print_sub_issue_result "${parent_url}" "${child_url}" already-linked
+                return 0
+            fi
+        done
+    fi
+
+    if ! gh_capture api --method POST "repos/${REPO}/issues/${ISSUE}/sub_issues" -F "sub_issue_id=${child_id}" \
+        --jq "${FIELDS_ROW_DEF} [.number, \"end\"] | fields_row"; then
+        [[ "${GH_ERROR}" != *"HTTP 422"* ]] \
+            || refuse_policy sub-issue "GitHub refused the link (the child may already have another parent)"
+        die "could not link ${REPO}#${SUB_ISSUE} to ${REPO}#${ISSUE}, and it may have been linked: $(gh_failure_text)"
+    fi
+    IFS="${ROW_SEPARATOR}" read -r number end <<< "${GH_OUTPUT}"
+    [ "${number}" = "${ISSUE}" ] && [ "${end}" = end ] \
+        || die "${REPO}#${SUB_ISSUE} may have been linked to ${REPO}#${ISSUE} (gh returned an unexpected answer); run this again to check"
+    print_sub_issue_result "${parent_url}" "${child_url}" linked
+}
+
 cmd_issue() {
     dispatch_subcommand issue create issue_create edit issue_edit view issue_view plan-status issue_plan_status \
         list issue_list search issue_search \
-        label-history issue_label_history reopen issue_reopen comments issue_comments -- "$@"
+        label-history issue_label_history reopen issue_reopen comments issue_comments add-sub-issue issue_add_sub_issue -- "$@"
 }
 
 body_check() {
@@ -5948,7 +6153,7 @@ pr_take_back() {
 
 cmd_pr() {
     dispatch_subcommand pr checks pr_checks checks-wait pr_checks_wait view pr_view list pr_list comments pr_comments reply pr_reply create pr_create \
-        ready-at pr_ready_at diff pr_diff edit pr_edit hand-off pr_hand_off finalise-dependency pr_finalise_dependency take-back pr_take_back \
+        ready-at pr_ready_at auto-merge-at pr_auto_merge_at diff pr_diff edit pr_edit hand-off pr_hand_off finalise-dependency pr_finalise_dependency take-back pr_take_back \
         close pr_close reopen pr_reopen -- "$@"
 }
 
@@ -5983,6 +6188,128 @@ comment_add() {
     [[ "${url}" =~ ${REPOSITORY_URL_PATTERN}/(pull|issues)/${TARGET_NUMBER}#issuecomment-[0-9]+$ ]] \
         || die "gh returned an unexpected result for the comment, which may have been posted on ${REPO}#${TARGET_NUMBER}"
     printf '%s\n' "${url}"
+}
+
+# label create: the name, colour and description asked for, and the label as the repository has it.
+readonly LABEL_DESCRIPTION_LIMIT=100
+readonly LABEL_COLOUR_PATTERN='^[0-9A-Fa-f]{6}$'
+LABEL_NAME=""
+LABEL_COLOUR=""
+LABEL_DESCRIPTION=""
+FOUND_LABEL_NAME=""
+FOUND_LABEL_COLOUR=""
+FOUND_LABEL_DESCRIPTION=""
+
+assign_label_create_option() {
+    local flag="$1" value="$2"
+    case "${flag}" in
+        --repo) assign_repository_option "${flag}" "${value}" ;;
+        --name)
+            assign_once LABEL_NAME "${flag}"
+            validate "${value}" '^[^[:cntrl:]]+$' "${flag}" "it must not contain a control character"
+            ! holds_control_character "${value}" \
+                || usage_error "invalid value for ${flag}: it must not contain a control character"
+            validate_visible_text "${value}" "${LABEL_NAME_LIMIT}" "${flag}"
+            LABEL_NAME="${value}"
+            ;;
+        --color)
+            assign_once LABEL_COLOUR "${flag}"
+            validate "${value}" "${LABEL_COLOUR_PATTERN}" "${flag}" "it must be six hexadecimal digits, with no #"
+            LABEL_COLOUR="${value,,}"
+            ;;
+        --description)
+            assign_once LABEL_DESCRIPTION "${flag}"
+            validate "${value}" '^[^[:cntrl:]]+$' "${flag}" "it must not contain a control character"
+            ! holds_control_character "${value}" \
+                || usage_error "invalid value for ${flag}: it must not contain a control character"
+            validate_visible_text "${value}" "${LABEL_DESCRIPTION_LIMIT}" "${flag}"
+            LABEL_DESCRIPTION="${value}"
+            ;;
+    esac
+}
+
+# Prints the label name $1 as it goes in an API path: as branch_path writes a name, with a / encoded
+# too, because a label name is one path segment.
+label_path() {
+    local encoded
+    encoded=$(branch_path "$1")
+    printf '%s' "${encoded//\//%2F}"
+}
+
+# The jq program that reads a label: its name, colour and description (empty for none), made printable.
+readonly LABEL_ROW_PROGRAM='[.name, .color, (.description // ""), "end"] | fields_row'
+
+# Sets FOUND_LABEL_* from the label row in GH_OUTPUT, dying when it is not the label LABEL_NAME (in
+# any case) with a colour of six hexadecimal digits.
+take_label_row() {
+    local end
+    IFS="${ROW_SEPARATOR}" read -r FOUND_LABEL_NAME FOUND_LABEL_COLOUR FOUND_LABEL_DESCRIPTION end <<< "${GH_OUTPUT}"
+    if [ "${end}" != end ] || [ "${FOUND_LABEL_NAME,,}" != "${LABEL_NAME,,}" ] \
+        || ! matches_pattern "${FOUND_LABEL_COLOUR}" "${LABEL_COLOUR_PATTERN}"; then
+        die "gh returned an unexpected result for the label ${LABEL_NAME} of ${REPO}"
+    fi
+}
+
+# Reads the label at the path $1 into FOUND_LABEL_*. Returns 1 when GitHub answers 404.
+read_label() {
+    api_read "could not read the label ${LABEL_NAME} of ${REPO}" "repos/${REPO}/labels/$1" "${FIELDS_ROW_DEF} ${LABEL_ROW_PROGRAM}" \
+        || return 1
+    take_label_row
+}
+
+# Prints the label as the repository has it and the result $1.
+print_label_result() {
+    printf 'label\t%s\ncolor\t%s\ndescription\t%s\nresult\t%s\n' \
+        "${FOUND_LABEL_NAME}" "${FOUND_LABEL_COLOUR,,}" "${FOUND_LABEL_DESCRIPTION}" "$1"
+}
+
+# Prints the label the repository has already: exists when it has the colour and description asked
+# for, exists-different when not. It is never changed.
+print_existing_label() {
+    if [ "${FOUND_LABEL_COLOUR,,}" = "${LABEL_COLOUR,,}" ] && [ "${FOUND_LABEL_DESCRIPTION}" = "${LABEL_DESCRIPTION}" ]; then
+        print_label_result exists
+    else
+        print_label_result exists-different
+    fi
+}
+
+# Creates the standard label LABEL_NAME in REPO unless the repository has it, which it reports
+# without changing. The name is refused before any gh call unless it is a standard label, and the
+# description is checked for leaks before anything is written.
+label_create() {
+    local encoded
+    parse_command_options assign_label_create_option "--repo --name --color --description" "" "$@"
+    require REPO --repo
+    require LABEL_NAME --name
+    standard_label "${LABEL_NAME}" \
+        || refuse_policy label "not a standard label: only the labels the repositories share can be created"
+    LABEL_NAME="${STANDARD_NAME}"
+    [ -n "${LABEL_COLOUR}" ] || LABEL_COLOUR="${STANDARD_COLOUR}"
+    [ -n "${LABEL_DESCRIPTION}" ] || LABEL_DESCRIPTION="${STANDARD_DESCRIPTION}"
+    require_gh
+    check_value_for_leaks "${LABEL_DESCRIPTION}" "${REPO}" description
+
+    encoded=$(label_path "${LABEL_NAME}")
+    if read_label "${encoded}"; then
+        print_existing_label
+        return 0
+    fi
+    api_read_repository .id
+
+    if ! gh_capture api --method POST "repos/${REPO}/labels" -f "name=${LABEL_NAME}" -f "color=${LABEL_COLOUR}" \
+        -f "description=${LABEL_DESCRIPTION}" --jq "${FIELDS_ROW_DEF} ${LABEL_ROW_PROGRAM}"; then
+        if [[ "${GH_ERROR}" == *already_exists* || "${GH_ERROR}" == *"already exists"* ]] && read_label "${encoded}"; then
+            print_existing_label
+            return 0
+        fi
+        die "could not create the label ${LABEL_NAME} in ${REPO}: $(gh_failure_text)"
+    fi
+    take_label_row
+    print_label_result created
+}
+
+cmd_label() {
+    dispatch_subcommand label create label_create -- "$@"
 }
 
 cmd_comment() {
@@ -6261,6 +6588,50 @@ pr_ready_at() {
     require_gh
     read_last_ready_at
     printf 'ready-at\t%s\nsource\t%s\n' "${READY_AT}" "${READY_SOURCE}"
+}
+
+# The most auto-merge events read from one timeline. More are refused, never printed in part.
+readonly AUTO_MERGE_EVENT_LIMIT=1000
+
+# Prints when auto-merge was last enabled on the pull request (any merge method), and the last
+# enable or disable event, from every page of its timeline, which is oldest first. Every row is
+# checked and nothing is printed until all of it is done.
+pr_auto_merge_at() {
+    local row event at actor end program
+    local enabled_at="-" enabled_by="-" last="-" last_at="-" last_by="-"
+    local -a rows=()
+    parse_command_options assign_view_option "--repo --pr" "" "$@"
+    require REPO --repo
+    require PR --pr
+    require_target
+    require_gh
+    read_timeline_target
+    program='select(.event == "auto_merge_enabled" or .event == "auto_squash_enabled" or .event == "auto_rebase_enabled"'
+    program+=' or .event == "auto_merge_disabled") | [.event, .created_at, .actor.login, "end"] | fields_row'
+    read_timeline "${program}"
+    if [ -n "${GH_OUTPUT}" ]; then
+        mapfile -t rows <<< "${GH_OUTPUT}"
+        [ "${#rows[@]}" -le "${AUTO_MERGE_EVENT_LIMIT}" ] \
+            || die "${REPO}#${PR} has more than ${AUTO_MERGE_EVENT_LIMIT} auto-merge events, so none is printed"
+        for row in "${rows[@]}"; do
+            IFS="${ROW_SEPARATOR}" read -r event at actor end <<< "${row}"
+            is_timed_row "${at}" "${end}" || unexpected_timeline_result
+            [ -z "${actor}" ] || matches_pattern "${actor}" "${LOGIN_PATTERN}" || unexpected_timeline_result
+            case "${event}" in
+                auto_merge_enabled | auto_squash_enabled | auto_rebase_enabled)
+                    enabled_at="${at}"
+                    enabled_by="${actor:--}"
+                    last=enabled
+                    ;;
+                auto_merge_disabled) last=disabled ;;
+                *) unexpected_timeline_result ;;
+            esac
+            last_at="${at}"
+            last_by="${actor:--}"
+        done
+    fi
+    printf 'enabled-at\t%s\nenabled-by\t%s\nlast-change\t%s\nlast-change-at\t%s\nlast-change-by\t%s\n' \
+        "${enabled_at}" "${enabled_by}" "${last}" "${last_at}" "${last_by}"
 }
 
 # The tail stage of run log, an awk program run in the C locale on gh run view --log-failed, whose
@@ -6877,6 +7248,7 @@ main() {
         auth) cmd_auth "$@" ;;
         pr) cmd_pr "$@" ;;
         comment) cmd_comment "$@" ;;
+        label) cmd_label "$@" ;;
         release) cmd_release "$@" ;;
         tag) cmd_tag "$@" ;;
         branch) cmd_branch "$@" ;;
