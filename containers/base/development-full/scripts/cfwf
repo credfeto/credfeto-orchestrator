@@ -353,6 +353,7 @@ Commands:
   body check               Check a body for leaks without posting it (exit 8 when refused)
   repo view                Print a repository's default branch, visibility, merge methods and description
   repo collaborators       List a repository's collaborators and their roles, sorted by login in the C locale
+  repo advisories          List a repository's security advisories: GHSA id, severity, state and summary
   auth status              Print the authenticated login, the host and the gh version, never a token
   branch required-checks   Print the checks a branch requires, from its protection and rulesets (exit 9 when not found)
   pr checks                Judge the checks on a PR's, a branch's or a commit's head (exit 0, 3, 4 or 5)
@@ -838,10 +839,43 @@ see, prefixed "cfwf:"; 2 a usage error.
 USAGE
 }
 
+usage_repo_advisories() {
+    cat << USAGE
+Usage: cfwf repo advisories --repo <owner/repo>
+
+Lists a repository's security advisories (its repository security advisories, the ones GitHub
+shows under Security > Advisories), every page read before anything is printed.
+
+--repo  Always required; never taken from the current directory.
+--json, --jq, --state, --severity, --sort, --direction, --paginate and --limit are not options:
+every advisory GitHub shows to the caller is listed, in one fixed format.
+
+Output, tab separated, in GitHub's order (newest first), with no header and no summary:
+  <ghsa_id>  <severity>  <state>  <summary>
+Each line has exactly four tab-separated fields and none is empty. ghsa_id is the advisory's
+GHSA id (GHSA-xxxx-xxxx-xxxx). severity is GitHub's own: critical, high, medium or low, and "-"
+when GitHub gives none. state is GitHub's own: published, closed, withdrawn, draft or triage. A
+caller without the right to see drafts sees only the published ones. summary is free text written
+by whoever filed the advisory: each control character in it (a tab or a newline included) is
+printed as a space, so a line is always four fields, and it is not filtered in any other way, so
+read it as untrusted text; "-" when it is empty. An answer holding anything else as a ghsa_id, a
+severity or a state is a runtime failure and nothing is printed.
+
+At most ${ADVISORY_LIMIT} advisories are listed. More than that is a runtime failure and nothing is
+printed, never part of the list.
+
+Exit codes: 0 listed, an empty list included (nothing is printed); 1 a runtime failure, such as a
+gh or network error or a repository that was not found or that the caller cannot see, prefixed
+"cfwf:"; 2 a usage error.
+USAGE
+}
+
 usage_repo() {
     usage_repo_view
     printf '\n'
     usage_repo_collaborators
+    printf '\n'
+    usage_repo_advisories
 }
 
 usage_auth() {
@@ -1830,6 +1864,7 @@ usage_for() {
         repo) usage_repo ;;
         "repo view") usage_repo_view ;;
         "repo collaborators") usage_repo_collaborators ;;
+        "repo advisories") usage_repo_advisories ;;
         auth | "auth status") usage_auth ;;
         pr | "pr checks") usage_pr ;;
         "pr checks-wait") usage_pr_checks_wait ;;
@@ -3224,8 +3259,52 @@ repo_collaborators() {
     printf '%s\n' "${lines[@]}" | LC_ALL=C sort
 }
 
+# The most advisories repo advisories prints. A repository with more is refused, never listed in
+# part.
+readonly ADVISORY_LIMIT=1000
+# A GHSA id as GitHub writes it: GHSA and three groups of four characters from its alphabet. Nothing
+# in it can add a field or a line to what is printed.
+readonly GHSA_ID_PATTERN='^GHSA(-[23456789cfghjmpqrvwx]{4}){3}$'
+# A repository security advisory's severity and state, as GitHub gives them.
+readonly ADVISORY_SEVERITY_PATTERN='^(critical|high|medium|low)$'
+readonly ADVISORY_STATE_PATTERN='^(published|closed|withdrawn|draft|triage)$'
+
+# Lists the security advisories of REPO in GitHub's order, from one paged REST read
+# (repos/<repo>/security-advisories, the only route to a repository's own advisories). With
+# --paginate gh runs the jq program on each page, so a row is printed for each advisory and there
+# is no count to check the rows against. Each row ends with "end" (FIELDS_ROW_DEF), and nothing is
+# printed until every row has been checked: its GHSA id is one, its severity (when given) and state
+# are GitHub's, and it has exactly its fields. The summary is free text and is only made printable
+# (control characters become spaces). A 404 is the repository not being there or not being shown
+# to the caller.
+repo_advisories() {
+    local row ghsa_id severity state summary end
+    local -a rows=() lines=()
+    parse_command_options assign_repository_option "--repo" "" "$@"
+    require REPO --repo
+    require_gh
+    api_read "could not list the security advisories of ${REPO}" "repos/${REPO}/security-advisories?per_page=${API_PAGE_SIZE}" \
+        "${FIELDS_ROW_DEF} .[] | [.ghsa_id, .severity, .state, .summary, \"end\"] | fields_row" --paginate \
+        || repository_not_found "${REPO}"
+    [ -n "${GH_OUTPUT}" ] || return 0
+
+    mapfile -t rows <<< "${GH_OUTPUT}"
+    [ "${#rows[@]}" -le "${ADVISORY_LIMIT}" ] \
+        || die "${REPO} has more than ${ADVISORY_LIMIT} security advisories, so none is printed"
+    for row in "${rows[@]}"; do
+        IFS="${ROW_SEPARATOR}" read -r ghsa_id severity state summary end <<< "${row}"
+        if ! matches_pattern "${ghsa_id}" "${GHSA_ID_PATTERN}" \
+            || { [ -n "${severity}" ] && ! matches_pattern "${severity}" "${ADVISORY_SEVERITY_PATTERN}"; } \
+            || ! matches_pattern "${state}" "${ADVISORY_STATE_PATTERN}" || [ "${end}" != end ]; then
+            die "gh returned an unexpected result for the security advisories of ${REPO}"
+        fi
+        lines+=("${ghsa_id}"$'\t'"${severity:--}"$'\t'"${state}"$'\t'"${summary:--}")
+    done
+    printf '%s\n' "${lines[@]}"
+}
+
 cmd_repo() {
-    dispatch_subcommand repo view repo_view collaborators repo_collaborators -- "$@"
+    dispatch_subcommand repo view repo_view collaborators repo_collaborators advisories repo_advisories -- "$@"
 }
 
 RATE_LIMIT_ASKED=""
