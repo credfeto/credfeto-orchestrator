@@ -417,7 +417,7 @@ teardown() {
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false" ""
     [ "${status}" -eq 0 ]
     [[ "${output}" == *'If this round pushes a genuine code commit'*'set the board status to "Development"'* ]]
-    [[ "${output}" == *"only action is a reply, a label sync, a \`gh pr edit\` metadata change"*"or re-running a flaky check"*"with no commit pushed: leave the board status exactly as it currently is (do NOT reset it to \"Development\")"* ]]
+    [[ "${output}" == *"only action is a reply, a label sync, a \`cfwf pr edit\` metadata change"*"or re-running a flaky check"*"with no commit pushed: leave the board status exactly as it currently is (do NOT reset it to \"Development\")"* ]]
 }
 
 # --- tightened plan-approval re-block instruction (#1140) -----------------------
@@ -498,7 +498,7 @@ teardown() {
     [[ "${output}" == *"${REPO_WORK_DIR}"* ]]
     [[ "${output}" == *"gh pr edit 7 --repo ${REPO_FULL} --add-label Blocked"* ]]
     [[ "${output}" == *"Read AI instructions from /resolved/.ai-instructions"* ]]
-    [[ "${output}" == *"gh pr ready 7 --repo ${REPO_FULL}"* ]]
+    [[ "${output}" == *"cfwf pr hand-off --repo ${REPO_FULL} --pr 7"* ]]
 }
 
 @test "build_pr_claude_md references AI instructions for CLI, label, and CI rules" {
@@ -627,11 +627,20 @@ teardown() {
     [[ "${output}" == *"force-with-lease"* ]]
 }
 
-@test "build_pr_claude_md includes auto-merge step for regular PRs" {
+@test "build_pr_claude_md hands regular PRs off with cfwf pr hand-off, never raw gh pr ready or merge (#1761)" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"cfwf pr hand-off --repo ${REPO_FULL} --pr 7 --title"*"--description-file -"*"--body-file"* ]]
+    [[ "${output}" != *"gh pr merge --auto"* ]]
+    [[ "${output}" != *"gh pr ready"* ]]
+}
+
+@test "build_pr_claude_md dependency PRs still mark ready and enable auto-merge without a hand-off (#1761)" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "true"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"gh pr merge --auto --merge 7 --repo ${REPO_FULL}"* ]]
     [[ "${output}" == *"gh pr ready 7 --repo ${REPO_FULL}"* ]]
+    [[ "${output}" != *"cfwf pr hand-off"* ]]
 }
 
 @test "build_pr_claude_md PHASE H marks the PR ready before enabling auto-merge (#1651)" {
@@ -639,10 +648,11 @@ teardown() {
     [ "${status}" -eq 0 ]
     local phase_h="${output#*PHASE H: Finalize}"
     phase_h="${phase_h%%Otherwise, if auto-merge is already enabled*}"
-    [[ "${phase_h}" == *"gh pr merge --auto --merge 7 --repo ${REPO_FULL}"* ]]
-    local before_merge="${phase_h%%gh pr merge --auto --merge 7*}"
-    [[ "${before_merge}" == *"gh pr ready 7 --repo ${REPO_FULL}"* ]]
-    [[ "${phase_h}" == *"leave the PR ready without auto-merge"* ]]
+    [[ "${phase_h}" == *"cfwf pr hand-off --repo ${REPO_FULL} --pr 7"* ]]
+    [[ "${phase_h}" == *"marks it ready"*"enables auto-merge"* ]]
+    [[ "${phase_h}" == *"keep every \"Closes #<issue>\" line"* ]]
+    [[ "${phase_h}" == *"Exit 7"*"Exit 8"* ]]
+    [[ "${phase_h}" == *"unavailable on the repository, which leaves the PR ready for a human to merge"* ]]
 }
 
 @test "build_pr_claude_md dependency PR marks the PR ready before enabling auto-merge (#1651)" {
@@ -6609,7 +6619,8 @@ STUBEOF
     for flag in true false; do
         run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "${flag}"
         [ "${status}" -eq 0 ]
-        [[ "${output}" == *"gh pr merge --disable-auto 7 --repo ${REPO_FULL}"* ]]
+        [[ "${output}" == *"cfwf pr take-back --repo ${REPO_FULL} --pr 7 --body-file -"* ]]
+        [[ "${output}" == *"cfwf pr view --repo ${REPO_FULL} --pr 7 --field files"* ]]
     done
 }
 
@@ -13932,7 +13943,8 @@ STUBEOF
     run build_issue_claude_md 42 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"Implementation Plan"* ]]
-    [[ "${output}" == *'any(test("## Implementation Plan"'* ]]
+    [[ "${output}" == *"cfwf issue plan-status --repo ${REPO_FULL} --issue 42"* ]]
+    [[ "${output}" == *'"plan<TAB>yes" or "plan<TAB>no"'* ]]
 }
 
 @test "build_issue_claude_md instructs agent to post plan comment in correct format" {
