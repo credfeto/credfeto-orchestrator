@@ -27,6 +27,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - cfwf issue comments to read an issue's or pull request's top-level comments with their bodies, filtered by --since and --author, capped and count-checked (#1764)
 - cfwf pr list --label to list only the open pull requests carrying every given label (#1767)
 - cfwf pr finalise-dependency marks a bot dependency-update PR ready and enables auto-merge, without the AI hand-off's title, description, board or review-record steps; dependency prompts use it instead of raw gh (#1771)
+- cfwf repo list, repo search, pr search, code search and workflow list: read-only searching and listing for agents (#1765, #1766)
 ### Fixed
 - CI: workflow expressions in run and script bodies are passed through env, so the no-expressions-in-scripts check passes
 - CI: the remaining workflow expressions in run bodies (image summaries, dispatch-secret check, runner name) are passed through env
