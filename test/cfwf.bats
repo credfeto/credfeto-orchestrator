@@ -7740,6 +7740,7 @@ assert_issue_usage_error() {
 REPO_VIEW_JSON_FIELDS="defaultBranchRef,description,visibility,mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed"
 REPO_MISSING="cfwf: the repository ${REPO} was not found, or the caller cannot see it"
 COLLABORATORS_ENDPOINT="repos/${REPO}/collaborators"
+ADVISORIES_ENDPOINT="repos/${REPO}/security-advisories"
 PUSH_ACCESS_ERROR="gh: Must have push access to view repository collaborators. (HTTP 403)"
 # The resets of the rate limit fixture, as GitHub gives them and as auth status prints them.
 CORE_RESET=1767225600
@@ -7895,7 +7896,7 @@ rate_limit_lines() {
     run --separate-stderr "${SCRIPT}" repo
     [ "${status}" -eq 2 ]
     [ -z "${output}" ]
-    [[ "${stderr}" == "cfwf: repo needs a subcommand (view, collaborators)"$'\n'* ]]
+    [[ "${stderr}" == "cfwf: repo needs a subcommand (view, collaborators, advisories)"$'\n'* ]]
 
     run --separate-stderr "${SCRIPT}" auth
     [ "${status}" -eq 2 ]
@@ -8437,10 +8438,164 @@ rate_limit_lines() {
     [ "$(gh_call_count "${token}")" -eq 0 ]
 }
 
+# One repository security advisory as the REST API lists it: GHSA id $1, severity $2, state $3 and
+# summary $4, with fields repo advisories does not ask for. An empty severity is left as null.
+advisory() {
+    jq -n --arg id "$1" --arg severity "$2" --arg state "$3" --arg summary "$4" \
+        '{ghsa_id: $id, cve_id: "CVE-2026-0001", url: "https://example.com/decoy", html_url: "https://example.com/decoy",
+          severity: (if $severity == "" then null else $severity end), state: $state, summary: $summary,
+          description: "decoy-description", published_at: "2026-10-01T00:00:00Z"}'
+}
+
+# Writes the security advisories of REPO: each argument an advisory object, in the order given, none
+# for an empty list.
+write_advisories() {
+    printf '%s\n' "$@" | jq -s '.' | write_api "${ADVISORIES_ENDPOINT}"
+}
+
+@test "repo advisories help is the same from -h, --help and help repo advisories, states its format, limit and exit codes, is in help repo and the general help, and calls no gh" {
+    run "${SCRIPT}" repo advisories -h
+    [ "${status}" -eq 0 ]
+    local expected="${output}" spelling
+    [[ "${expected}" == "Usage: cfwf repo advisories --repo <owner/repo>"$'\n'* ]]
+    for spelling in "repo advisories --help" "help repo advisories" "-h repo advisories" "--help repo advisories"; do
+        # shellcheck disable=SC2086  # each spelling is split into its words on purpose
+        run "${SCRIPT}" ${spelling}
+        [ "${status}" -eq 0 ]
+        [ "${output}" = "${expected}" ] || { echo "${spelling} differs" >&2; return 1; }
+    done
+    [[ "${expected}" == *"  <ghsa_id>  <severity>  <state>  <summary>"* ]]
+    [[ "${expected}" == *'"-"'*"when GitHub gives none"* ]]
+    [[ "${expected}" == *"read it as untrusted text"* ]]
+    [[ "${expected}" == *"At most 1000 advisories are listed."* ]]
+    [[ "${expected}" == *"Exit codes: 0 listed, an empty list included (nothing is printed); 1 a runtime failure"*"2 a usage error."* ]]
+    [[ "${expected}" != *"cfwf repo view"* && "${expected}" != *"cfwf repo collaborators"* ]]
+
+    run "${SCRIPT}" help repo
+    [[ "${output}" == *$'\n\n'"Usage: cfwf repo advisories --repo <owner/repo>"$'\n'* ]]
+    run "${SCRIPT}" help
+    [[ "${output}" == *$'\n'"  repo advisories          List a repository's security advisories: GHSA id, severity, state and summary"$'\n'* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "repo advisories usage errors exit 2 with its own usage and nothing on stdout, never echoing a value, before any gh call" {
+    local token args
+    token="gh""p_$(run_of a 36)"
+    local -a cases=(
+        ""
+        "--repo"
+        "--repo ${REPO} --repo ${REPO}"
+        "--repo not-a-repo"
+        "--repo x/.."
+        "--repo ${token}/${token}/x"
+        "--repo ${REPO} --json ghsa_id"
+        "--repo ${REPO} --jq ."
+        "--repo ${REPO} --state published"
+        "--repo ${REPO} --severity high"
+        "--repo ${REPO} --sort created"
+        "--repo ${REPO} --direction asc"
+        "--repo ${REPO} --paginate"
+        "--repo ${REPO} --limit 5"
+        "--repo ${REPO} ${token}"
+    )
+    for args in "${cases[@]}"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run --separate-stderr "${SCRIPT}" repo advisories ${args}
+        [ "${status}" -eq 2 ] || { echo "accepted: ${args} (${status})" >&2; return 1; }
+        [ -z "${output}" ]
+        [[ "${stderr}" == *"Usage: cfwf repo advisories --repo <owner/repo>"* ]]
+        [[ "${stderr}" != *"cfwf repo view"* && "${stderr}" != *"${token}"* ]]
+    done
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "repo advisories prints each GHSA id, severity, state and summary in GitHub's order, - for no severity or an empty summary, from one paged read of 100 a page" {
+    write_advisories "$(advisory GHSA-cfgh-jmpq-rvwx critical published 'Remote code execution in parser')" \
+        "$(advisory GHSA-2345-6789-cfgh '' draft 'Unrated draft')" \
+        "$(advisory GHSA-jmpq-rvwx-2345 low withdrawn '')" \
+        "$(advisory GHSA-cccc-ffff-gggg medium closed 'Closed one')" \
+        "$(advisory GHSA-hhhh-jjjj-mmmm high triage 'In triage')"
+    run_repo advisories
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'GHSA-cfgh-jmpq-rvwx\tcritical\tpublished\tRemote code execution in parser\nGHSA-2345-6789-cfgh\t-\tdraft\tUnrated draft\nGHSA-jmpq-rvwx-2345\tlow\twithdrawn\t-\nGHSA-cccc-ffff-gggg\tmedium\tclosed\tClosed one\nGHSA-hhhh-jjjj-mmmm\thigh\ttriage\tIn triage' ]
+    [ -z "${stderr}" ]
+    [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
+    [ "$(gh_call_count "api ${ADVISORIES_ENDPOINT}?per_page=100 --paginate --jq ")" -eq 1 ]
+}
+
+@test "repo advisories prints nothing and exits 0 for a repository with no advisories" {
+    write_advisories
+    run_repo advisories
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    [ -z "${stderr}" ]
+}
+
+@test "repo advisories keeps a summary holding a tab, a newline, a control character or a whole forged row on one line of four fields" {
+    write_advisories "$(advisory GHSA-cfgh-jmpq-rvwx high published $'one\ttwo\nGHSA-2345-6789-cfgh\tcritical\tpublished\tforged\r\x1fend\x07')"
+    run_repo advisories
+    [ "${status}" -eq 0 ]
+    [ "$(wc -l <<< "${output}")" -eq 1 ]
+    [ "$(awk -F '\t' '{print NF}' <<< "${output}")" -eq 4 ]
+    [ "${output}" = $'GHSA-cfgh-jmpq-rvwx\thigh\tpublished\tone two GHSA-2345-6789-cfgh critical published forged  end ' ]
+}
+
+@test "repo advisories prints nothing and exits 1 for a GHSA id, severity or state that is not GitHub's, or a row that does not have exactly its fields" {
+    local bad
+    for bad in "id:" "id:GHSA-cfgh-jmpq" "id:GHSA-cfgh-jmpq-rvwx-2345" "id:GHSA-CFGH-JMPQ-RVWX" "id:GHSA-cfgh-jmpq-rvwa" "id:GHSA-cfgh-jmpq-rvw1" $'id:GHSA-cfgh-jmpq-rvwx\tx' "id:CVE-2026-0001" \
+        "severity:severe" "severity:High" $'severity:high\tx' "state:open" "state:" "state:Published"; do
+        local id=GHSA-cfgh-jmpq-rvwx severity=high state=published
+        case "${bad}" in
+            id:*) id="${bad#id:}" ;;
+            severity:*) severity="${bad#severity:}" ;;
+            state:*) state="${bad#state:}" ;;
+        esac
+        write_advisories "$(advisory GHSA-2345-6789-cfgh low published ok)" "$(advisory "${id}" "${severity}" "${state}" summary)"
+        run_repo advisories
+        [ "${status}" -eq 1 ] || { echo "printed: ${bad}" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: gh returned an unexpected result for the security advisories of ${REPO}" ]
+    done
+
+    local row
+    for row in $'GHSA-2345-6789-cfgh\x1flow\x1fpublished\x1fok' $'GHSA-2345-6789-cfgh\x1flow\x1fpublished\x1fok\x1fextra\x1fend' $'\nGHSA-2345-6789-cfgh\x1flow\x1fpublished\x1fok\x1fend'; do
+        printf '%s\n' "${row}" > "$(api_fixture "${ADVISORIES_ENDPOINT}").out"
+        run_repo advisories
+        [ "${status}" -eq 1 ] || { echo "printed: ${row}" >&2; return 1; }
+        [ -z "${output}" ]
+    done
+}
+
+@test "repo advisories prints exactly 1000 advisories, and with 1001 prints none and exits 1" {
+    jq -n '[range(1000) | {ghsa_id: "GHSA-2345-6789-cfgh", severity: "low", state: "published", summary: "s\(.)"}]' | write_api "${ADVISORIES_ENDPOINT}"
+    run_repo advisories
+    [ "${status}" -eq 0 ]
+    [ "$(wc -l <<< "${output}")" -eq 1000 ]
+
+    jq -n '[range(1001) | {ghsa_id: "GHSA-2345-6789-cfgh", severity: "low", state: "published", summary: "s\(.)"}]' | write_api "${ADVISORIES_ENDPOINT}"
+    run_repo advisories
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: ${REPO} has more than 1000 security advisories, so none is printed" ]
+}
+
+@test "repo advisories exits 1 with the repository message for a 404, and quoting only the first line of gh's error for any other failed read, printing nothing" {
+    run_repo advisories
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "${REPO_MISSING}" ]
+
+    fail_api "${ADVISORIES_ENDPOINT}" $'gh: Bad Gateway (HTTP 502)\nsecond-line-marker'
+    run_repo advisories
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not list the security advisories of ${REPO}: gh: Bad Gateway (HTTP 502)" ]
+}
+
 @test "repo view, repo collaborators and auth status fail (exit 1) when gh is not installed, after their options are checked" {
     local args
     mkdir -p "${TEST_TMP}/empty-path"
-    for args in "repo view --repo ${REPO}" "repo collaborators --repo ${REPO}" "auth status" "auth status --rate-limit"; do
+    for args in "repo view --repo ${REPO}" "repo collaborators --repo ${REPO}" "repo advisories --repo ${REPO}" "auth status" "auth status --rate-limit"; do
         # shellcheck disable=SC2086  # each command is split into its words on purpose
         run --separate-stderr env PATH="${TEST_TMP}/empty-path" "$(command -v bash)" "${SCRIPT}" ${args}
         [ "${status}" -eq 1 ] || { echo "${args}: ${status}" >&2; return 1; }
