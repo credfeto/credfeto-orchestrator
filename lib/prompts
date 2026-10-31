@@ -239,11 +239,11 @@ _build_issue_branch_step() {
     local board_note
     board_note="Only once the draft pull request (with its placeholder CHANGELOG.md entry) has been successfully created, update the Workflow board status to \"Development\"$(_board_set_clause issue "${item_id}" "Development") (if board data is present above) — do NOT advance the board before the draft PR exists, so a session that dies mid-step does not leave the board looking further along than the work actually is (#1262). Once the draft pull request exists, STOP — the pull-request workflow takes over on the next cycle to implement, review, and merge it."
     if [ -n "${stale_branch}" ]; then
-        printf 'When ready to start work: an existing branch for this issue already exists (see the mandatory note above) — check it out and continue on it INSTEAD OF creating a new one: git -C %s checkout %s. It may already contain only a placeholder CHANGELOG.md entry from an earlier session; implement the plan on top of it, then push and create a draft pull request. The PR body MUST include the line "Closes #%s" so GitHub automatically closes the issue when the PR is merged. Do NOT create a second branch for this issue. %s' \
-            "${repo_path}" "${stale_branch}" "${item_id}" "${board_note}"
+        printf 'When ready to start work: an existing branch for this issue already exists (see the mandatory note above) — check it out and continue on it INSTEAD OF creating a new one: git -C %s checkout %s. It may already contain only a placeholder CHANGELOG.md entry from an earlier session; implement the plan on top of it, then push and create a draft pull request with cfwf pr create --repo %s --head %s --title "<type>(<scope>): <description>" --body-file - (body on stdin). The PR body MUST include the line "Closes #%s" so GitHub automatically closes the issue when the PR is merged. Do NOT create a second branch for this issue. %s' \
+            "${repo_path}" "${stale_branch}" "${REPO_FULL}" "${stale_branch}" "${item_id}" "${board_note}"
     else
-        printf 'When ready to start work: create a new branch BEFORE making any changes to the repo, commit a placeholder CHANGELOG.md entry, push upstream, and create a draft pull request. The PR body MUST include the line "Closes #%s" so GitHub automatically closes the issue when the PR is merged. Example: gh pr create --draft --title "..." --body $'"'"'...\n\nCloses #%s'"'"'. %s' \
-            "${item_id}" "${item_id}" "${board_note}"
+        printf 'When ready to start work: create a new branch BEFORE making any changes to the repo, commit a placeholder CHANGELOG.md entry, push upstream, and create a draft pull request. The PR body MUST include the line "Closes #%s" so GitHub automatically closes the issue when the PR is merged. Create it with cfwf (it is always a draft, and cfwf puts it on the Workflow board as Development): cfwf pr create --repo %s --head <branch> --title "<type>(<scope>): <description>" --body-file - <<'"'"'BODY'"'"' then the body, ending with the line Closes #%s, then BODY on its own line. %s' \
+            "${item_id}" "${REPO_FULL}" "${item_id}" "${board_note}"
     fi
 }
 
@@ -274,10 +274,10 @@ $(_build_background_stall_warning "${background_stall}")
 - NEVER apply the Blocked label without ALSO posting a comment, in the SAME turn, that specifically explains why. A human who sees the label with no explanation has no way to act on it and no way to tell whether their own last action (an approval, a fix, a reply) was even seen — this applies to every blocking scenario in this file, not only the ones spelled out explicitly below, including re-blocking something that was JUST unblocked (#1140).
 
 Steps:
-1. Assign yourself: gh issue edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
+1. Assign yourself: cfwf issue edit --repo ${REPO_FULL} --issue ${item_id} --assign-self
 2. Check whether you have already posted a plan for this issue:
-     gh issue view ${item_id} --repo ${REPO_FULL} --json comments \\
-       --jq '[.comments[].body] | any(test("## Implementation Plan"; "i"))'
+     cfwf issue plan-status --repo ${REPO_FULL} --issue ${item_id}
+   Its first line is "plan<TAB>yes" or "plan<TAB>no". Below, Result "true" means "plan yes" and Result "false" means "plan no".
    Result "false" → no plan yet, go to step 3 (Plan mode).
 $(_build_plan_approval_check "${item_id}" "${plan_approved}" "${trusted_logins}")
 3. (Plan mode) Read the issue and all comments. If any comment contains an unanswered question, answer it, mark the issue as Blocked, and STOP:
@@ -304,7 +304,7 @@ $(_build_plan_approval_check "${item_id}" "${plan_approved}" "${trusted_logins}"
 ### Open questions
 <list or "None - ready to proceed pending approval">
 
-4. Only once the plan is confirmed posted (cfwf comment add printed the comment URL, and the step 2 check now returns "true"): mark the issue as Blocked and update the Workflow board status to "Planning"$(_board_set_clause issue "${item_id}" "Planning") (if board data is present above), then STOP — do not continue. $(_build_plan_approval_instruction):
+4. Only once the plan is confirmed posted (cfwf comment add printed the comment URL, and the step 2 check now prints "plan yes"): mark the issue as Blocked and update the Workflow board status to "Planning"$(_board_set_clause issue "${item_id}" "Planning") (if board data is present above), then STOP — do not continue. $(_build_plan_approval_instruction):
      gh issue edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
    If the plan could NOT be posted, do NOT add Blocked and do NOT move the board: STOP with the issue unlabelled, so the next cycle plans it again. Blocked with no posted plan is never re-run, and leaves a human nothing to approve (#1718).
 5. (Implementation mode) Proceed with the plan from the plan comment.
@@ -389,7 +389,7 @@ CONVBLOCK
 # verify-only dependency prompt never changes code, so it only stops.
 _build_placeholder_guard_note() {
     local item_id="$1" mode="${2:-stop}"
-    local list_step="BEFORE enabling auto-merge or running gh pr ready, list the PR's files: gh pr view ${item_id} --repo ${REPO_FULL} --json files --jq '.files[].path'."
+    local list_step="BEFORE handing the PR off or marking it ready, list the PR's files: cfwf pr view --repo ${REPO_FULL} --pr ${item_id} --field files."
     local stop_step="do NOT enable auto-merge, do NOT mark the PR ready (leave it as it is), post a one-line status comment saying the real change is still missing, then STOP."
     if [ "${mode}" = "remove" ]; then
         printf '%s' "${list_step} If .deleteme.now is listed and other files are listed too, the real change has landed but the placeholder was left behind: remove it in its own commit (git rm .deleteme.now), push, post a one-line status comment, then STOP (CI re-runs on the new commit; do NOT enable auto-merge or mark the PR ready this cycle). If .deleteme.now is the only file listed, the real change has not landed: ${stop_step}"
@@ -402,7 +402,7 @@ _build_placeholder_guard_note() {
 # before any "auto-merge is already enabled, nothing to do" rule is applied.
 _build_placeholder_disarm_note() {
     local item_id="$1"
-    printf '%s' "First list the PR's files (gh pr view ${item_id} --repo ${REPO_FULL} --json files --jq '.files[].path'): if .deleteme.now is listed and auto-merge is armed, disarm it (gh pr merge --disable-auto ${item_id} --repo ${REPO_FULL}), post a one-line status comment, then STOP."
+    printf '%s' "First list the PR's files (cfwf pr view --repo ${REPO_FULL} --pr ${item_id} --field files): if .deleteme.now is listed and auto-merge is armed (cfwf pr view --repo ${REPO_FULL} --pr ${item_id} --field auto-merge prints on), disarm it and post the one-line status comment in one command: cfwf pr take-back --repo ${REPO_FULL} --pr ${item_id} --body-file - with the comment on stdin (it turns auto-merge off, converts the PR to a draft and moves its board card to Development), then STOP."
 }
 
 # Outputs the PR session's trusted-comments step, which sits ahead of every phase so a trusted
@@ -497,14 +497,14 @@ $(_build_git_ssh_section)
 This is a dependency update PR. Do NOT make any code changes. Your only job is to verify CI and either enable auto-merge or mark as blocked.
 
 Steps:
-1. Assign yourself: gh pr edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
+1. Assign yourself: cfwf pr edit --repo ${REPO_FULL} --pr ${item_id} --assign-self
 2. Labels from linked closing issues are already synced onto this PR by the orchestrator before every session (Blocked/On-Hold excluded). Do NOT sync labels yourself.
-3. Check CI: gh pr checks ${item_id} --repo ${REPO_FULL}
+3. Check CI: cfwf pr checks --repo ${REPO_FULL} --pr ${item_id} (exit 0 every required check passed; 3 at least one failed; 4 none failed and at least one is pending; 5 no checks yet, treat as pending)
    Evaluate in this order — auto-merge being enabled does NOT mean there is nothing to do; it
    only means GitHub will merge automatically once every required check has actually passed, so
    a FAILED required check always takes priority over "auto-merge is enabled" below:
    - If any required check has FAILED: stop without taking action. The orchestrator gives a PR with a failed required check the full flow, which fixes the build, so the next cycle handles it.
-   - Else if auto-merge is already enabled (gh pr view ${item_id} --repo ${REPO_FULL} --json autoMergeRequest --jq '.autoMergeRequest != null' returns true): $(_build_placeholder_disarm_note "${item_id}") Otherwise stop — nothing more to do.
+   - Else if auto-merge is already enabled (cfwf pr view --repo ${REPO_FULL} --pr ${item_id} --field auto-merge prints on): $(_build_placeholder_disarm_note "${item_id}") Otherwise stop — nothing more to do.
    - Else if ALL required checks have passed: $(_build_placeholder_guard_note "${item_id}") Otherwise mark the PR ready if it is still a draft (GitHub refuses auto-merge on a draft PR), then enable auto-merge, and stop:
      gh pr ready ${item_id} --repo ${REPO_FULL}
      gh pr merge --auto --merge ${item_id} --repo ${REPO_FULL}
@@ -537,7 +537,7 @@ $(_build_background_stall_warning "${background_stall}")
 - The Workflow board status above is your phase marker. Read the current status for this PR to know where you are; advance it as instructed when a phase completes. It is ONLY a phase marker among PHASE A-H below — it is NEVER an approval gate to re-derive or check. The Issue-workflow "Plan First" Approved gate (agent-roles.instructions.md) is scoped explicitly to picking up an Issue that has no existing PR; this PR's existence already proves that gate was passed, by a human, before this PR was ever opened. If this PR's own card still reads "Not Started", "Planning", or "Approved" (e.g. a previous session opened the draft PR but died before advancing its card, or a fresh board mis-seeded it), treat that exactly as "Development" and continue straight into PHASE A-C below — do NOT block pending approval, and do NOT treat it as evidence the linked issue was never approved. PHASE C's "linked-issue work remains" explicitly includes doing the FULL implementation described in the issue's approved plan when this PR is still a scaffold-only draft (e.g. only a placeholder CHANGELOG.md commit exists) — that is precisely the deferred work Development-phase sessions exist to finish, not a reason to escalate or block (#1276).
 - Every phase must leave a durable trace in GitHub so the next cycle sees progress: either a pushed commit, or a short status comment on the PR. If a phase makes no commit (e.g. a clean review), you MUST post a one-line status comment saying what you did and what phase is next — otherwise the workflow stalls.
 - NEVER apply the Blocked label without ALSO posting a comment, in the SAME turn, that specifically explains why. A human who sees the label with no explanation has no way to act on it and no way to tell whether their own last action (an approval, a fix, a reply) was even seen — this applies to every blocking scenario in this file, not only the ones spelled out explicitly below, including re-blocking something that was JUST unblocked (#1140).
-- Always assign yourself first if you are not already the assignee: gh pr edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
+- Always assign yourself first if you are not already the assignee: cfwf pr edit --repo ${REPO_FULL} --pr ${item_id} --assign-self
 
 $(_build_pr_trusted_comments_section "${unaddressed_comments}")
 $(_build_pr_next_phase_section "${next_phase}")
@@ -549,13 +549,13 @@ PHASE A — Setup / rebase (do this if the PR is not yet checked out or is BEHIN
   ${checkout_step}
   Then STOP. (If you pushed a rebase, CI will run; the next cycle continues once CI settles.)
 
-PHASE B — CI pending: if any required check is still running (gh pr checks ${item_id} --repo ${REPO_FULL}), STOP immediately and take no action — the orchestrator waits for CI and re-invokes you.
+PHASE B — CI pending: if any required check is still running (cfwf pr checks --repo ${REPO_FULL} --pr ${item_id} exits 4, or 5 when no check has started yet), STOP immediately and take no action — the orchestrator waits for CI and re-invokes you.
 
 PHASE C — Fix outstanding work (do this if CI has failed, or there are unaddressed comments/reviews, or linked-issue work remains — including finishing the real implementation when this PR is currently only a scaffold/placeholder commit deliberately left for this phase to complete):
-  - Check BOTH comment surfaces before concluding there is nothing to address — they are different GitHub object models and neither shows the other: top-level PR comments and review summaries (gh pr view ${item_id} --repo ${REPO_FULL} --json comments,reviews,reviewDecision) AND inline/diff-level review comments (gh api repos/${REPO_FULL}/pulls/${item_id}/comments). A reviewer can submit a CHANGES_REQUESTED review with an empty top-level body and put their actual question only in an inline diff comment — that review decision alone is reason enough to treat this PR as having unaddressed work, and the inline comment endpoint is the only place its content is visible.
-  - If a required check FAILED: read the failed job's log before deciding anything. The failing step is the one that printed \`##[error]\` or a non-zero exit code, and the cause is the error lines that step printed (compiler, build-check, test, restore or lint errors). \`##[warning]\` lines, and downloads or retries the job recovered from, are NOT the cause. Quote the exact error lines in your status comment. Then fix it in a commit: the build must pass. Errors that already exist on the base branch, or that are in files this PR does not touch, are fixed in this PR too, and a pre-commit hook rejecting your commit for them means fix them, never bypass the hook. Only call a failure infrastructure (a registry or mirror missing a package, a download or service returning an HTTP error, missing CI secrets) when the quoted error line itself shows it; then re-run the failed jobs once (cfwf run rerun --repo ${REPO_FULL} --run <run-id>) before marking Blocked. Reply to every PR comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>". If a question needs a human answer, ask it and mark Blocked: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
+  - Check BOTH comment surfaces before concluding there is nothing to address — they are different GitHub object models and neither shows the other: top-level PR comments and review summaries AND inline/diff-level review comments. One command prints both, with the review decision: cfwf pr comments --repo ${REPO_FULL} --pr ${item_id} (reply to an inline comment with cfwf pr reply). A reviewer can submit a CHANGES_REQUESTED review with an empty top-level body and put their actual question only in an inline diff comment — that review decision alone is reason enough to treat this PR as having unaddressed work, and the inline comments are the only place its content is visible.
+  - If a required check FAILED: read the failed job's log before deciding anything (find the run with cfwf run list --repo ${REPO_FULL} --branch <head branch>, then cfwf run log --repo ${REPO_FULL} --run <run-id>). The failing step is the one that printed \`##[error]\` or a non-zero exit code, and the cause is the error lines that step printed (compiler, build-check, test, restore or lint errors). \`##[warning]\` lines, and downloads or retries the job recovered from, are NOT the cause. Quote the exact error lines in your status comment. Then fix it in a commit: the build must pass. Errors that already exist on the base branch, or that are in files this PR does not touch, are fixed in this PR too, and a pre-commit hook rejecting your commit for them means fix them, never bypass the hook. Only call a failure infrastructure (a registry or mirror missing a package, a download or service returning an HTTP error, missing CI secrets) when the quoted error line itself shows it; then re-run the failed jobs once (cfwf run rerun --repo ${REPO_FULL} --run <run-id>) before marking Blocked. Reply to every PR comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>". If a question needs a human answer, ask it and mark Blocked: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
   - If this round pushes a genuine code commit (a CI fix, or completed linked-issue implementation work): set the board status to "Development"$(_board_set_clause pr "${item_id}" "Development"), commit it (run_in_background: true, then wait for it to finish per the MANDATORY rule below) and push it, then STOP. (CI will run; the next cycle continues.)
-  - If this round's only action is a reply, a label sync, a \`gh pr edit\` metadata change (e.g. title/description), or re-running a flaky check — with no commit pushed: leave the board status exactly as it currently is (do NOT reset it to "Development"), post a one-line status comment describing what was done, then STOP. The next cycle resumes at whichever phase the unchanged board status already reflects.
+  - If this round's only action is a reply, a label sync, a \`cfwf pr edit\` metadata change (e.g. title/description), or re-running a flaky check — with no commit pushed: leave the board status exactly as it currently is (do NOT reset it to "Development"), post a one-line status comment describing what was done, then STOP. The next cycle resumes at whichever phase the unchanged board status already reflects.
 
 PHASE D — Simplify (do this ONLY when CI is fully green, there is no outstanding work, and the board is not yet at "AI Review" or later):
   - Set the board status to "AI Simplify"$(_board_set_clause pr "${item_id}" "AI Simplify") (if not already set).
@@ -600,14 +600,15 @@ $(_build_round_cap_check_line "${MAX_COVERAGE_ITERATIONS}" "coverage rounds" "${
 
 PHASE H: Finalize (do this ONLY when everything above has passed / board is at "Human Review" and auto-merge is not yet enabled):
   - $(_build_placeholder_guard_note "${item_id}" remove)
-  - Otherwise first mark the PR ready if it is still a draft (GitHub refuses auto-merge on a draft PR): gh pr ready ${item_id} --repo ${REPO_FULL}
-    Then enable auto-merge: gh pr merge --auto --merge ${item_id} --repo ${REPO_FULL}
-    If that fails because the repo does not support auto-merge: leave the PR ready without auto-merge for a human to merge.
-  - Post a one-line status comment confirming the PR is ready and whether auto-merge is on, then STOP.
+  - Otherwise hand the PR off in one command. It sets the PR's final title and description, moves the board to Human Review, marks it ready, posts the review record and enables auto-merge once the checks have passed since it was marked ready:
+      cfwf pr hand-off --repo ${REPO_FULL} --pr ${item_id} --title "<type>(<scope>): <description>" --description-file - --body-file <review-record file>
+    The title is a Conventional Commits title for the whole change. The description (on stdin) replaces the placeholder the PR was opened with: summarise what the PR does and why, and keep every "Closes #<issue>" line it had. The review record file (written first under \$TMPDIR) holds a short summary of the review rounds; cfwf adds the reviewed head SHA itself.
+    Exit 0: handed off (auto-merge on, or unavailable on the repository, which leaves the PR ready for a human to merge). Exit 7: ready and recorded, auto-merge deferred until the post-ready checks finish; the next cycle runs it again. Exit 8: refused, nothing written; read the reason on stderr and fix it or mark Blocked with a comment.
+  - The review record is the status comment for this phase: do not post another. Then STOP.
 
 $(_build_placeholder_disarm_note "${item_id}")
 
-Otherwise, if auto-merge is already enabled (gh pr view ${item_id} --repo ${REPO_FULL} --json autoMergeRequest --jq '.autoMergeRequest != null' returns true) and nothing above applies: there is nothing to do — do NOT post a comment or make any change; just STOP.
+Otherwise, if auto-merge is already enabled (cfwf pr view --repo ${REPO_FULL} --pr ${item_id} --field auto-merge prints on) and nothing above applies: there is nothing to do — do NOT post a comment or make any change; just STOP.
 
 General rules:
 - All interaction with humans including status reports must be made as a comment to the pull request (the one exception is the denied-command report on credfeto/credfeto-orchestrator#1167 in the permission-denial rule below).
