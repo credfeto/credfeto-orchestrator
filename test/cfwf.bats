@@ -13330,6 +13330,7 @@ ${HAND_OFF_COMMENT_URL}" ]
 
 # A pull_request object (the arguments of pull_request) carrying the labels in LABELS, a space-separated list.
 labelled_pull_request() {
+    # shellcheck disable=SC2153 # LABELS is set by each caller, e.g. LABELS="a b" labelled_pull_request ...
     pull_request "$@" | jq --arg labels "${LABELS}" '. + {labels: ($labels | split(" ") | map(select(. != "") | {name: .}))}'
 }
 
