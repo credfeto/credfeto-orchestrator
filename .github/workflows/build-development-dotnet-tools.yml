@@ -186,15 +186,17 @@ jobs:
       - name: "Summarise"
         if: ${{ github.event_name != 'pull_request' && steps.relevance.outputs.relevant == 'true' }}
         shell: "bash"
+        env:
+          VERSION_HASH: "${{ steps.cb.outputs.version-hash }}"
         run: |
           {
             echo "## development-dotnet-tools image pushed"
             echo ""
             echo '```'
-            echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+            echo "${REGISTRY}/${IMAGE_NAME}:latest"
             echo '```'
             echo ""
-            echo "NuGet version hash: \`${{ steps.cb.outputs.version-hash }}\`"
+            echo "NuGet version hash: \`${VERSION_HASH}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: "Summarise (build-only, not pushed)"
@@ -204,7 +206,7 @@ jobs:
           {
             echo "## development-dotnet-tools image built (not pushed — pull_request run)"
             echo ""
-            echo "Verified the Dockerfile builds; nothing was pushed to \`${{ env.REGISTRY }}\`."
+            echo "Verified the Dockerfile builds; nothing was pushed to \`${REGISTRY}\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: "Summarise (installed versions)"

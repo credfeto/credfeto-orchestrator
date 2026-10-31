@@ -134,16 +134,19 @@ jobs:
       - name: "Summarise"
         if: ${{ github.event_name != 'pull_request' && steps.relevance.outputs.relevant == 'true' }}
         shell: "bash"
+        env:
+          CREDFETO_SHA: "${{ steps.cb.outputs.credfeto_sha }}"
+          CREDFETO_AI_SKILLS_SHA: "${{ steps.cb.outputs.credfeto_ai_skills_sha }}"
         run: |
           {
             echo "## development-full image pushed"
             echo ""
             echo '```'
-            echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+            echo "${REGISTRY}/${IMAGE_NAME}:latest"
             echo '```'
             echo ""
-            echo "credfeto/credfeto-global-pre-commit @ \`${{ steps.cb.outputs.credfeto_sha }}\`"
-            echo "credfeto/credfeto-ai-skills @ \`${{ steps.cb.outputs.credfeto_ai_skills_sha }}\`"
+            echo "credfeto/credfeto-global-pre-commit @ \`${CREDFETO_SHA}\`"
+            echo "credfeto/credfeto-ai-skills @ \`${CREDFETO_AI_SKILLS_SHA}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: "Summarise (build-only, not pushed)"
@@ -153,7 +156,7 @@ jobs:
           {
             echo "## development-full image built (not pushed — pull_request run)"
             echo ""
-            echo "Verified the Dockerfile builds; nothing was pushed to \`${{ env.REGISTRY }}\`."
+            echo "Verified the Dockerfile builds; nothing was pushed to \`${REGISTRY}\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: "Summarise (installed versions)"
