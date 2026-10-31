@@ -270,6 +270,66 @@ installed_mcp_names() {
     [[ "${output}" != *'did not copy'* ]]
 }
 
+@test "a host server whose url carries userinfo or a query string is refused by name and never copied" {
+    allow_sudo
+    write_host_claude_json '{
+        "mcpServers": {
+            "url-userinfo": {"type": "http", "url": "https://someone:pw-literal-userinfo@u.example.com/mcp"},
+            "url-user-only": {"type": "sse", "url": "http://tk-literal-user@v.example.com/sse"}
+        },
+        "projects": {"/p": {"mcpServers": {"url-query": {"type": "http", "url": "https://q.example.com/mcp?api_key=qs-literal-query"}}}}
+    }'
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(installed_mcp_names)" = "cfwf" ]
+    [[ "${output}" == *"WARNING: did not copy url-query, url-user-only, url-userinfo from ${HOME}/.claude.json"* ]]
+    [ "$(grep -c -- '-literal-' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" -eq 0 ]
+    [ "$(grep -c -- '-literal-' "${HOME}/.claude/managed-mcp.merged.json")" -eq 0 ]
+    [[ "${output}" != *'-literal-'* ]]
+}
+
+@test "a host server whose command or args look like a credential is refused by name and never copied" {
+    allow_sudo
+    # Built from pieces so the fixture itself does not look like a real key.
+    local access_key_id="AKIA""LITERALARG000000"
+    write_host_claude_json "{
+        \"mcpServers\": {
+            \"args-env-style\": {\"type\": \"stdio\", \"command\": \"env\", \"args\": [\"GITHUB_TOKEN=literalarg-env\", \"server\"]},
+            \"args-prefix\": {\"type\": \"stdio\", \"command\": \"server\", \"args\": [\"--org\", \"ghp_literalarg1\"]},
+            \"args-flag-value\": {\"type\": \"stdio\", \"command\": \"server\", \"args\": [\"--token\", \"literalarg-flag\"]},
+            \"args-flag-equals\": {\"type\": \"stdio\", \"command\": \"server\", \"args\": [\"--api-key=literalarg-equals\"]}
+        },
+        \"projects\": {\"/p\": {\"mcpServers\": {
+            \"args-aws\": {\"type\": \"stdio\", \"command\": \"server\", \"args\": [\"${access_key_id}\"]},
+            \"command-prefix\": {\"type\": \"stdio\", \"command\": \"sk-literalarg-command\"}
+        }}}
+    }"
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(installed_mcp_names)" = "cfwf" ]
+    [[ "${output}" == *"WARNING: did not copy args-aws, args-env-style, args-flag-equals, args-flag-value, args-prefix, command-prefix from ${HOME}/.claude.json"* ]]
+    [ "$(grep -c -e 'literalarg' -e 'LITERALARG' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" -eq 0 ]
+    [ "$(grep -c -e 'literalarg' -e 'LITERALARG' "${HOME}/.claude/managed-mcp.merged.json")" -eq 0 ]
+    [[ "${output}" != *'literalarg'* ]]
+    [[ "${output}" != *'LITERALARG'* ]]
+}
+
+@test "a host server with a clean url and args, or args that only reference variables, is copied" {
+    allow_sudo
+    # shellcheck disable=SC2016  # literal ${VAR} references, for Claude Code to expand
+    write_host_claude_json '{"mcpServers": {
+        "clean-url": {"type": "http", "url": "https://c.example.com/mcp/a@b"},
+        "clean-args": {"type": "stdio", "command": "npx", "args": ["-y", "@scope/server", "--port", "3000", "--author", "me", "--token-file", "/run/secrets/t"]},
+        "ref-args": {"type": "stdio", "command": "server", "args": ["--token", "${S_TOKEN}", "--api-key=${S_KEY}", "GITHUB_TOKEN=${GH}"]}
+    }}'
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(installed_mcp_names)" = "cfwf clean-args clean-url ref-args" ]
+    # shellcheck disable=SC2016
+    [ "$(jq -r '.mcpServers["ref-args"].args[1]' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = '${S_TOKEN}' ]
+    [[ "${output}" != *'did not copy'* ]]
+}
+
 @test "a ~/.claude.json bigger than the kernel's per-argument limit is still merged" {
     allow_sudo
     local padding

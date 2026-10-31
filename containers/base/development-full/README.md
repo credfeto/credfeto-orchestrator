@@ -179,7 +179,8 @@ optional first argument names a file of host directory roots, installed as the r
 `/etc/claude-code/hooks/allowed-dirs.local`. It installs `cfwf-mcp-headers` and a `managed-mcp.json` that
 merges `cfwf` with the host's own MCP servers from `~/.claude.json` (user scope and every project scope).
 A server at `cfwf`'s URL is left out as a duplicate, with a suggestion to remove it. A server with a
-literal `headers` or `env` value is refused with a warning naming it, because the file is world-readable.
+literal `headers` or `env` value, a `url` carrying userinfo or a query string, or a credential-like `command` or
+`args` word is refused with a warning naming it, because the file is world-readable.
 A name used for two different servers is fatal. The merge is a snapshot, so re-run the script after
 adding a server. It also installs the `cfwf`
 helper into `/usr/local/bin` (`CFWF_BIN_DIR` overrides the directory) so anyone on the host can run it
