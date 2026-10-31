@@ -33,6 +33,25 @@ readonly RUN_PENDING_EXIT="${CHECKS_PENDING_EXIT}"
 readonly POLICY_REFUSED_EXIT="${BODY_REFUSED_EXIT}"
 # The run attempt at or past which a rerun is refused, so a flaky check cannot be rerun for ever.
 readonly RUN_ATTEMPT_LIMIT=3
+# run list: how many runs it lists by default and at most.
+readonly RUN_LIST_LIMIT_DEFAULT=20
+readonly RUN_LIST_LIMIT_MAX=50
+# run log: how many of the last lines of each failed step it keeps by default and at most, how many
+# bytes of one log line it keeps (a longer one is cut at a character boundary and marked [cut]),
+# and the most bytes it prints in all (256 KiB). Output over that is refused whole, as a diff over
+# DIFF_BYTE_LIMIT is, so a session's context is never flooded and nothing printed is ever a part
+# that reads as the whole.
+readonly RUN_LOG_LINES_DEFAULT=200
+readonly RUN_LOG_LINES_MAX=2000
+readonly RUN_LOG_LINE_BYTES=1000
+readonly RUN_LOG_BYTE_LIMIT=262144
+# run view: the most jobs of a run's latest attempt it reads; more is a runtime failure.
+readonly RUN_JOB_LIMIT=1000
+# run list --workflow: the most characters of a workflow file name or name.
+readonly WORKFLOW_NAME_LIMIT=256
+# The same code as RUN_NOT_FOUND_EXIT, so a missing job or workflow reads like any other missing item.
+readonly JOB_NOT_FOUND_EXIT=9
+readonly WORKFLOW_NOT_FOUND_EXIT=9
 # task wait: how long it blocks by default and at most, in seconds. The default fits under the Bash
 # tool's default 2-minute limit, so a call without a raised tool timeout still returns; the maximum
 # fits under the tool's 10-minute ceiling (a timeout of 600000 ms), so the call always returns
@@ -301,11 +320,11 @@ cleanup() {
     if [ "${exit_status}" -ne 0 ] && [ -n "${TAKE_BACK_DONE:-}" ]; then
         printf 'cfwf: take-back steps done before the failure: %s\n' "${TAKE_BACK_DONE}" >&2
     fi
-    rm -f "${GH_ERR_FILE}" "${BODY_PATH_TMP}" "${DESCRIPTION_PATH_TMP}" "${SCAN_TMP}" "${VALUE_TMP}" "${HAND_OFF_RECORD_TMP:-}"
+    rm -f "${GH_ERR_FILE}" "${BODY_PATH_TMP}" "${DESCRIPTION_PATH_TMP}" "${SCAN_TMP}" "${VALUE_TMP}" "${HAND_OFF_RECORD_TMP:-}" "${LOG_TMP}" "${LOG_OUT_TMP}"
 }
 
 # Creates a temporary file on first use and stores its path in the global variable named by $1
-# (GH_ERR_FILE, BODY_PATH_TMP, SCAN_TMP or VALUE_TMP), leaving one that is already set alone, so
+# (GH_ERR_FILE, BODY_PATH_TMP, SCAN_TMP, VALUE_TMP, LOG_TMP or LOG_OUT_TMP), leaving one that is already set alone, so
 # each is made at most once per run and the EXIT trap (cleanup) removes it. GH_ERR_FILE is the one
 # file gh's stderr is captured in: each caller reads it straight after its own gh call, so one file
 # serves them all.
@@ -352,6 +371,9 @@ Commands:
   release view             Print a repository's latest release, one key and value a line (exit 9 when it has none)
   release list             List a repository's releases, newest first, one line each
   tag view                 Print the commit a repository's tag points to (exit 9 when not found)
+  run list                 List a repository's Actions runs for a branch or a commit, newest first
+  run view                 Print an Actions run's status and jobs (exit 9 when not found)
+  run log                  Print the tail of a run's failed steps' logs (exit 4 while it runs, 9 when not found)
   run rerun                Rerun the failed jobs of a pull request's run (exit 4 while it runs, 8 when refused, 9 when not found)
   task wait                Wait, in one call, for a background command to finish (exit 4 while it runs, 9 when not found)
   help [command]           Show this help, or the help for one command
@@ -1617,6 +1639,133 @@ It never ends, kills or signals the command, and writes nothing.
 USAGE
 }
 
+usage_run_list() {
+    cat << USAGE
+Usage: cfwf run list --repo <owner/repo> --branch <name> [--workflow <name>] [--limit <n>]
+       cfwf run list --repo <owner/repo> --sha <commit> [--workflow <name>] [--limit <n>]
+
+Lists a repository's GitHub Actions runs for one branch or one commit, newest first, one line each,
+from one read.
+
+--repo      Always required; never taken from the current directory.
+--branch    The runs whose head branch is exactly this one: a branch name git allows, with no
+            control character. Runs started by any event are listed (a push, a pull request, or a
+            dispatch after a merge alike): there is never an event filter.
+--sha       The runs whose head commit is exactly this one: 40 hexadecimal digits.
+            Exactly one of --branch and --sha is required.
+--workflow  Only the runs of this workflow: its file name (build.yml) or its name, with no control
+            character, no leading - and at most ${WORKFLOW_NAME_LIMIT} characters. A disabled workflow is found too.
+--limit     The most runs listed, from 1 to ${RUN_LIST_LIMIT_MAX} (default ${RUN_LIST_LIMIT_DEFAULT}). It is a cap: a branch with more runs
+            lists only the newest.
+--json, --jq, --template, --paginate, --event, --status, --user and --web are not options.
+
+Output, one line a run, newest first, seven tab-separated fields, none empty:
+  <run id>  <workflow>  <status>  <conclusion>  <head SHA>  <event>  <created at>
+The conclusion is - while the run has none; the workflow name is made printable (a control
+character becomes a space). Every row is checked before any is printed: a row whose head branch or
+head commit is not the one asked for, whatever gh matched, is a runtime failure. No runs prints
+nothing.
+
+Exit codes: 0 listed (none included); ${WORKFLOW_NOT_FOUND_EXIT} the repository has no workflow of that --workflow; 1 a
+runtime failure, such as a gh or network error or a repository that is not found, prefixed
+"cfwf:"; 2 a usage error.
+USAGE
+}
+
+usage_run_view() {
+    cat << USAGE
+Usage: cfwf run view --repo <owner/repo> --run <id>
+
+Prints one GitHub Actions run and the jobs of its latest attempt, from two reads: the run and every
+page of its jobs.
+
+--repo  Always required; never taken from the current directory.
+--run   Always required: the run's id, digits only, above 0.
+--json, --jq, --template, --log, --log-failed, --job, --attempt and --web are not options; see
+'cfwf run log' for a run's failed steps' logs.
+
+Output: eight key and value lines, a tab between, in this order, then a line for each job, sorted
+by job id:
+  status       queued, in_progress, completed and the like
+  conclusion   success, failure, cancelled and the like, or - while the run has none
+  head_sha     the run's head commit: 40 hexadecimal digits
+  head_branch  the run's head branch, or - when it has none
+  workflow     the workflow's name
+  event        what started the run: push, pull_request, workflow_dispatch and the like
+  attempt      the run's attempt, from 1
+  created_at   when the run was created, as 2026-01-01T00:00:00Z
+  job  <job id>  <name>  <status>  <conclusion>
+A value is never empty: one GitHub gives none for is -. Names are made printable (a control
+character becomes a space). A job that failed to start, such as a startup_failure, has no step log,
+so its conclusion here is all there is. Nothing is printed until both reads have been checked: the
+number of jobs must be the same on every page, the number of jobs read and at most ${RUN_JOB_LIMIT}.
+
+Exit codes: 0 printed; ${RUN_NOT_FOUND_EXIT} the run was not found in the repository; 1 a runtime failure, such as a gh
+or network error or a repository that is not found, prefixed "cfwf:"; 2 a usage error.
+USAGE
+}
+
+usage_run_log() {
+    cat << USAGE
+Usage: cfwf run log --repo <owner/repo> --run <id> [--job <id>] [--lines <n>]
+
+Prints the tail of the logs of a completed GitHub Actions run's failed steps: never a whole log, and
+never a step that passed.
+
+--repo   Always required; never taken from the current directory.
+--run    Always required: the run's id, digits only, above 0.
+--job    Only this job of the run: its id, digits only, above 0. A job of another run is refused as
+         not found.
+--lines  The most of the last lines of each failed step kept, from 1 to ${RUN_LOG_LINES_MAX} (default ${RUN_LOG_LINES_DEFAULT}).
+--log, --json, --jq, --template, --paginate, --attempt and --web are not options. Only the
+latest attempt's logs are read.
+
+Logs exist only once a run has completed: a run, or with --job a job, that has not exits ${RUN_PENDING_EXIT}
+(pending, not a failure), before any log is read. Run it again once the run has completed.
+
+Output, for each failed step in the order the log gives them:
+  == job <job> step <step>
+  | <a line of the step's log>
+then, as the last line and the only one that starts with neither == nor |:
+  summary jobs=<a> steps=<b> lines=<c> redacted=<d> masked=<e>
+An empty log line is | alone. Output without the summary line is a cut-off copy. A completed run
+with no failed step prints only the summary, with every count 0; see 'cfwf run view' for its jobs.
+A line gh gives with no step is under the step UNKNOWN STEP.
+
+Log text is untrusted, so each line is changed before it is printed:
+  cut         a line over ${RUN_LOG_LINE_BYTES} bytes is cut at a character boundary and ends with " [cut]"
+  printable   an ANSI escape sequence is removed; a control character (a tab and a carriage return
+              included), DEL, a C1 control and U+2028 and U+2029 become a space; a line that is
+              not valid UTF-8 has each byte from 0x80 up printed as ?
+  redacted    a line that holds a token, under the same rules a posted body is refused under ('cfwf
+              help body'), is replaced whole by "[cfwf: line redacted: token]", and a job or step
+              name by "[cfwf: name redacted: token]"; the token is never printed
+  masked      a run of 41 or more hexadecimal digits, and a base64 run of 41 or more characters
+              holding an upper-case letter, a lower-case letter and a digit, become ***. A 40-digit
+              commit SHA is kept, and so is GitHub's own *** masking.
+Host paths, such as the runner's /home/runner/work/..., are printed as they are. Quoting a log line
+in a comment still goes through the leak check, which refuses a /home/ path.
+
+Output over ${RUN_LOG_BYTE_LIMIT} bytes (256 KiB) is refused (exit 1) and none of it is printed, as an oversized
+diff is: use a smaller --lines, or --job for one job.
+
+Exit codes: 0 printed; ${RUN_PENDING_EXIT} the run or the job has not completed; ${RUN_NOT_FOUND_EXIT} the run or the job was not found
+in the repository, or the job is not a job of the run; 1 a runtime failure, such as a gh or network
+error, logs past their retention, an oversized output or a repository that is not found, prefixed
+"cfwf:"; 2 a usage error.
+USAGE
+}
+
+usage_run() {
+    usage_run_list
+    printf '\n'
+    usage_run_view
+    printf '\n'
+    usage_run_log
+    printf '\n'
+    usage_run_rerun
+}
+
 usage_run_rerun() {
     cat << USAGE
 Usage: cfwf run rerun --repo <owner/repo> --run <id>
@@ -1700,7 +1849,11 @@ usage_for() {
         "release list") usage_release_list ;;
         tag | "tag view") usage_tag_view ;;
         branch | "branch required-checks") usage_branch_required_checks ;;
-        run | "run rerun") usage_run_rerun ;;
+        run) usage_run ;;
+        "run list") usage_run_list ;;
+        "run view") usage_run_view ;;
+        "run log") usage_run_log ;;
+        "run rerun") usage_run_rerun ;;
         task | "task wait") usage_task_wait ;;
         *" "*) usage_for "${1%% *}" ;;
         *) usage_general ;;
@@ -5336,11 +5489,232 @@ pr_ready_at() {
     printf 'ready-at\t%s\nsource\t%s\n' "${READY_AT}" "${READY_SOURCE}"
 }
 
+# The tail stage of run log, an awk program run in the C locale on gh run view --log-failed, whose
+# lines are job, a tab, step, a tab and the text (a line with no step is UNKNOWN STEP). It keeps the
+# last keep lines of each step, in the order the steps first appear, each cut to width bytes as it
+# is stored, so its memory is bounded however long the log is, and makes them printable. It prints a
+# record for each step (H, a tab, the job, a tab, the step) followed by one for each of its lines (L,
+# a tab, the text), and exits 3 for a line that does not have two tabs. POSIX awk only, because the
+# image has mawk: no interval expressions and no gawk extensions.
+# shellcheck disable=SC2016  # an awk program: its $ fields are awk's, not the shell's
+readonly RUN_LOG_TAIL_PROGRAM='
+# Run in the C locale, so every string function counts bytes. POSIX awk only (the image has mawk):
+# no interval expressions, no gawk extensions.
+function is_continuation(c) {
+    return c >= CONT_LOW && c <= CONT_HIGH
+}
+# Cuts a line longer than width bytes back to the start of the character that straddles the limit,
+# so a cut never splits a UTF-8 character, and marks it.
+function cut(text,    k) {
+    k = width
+    while (k > 0 && is_continuation(substr(text, k + 1, 1))) k--
+    return substr(text, 1, k) " [cut]"
+}
+# Succeeds when text is well-formed UTF-8: each lead byte followed by the right number of
+# continuation bytes, no overlong two-byte form and nothing above U+10FFFF.
+function valid_utf8(text,    i, n, b, need, j) {
+    n = length(text)
+    i = 1
+    while (i <= n) {
+        b = code[substr(text, i, 1)]
+        if (b < 128) { i++; continue }
+        if (b >= 194 && b <= 223) need = 1
+        else if (b >= 224 && b <= 239) need = 2
+        else if (b >= 240 && b <= 244) need = 3
+        else return 0
+        for (j = 1; j <= need; j++)
+            if (!is_continuation(substr(text, i + j, 1))) return 0
+        i += need + 1
+    }
+    return 1
+}
+# Makes text printable on one line: an ANSI CSI sequence is removed; a C0 control (a tab and a
+# carriage return included), DEL, a C1 control and U+2028 and U+2029 become a space; a line that is
+# not valid UTF-8 has every byte from 0x80 up printed as ?.
+function printable(text,    out, i, n, c, b, c2) {
+    gsub(CSI, "", text)
+    if (text !~ /[^ -~]/) return text
+    out = ""
+    n = length(text)
+    if (!valid_utf8(text)) {
+        for (i = 1; i <= n; i++) {
+            c = substr(text, i, 1)
+            b = code[c]
+            if (b >= 128) out = out "?"
+            else if (b < 32 || b == 127) out = out " "
+            else out = out c
+        }
+        return out
+    }
+    i = 1
+    while (i <= n) {
+        c = substr(text, i, 1)
+        b = code[c]
+        if (b < 32 || b == 127) { out = out " "; i++; continue }
+        if (b == 194) {
+            c2 = code[substr(text, i + 1, 1)]
+            if (c2 >= 128 && c2 <= 159) { out = out " "; i += 2; continue }
+        }
+        if (b == 226 && substr(text, i + 1, 2) == LS_TAIL) { out = out " "; i += 3; continue }
+        if (b == 226 && substr(text, i + 1, 2) == PS_TAIL) { out = out " "; i += 3; continue }
+        out = out c
+        i++
+    }
+    return out
+}
+BEGIN {
+    for (b = 1; b < 256; b++) code[sprintf("%c", b)] = b
+    CONT_LOW = sprintf("%c", 128)
+    CONT_HIGH = sprintf("%c", 191)
+    LS_TAIL = sprintf("%c%c", 128, 168)
+    PS_TAIL = sprintf("%c%c", 128, 169)
+    CSI = sprintf("%c", 27) "\\[[0-?]*[ -/]*[@-~]"
+    steps = 0
+}
+{
+    i = index($0, "\t")
+    if (i == 0) { bad = 1; exit 3 }
+    job = substr($0, 1, i - 1)
+    rest = substr($0, i + 1)
+    j = index(rest, "\t")
+    if (j == 0) { bad = 1; exit 3 }
+    step = substr(rest, 1, j - 1)
+    text = substr(rest, j + 1)
+    key = job SUBSEP step
+    if (!(key in count)) {
+        count[key] = 0
+        steps++
+        order[steps] = key
+        job_of[key] = job
+        step_of[key] = step
+    }
+    if (length(text) > width) text = cut(text)
+    buffer[key, count[key] % keep] = text
+    count[key]++
+}
+END {
+    if (bad) exit 3
+    for (s = 1; s <= steps; s++) {
+        key = order[s]
+        print "H\t" printable(job_of[key]) "\t" printable(step_of[key])
+        n = count[key]
+        first = n > keep ? n - keep : 0
+        for (k = first; k < n; k++) print "L\t" printable(buffer[key, k % keep])
+    }
+}
+'
+# The format stage of run log, an awk program run in the C locale on the tail stage records, with
+# redacted the numbers of the records that hold a token, each between commas. It prints the header
+# of each step (== job <job> step <step>), each line after "| " (or "|" for an empty one), so no log
+# text can pass for a header or the summary, and last the summary. A record holding a token is
+# replaced whole; long hex and base64 runs in the rest are masked as ***.
+# shellcheck disable=SC2016  # an awk program: its $ fields are awk's, not the shell's
+readonly RUN_LOG_FORMAT_PROGRAM='
+# Run in the C locale. POSIX awk only (the image has mawk). Reads the tail stage records (H, a
+# job and step name; L, one of its lines) and prints the output of run log. redacted holds the
+# numbers of the records that hold a token, each between commas.
+# Masks every maximal run of RUN_LOG_MASK_MIN or more hex digits as ***. A 40-digit commit SHA is kept.
+function mask_hex(text,    out, run) {
+    out = ""
+    while (match(text, /[0-9A-Fa-f]+/)) {
+        run = substr(text, RSTART, RLENGTH)
+        out = out substr(text, 1, RSTART - 1) (RLENGTH >= MASK_MIN ? "***" : run)
+        text = substr(text, RSTART + RLENGTH)
+    }
+    return out text
+}
+# Masks every maximal base64 run (any trailing = included) of MASK_MIN or more characters holding an
+# upper-case letter, a lower-case letter and a digit as ***, then long hex runs inside what is left.
+function mask(text,    out, run, core, start, len) {
+    out = ""
+    while (match(text, BASE64_RUN)) {
+        # mask_hex and sub move RSTART and RLENGTH, so the values of this run are kept first.
+        start = RSTART
+        len = RLENGTH
+        run = substr(text, start, len)
+        core = run
+        sub(/=+$/, "", core)
+        out = out substr(text, 1, start - 1)
+        if (length(core) >= MASK_MIN && core ~ /[A-Z]/ && core ~ /[a-z]/ && core ~ /[0-9]/) out = out "***"
+        else out = out mask_hex(run)
+        text = substr(text, start + len)
+    }
+    return out text
+}
+BEGIN {
+    MASK_MIN = 41
+    BASE64_RUN = "[A-Za-z0-9+/_-]+=*"
+    REDACTED_LINE = "[cfwf: line redacted: token]"
+    REDACTED_NAME = "[cfwf: name redacted: token]"
+    jobs = 0; steps = 0; lines = 0; redactions = 0; masks = 0
+}
+{
+    kind = substr($0, 1, 1)
+    rest = substr($0, 3)
+    hit = index(redacted, "," NR ",") > 0
+    if (kind == "H") {
+        i = index(rest, "\t")
+        job = substr(rest, 1, i - 1)
+        step = substr(rest, i + 1)
+        if (hit) { job = REDACTED_NAME; step = REDACTED_NAME; redactions++ }
+        else {
+            masked_job = mask(job); masked_step = mask(step)
+            if (masked_job != job || masked_step != step) masks++
+            job = masked_job; step = masked_step
+        }
+        if (job == "") job = "-"
+        if (step == "") step = "-"
+        if (!(job in seen)) { seen[job] = 1; jobs++ }
+        steps++
+        print "== job " job " step " step
+        next
+    }
+    lines++
+    if (hit) { text = REDACTED_LINE; redactions++ }
+    else {
+        text = mask(rest)
+        if (text != rest) masks++
+    }
+    print (text == "" ? "|" : "| " text)
+}
+END {
+    printf "summary jobs=%d steps=%d lines=%d redacted=%d masked=%d\n", jobs, steps, lines, redactions, masks
+}
+'
+
 RUN_ID=""
 RUN_STATUS=""
+RUN_CONCLUSION=""
 RUN_HEAD_SHA=""
 RUN_HEAD_BRANCH=""
+RUN_WORKFLOW_NAME=""
+RUN_EVENT=""
 RUN_ATTEMPT=""
+RUN_CREATED_AT=""
+# run list, run view and run log: the options as given, checked (assign_run_option).
+JOB_ID=""
+RUN_BRANCH=""
+RUN_SHA=""
+RUN_WORKFLOW=""
+RUN_LIMIT=""
+LOG_LINES=""
+# run log: the tailed, printable log (LOG_TMP) and the formatted output (LOG_OUT_TMP), both made by
+# ensure_temp_file and removed by cleanup.
+LOG_TMP=""
+LOG_OUT_TMP=""
+
+# Refuses (exit 2) the value $2 of the option $1 unless it is a number from 1 to $3, setting the
+# variable $4 to it without leading zeros. The length is compared first, so a run of digits too long
+# for bash's integers is refused as too big rather than wrapping round.
+assign_bounded_number() {
+    local flag="$1" value="$2" max="$3" variable="$4" number
+    validate "${value}" '^[0-9]+$' "${flag}" "it must be a number from 1 to ${max}"
+    number=$(without_leading_zeros "${value}")
+    if [ "${#number}" -gt "${#max}" ] || [ "${number}" -lt 1 ] || [ "${number}" -gt "${max}" ]; then
+        usage_error "invalid value for ${flag}: it must be a number from 1 to ${max}"
+    fi
+    printf -v "${variable}" '%s' "${number}"
+}
 
 assign_run_option() {
     local flag="$1" value="$2"
@@ -5352,19 +5726,50 @@ assign_run_option() {
             RUN_ID=$(without_leading_zeros "${value}")
             require_number_above_zero "${flag}" "${RUN_ID}"
             ;;
+        --job)
+            assign_once JOB_ID "${flag}"
+            validate "${value}" '^[0-9]{1,19}$' "${flag}" "it must be a number of at most 19 digits"
+            JOB_ID=$(without_leading_zeros "${value}")
+            require_number_above_zero "${flag}" "${JOB_ID}"
+            ;;
+        --branch) assign_branch_option RUN_BRANCH "${flag}" "${value}" ;;
+        --sha)
+            assign_once RUN_SHA "${flag}"
+            validate "${value}" '^[0-9A-Fa-f]{40}$' "${flag}" "it must be a commit SHA of 40 hexadecimal digits"
+            RUN_SHA="${value,,}"
+            ;;
+        --workflow)
+            assign_once RUN_WORKFLOW "${flag}"
+            if [[ "${value}" == -* ]] || ! matches_pattern "${value}" '^[^[:cntrl:]]+$' || holds_control_character "${value}"; then
+                usage_error "invalid value for ${flag}: it must be a workflow file name or name, with no control character and no leading -"
+            fi
+            validate_visible_text "${value}" "${WORKFLOW_NAME_LIMIT}" "${flag}"
+            RUN_WORKFLOW="${value}"
+            ;;
+        --limit)
+            assign_once RUN_LIMIT "${flag}"
+            assign_bounded_number "${flag}" "${value}" "${RUN_LIST_LIMIT_MAX}" RUN_LIMIT
+            ;;
+        --lines)
+            assign_once LOG_LINES "${flag}"
+            assign_bounded_number "${flag}" "${value}" "${RUN_LOG_LINES_MAX}" LOG_LINES
+            ;;
     esac
 }
 
-# Sets RUN_STATUS, RUN_HEAD_SHA, RUN_HEAD_BRANCH and RUN_ATTEMPT from one read of the run RUN_ID of
-# REPO. RUN_HEAD_BRANCH is empty when GitHub gives none; any other must be a branch name git allows,
-# because it is handed to gh pr list --head and compared with the default branch. fields_row has
-# already turned any control character, a C1 one included, into a space, which git refuses.
+# Sets RUN_STATUS, RUN_CONCLUSION, RUN_HEAD_SHA, RUN_HEAD_BRANCH, RUN_WORKFLOW_NAME, RUN_EVENT,
+# RUN_ATTEMPT and RUN_CREATED_AT from one read of the run RUN_ID of REPO. RUN_HEAD_BRANCH is empty
+# when GitHub gives none; any other must be a branch name git allows, because it is handed to gh pr
+# list --head and compared with the default branch. fields_row has already turned any control
+# character, a C1 one included, into a space, which git refuses. The name, event, conclusion and
+# creation time are only printed (run view), so they are checked there.
 read_run() {
     local id end unexpected="gh returned an unexpected result for the run ${RUN_ID} of ${REPO}"
     api_read "could not read the run ${RUN_ID} of ${REPO}" "repos/${REPO}/actions/runs/${RUN_ID}" \
-        "${FIELDS_ROW_DEF} [.id, .status, .conclusion, .head_sha, .head_branch, .run_attempt, \"end\"] | fields_row" \
+        "${FIELDS_ROW_DEF} [.id, .status, .conclusion, .head_sha, .head_branch, .run_attempt, .name, .event, .created_at, \"end\"] | fields_row" \
         || not_found_in_repository "${RUN_NOT_FOUND_EXIT}" "the run ${RUN_ID} was not found in ${REPO}"
-    IFS="${ROW_SEPARATOR}" read -r id RUN_STATUS _ RUN_HEAD_SHA RUN_HEAD_BRANCH RUN_ATTEMPT end <<< "${GH_OUTPUT}"
+    IFS="${ROW_SEPARATOR}" read -r id RUN_STATUS RUN_CONCLUSION RUN_HEAD_SHA RUN_HEAD_BRANCH RUN_ATTEMPT \
+        RUN_WORKFLOW_NAME RUN_EVENT RUN_CREATED_AT end <<< "${GH_OUTPUT}"
     [[ "${id}" = "${RUN_ID}" && "${RUN_STATUS}" =~ ^[a-z_]+$ && "${RUN_HEAD_SHA}" =~ ^[0-9a-f]{40}$ &&
         "${RUN_ATTEMPT}" =~ ^[1-9][0-9]{0,8}$ && "${end}" = end ]] || die "${unexpected}"
     [ -z "${RUN_HEAD_BRANCH}" ] || valid_branch_name "${RUN_HEAD_BRANCH}" || die "${unexpected}"
@@ -5428,8 +5833,191 @@ run_rerun() {
     printf 'Rerunning failed jobs of run %s (attempt %s)\n' "${RUN_ID}" "$((RUN_ATTEMPT + 1))"
 }
 
+# The jq program of run list: the number of runs on its first line, then a row for each, newest
+# first (ties by id): id, workflow, status, conclusion, head commit, event, created time and head
+# branch. Every value goes through field, so none can add a line or a field and none is empty. The
+# head branch is only checked against --branch, never printed.
+readonly RUN_LIST_PROGRAM="${ROW_FIELD_DEF}"' sort_by([.createdAt, .databaseId]) | reverse | (length | tostring), (.[] | [(.databaseId | field), (.workflowName | field), (.status | field), (.conclusion | field), (.headSha | field), (.event | field), (.createdAt | field), (.headBranch | field)] | join("\t"))'
+# A row of run list, before the head branch is dropped.
+readonly RUN_LIST_ROW_PATTERN=$'^[0-9]+\t[^\t]+\t[a-z_]+\t[a-z_-]+\t[0-9a-f]{40}\t[a-z_]+\t[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\t[^\t]+$'
+# How gh answers --workflow with a name the repository has no workflow of.
+readonly WORKFLOW_NOT_FOUND_TEXT='could not find any workflows named'
+
+# Lists the runs of REPO for one branch or one commit, newest first, in one read, at most RUN_LIMIT.
+# There is never an event filter, so a run started by a dispatch after a merge is listed beside one
+# started by the push. Nothing is printed until every row has been checked: its shape, and that its
+# head commit or head branch is exactly the one asked for, whatever gh matched.
+run_list() {
+    local row id rest branch sha unexpected
+    local -a listing lines=()
+    parse_command_options assign_run_option "--repo --branch --sha --workflow --limit" "" "$@"
+    require REPO --repo
+    [ -n "${RUN_BRANCH}" ] || [ -n "${RUN_SHA}" ] || usage_error "one of --branch or --sha is required"
+    [ -z "${RUN_BRANCH}" ] || [ -z "${RUN_SHA}" ] || usage_error "--branch and --sha cannot be given together"
+    [ -n "${RUN_LIMIT}" ] || RUN_LIMIT="${RUN_LIST_LIMIT_DEFAULT}"
+    require_gh
+    unexpected="gh returned an unexpected result for the runs of ${REPO}"
+    listing=(run list --repo "${REPO}")
+    if [ -n "${RUN_BRANCH}" ]; then
+        listing+=("--branch=${RUN_BRANCH}")
+    else
+        listing+=("--commit=${RUN_SHA}")
+    fi
+    [ -z "${RUN_WORKFLOW}" ] || listing+=("--workflow=${RUN_WORKFLOW}")
+    listing+=(--all --limit "${RUN_LIMIT}" --json "databaseId,workflowName,status,conclusion,headSha,headBranch,event,createdAt"
+        --jq "${RUN_LIST_PROGRAM}")
+    if ! gh_capture "${listing[@]}"; then
+        [[ "${GH_ERROR}" != *"${WORKFLOW_NOT_FOUND_TEXT}"* ]] \
+            || not_found_in_repository "${WORKFLOW_NOT_FOUND_EXIT}" "the --workflow was not found in ${REPO}"
+        die "could not list the runs of ${REPO}: $(gh_failure_text)"
+    fi
+    take_checked_rows "${RUN_LIMIT}" "${RUN_LIST_ROW_PATTERN}" "${unexpected}" "${unexpected}"
+    for row in "${COUNTED_ROWS[@]}"; do
+        branch="${row##*$'\t'}"
+        rest="${row%$'\t'*}"
+        IFS=$'\t' read -r id _ _ _ sha _ <<< "${rest}"
+        if [ -n "${RUN_BRANCH}" ]; then
+            [ "${branch}" = "${RUN_BRANCH}" ] || die "${unexpected}"
+        else
+            [ "${sha}" = "${RUN_SHA}" ] || die "${unexpected}"
+        fi
+        lines+=("${rest}")
+    done
+    [ "${#lines[@]}" -eq 0 ] || printf '%s\n' "${lines[@]}"
+}
+
+# Prints $1, or - when it is empty, so no value of a key and value line is ever empty.
+dash_if_empty() {
+    printf '%s' "${1:--}"
+}
+
+# Prints the run RUN_ID of REPO and its jobs, from two reads: the run (read_run) and its latest
+# attempt's jobs, every page. Nothing is printed until both have been checked: the count of jobs
+# must be the same on every page, at most RUN_JOB_LIMIT and the number of job rows that came.
+run_view() {
+    local unexpected row kind id name status conclusion end count=""
+    local -a jobs=()
+    parse_command_options assign_run_option "--repo --run" "" "$@"
+    require REPO --repo
+    require RUN_ID --run
+    require_gh
+    unexpected="gh returned an unexpected result for the run ${RUN_ID} of ${REPO}"
+    read_run
+    [[ "${RUN_CONCLUSION}" =~ ^[a-z_]*$ && "${RUN_EVENT}" =~ ^[a-z_]+$ ]] || die "${unexpected}"
+    matches_pattern "${RUN_CREATED_AT}" "${TIMESTAMP_PATTERN}" || die "${unexpected}"
+    api_read "could not read the jobs of the run ${RUN_ID} of ${REPO}" \
+        "repos/${REPO}/actions/runs/${RUN_ID}/jobs?per_page=${API_PAGE_SIZE}&filter=latest" \
+        "${FIELDS_ROW_DEF} ([\"count\", .total_count, \"end\"] | fields_row), (.jobs[]? | [\"job\", .id, .name, .status, .conclusion, \"end\"] | fields_row)" \
+        --paginate || die "${unexpected}"
+    while IFS= read -r row; do
+        [ -n "${row}" ] || continue
+        IFS="${ROW_SEPARATOR}" read -r kind id name status conclusion end <<< "${row}"
+        case "${kind}" in
+            count)
+                # The count row has three fields, so its total is in id and its end in name.
+                [[ "${id}" =~ ^[0-9]{1,9}$ && "${name}" = end ]] || die "${unexpected}"
+                [ -z "${count}" ] || [ "${count}" = "${id}" ] || die "${unexpected}"
+                count="${id}"
+                ;;
+            job)
+                [[ "${id}" =~ ^[0-9]{1,19}$ && "${status}" =~ ^[a-z_]+$ && "${conclusion}" =~ ^[a-z_]*$ && "${end}" = end ]] \
+                    || die "${unexpected}"
+                jobs+=("${id}"$'\t'"$(dash_if_empty "${name}")"$'\t'"${status}"$'\t'"$(dash_if_empty "${conclusion}")")
+                ;;
+            *) die "${unexpected}" ;;
+        esac
+    done <<< "${GH_OUTPUT}"
+    [ -n "${count}" ] && [ "${count}" -le "${RUN_JOB_LIMIT}" ] && [ "${count}" -eq "${#jobs[@]}" ] || die "${unexpected}"
+    printf 'status\t%s\nconclusion\t%s\nhead_sha\t%s\nhead_branch\t%s\nworkflow\t%s\nevent\t%s\nattempt\t%s\ncreated_at\t%s\n' \
+        "${RUN_STATUS}" "$(dash_if_empty "${RUN_CONCLUSION}")" "${RUN_HEAD_SHA}" "$(dash_if_empty "${RUN_HEAD_BRANCH}")" \
+        "$(dash_if_empty "${RUN_WORKFLOW_NAME}")" "${RUN_EVENT}" "${RUN_ATTEMPT}" "${RUN_CREATED_AT}"
+    [ "${#jobs[@]}" -eq 0 ] || printf 'job\t%s\n' "${jobs[@]}" | LC_ALL=C sort -t $'\t' -k2,2n
+}
+
+# How gh answers a log read of a run that has started again since it was read.
+readonly RUN_LOG_PENDING_TEXT='still in progress; logs will be available when it is complete'
+
+# Exits RUN_PENDING_EXIT, naming the status $1, for a run (or a job of it) whose logs cannot be read
+# yet: GitHub only has them once it is complete. Nothing is printed on stdout.
+run_log_pending() {
+    printf 'cfwf: the run %s of %s is %s; its logs can be read once it is complete\n' "${RUN_ID}" "${REPO}" "$1" >&2
+    exit "${RUN_PENDING_EXIT}"
+}
+
+# Checks that the job JOB_ID of REPO exists and is a job of the run RUN_ID, then exits pending
+# unless it is complete.
+read_run_job() {
+    local id run status end unexpected="gh returned an unexpected result for the job ${JOB_ID} of ${REPO}"
+    api_read "could not read the job ${JOB_ID} of ${REPO}" "repos/${REPO}/actions/jobs/${JOB_ID}" \
+        "${FIELDS_ROW_DEF} [.id, .run_id, .status, \"end\"] | fields_row" \
+        || not_found_in_repository "${JOB_NOT_FOUND_EXIT}" "the job ${JOB_ID} was not found in ${REPO}"
+    IFS="${ROW_SEPARATOR}" read -r id run status end <<< "${GH_OUTPUT}"
+    [[ "${id}" = "${JOB_ID}" && "${run}" =~ ^[0-9]{1,19}$ && "${status}" =~ ^[a-z_]+$ && "${end}" = end ]] || die "${unexpected}"
+    if [ "${run}" != "${RUN_ID}" ]; then
+        printf 'cfwf: the job %s is not a job of the run %s of %s\n' "${JOB_ID}" "${RUN_ID}" "${REPO}" >&2
+        exit "${JOB_NOT_FOUND_EXIT}"
+    fi
+    [ "${status}" = completed ] || run_log_pending "${status}"
+}
+
+# Prints the tail of the logs of the failed steps of the run RUN_ID of REPO (only of the job JOB_ID
+# when it is given): at most LOG_LINES lines of each step, each cut to RUN_LOG_LINE_BYTES, made
+# printable, with any line holding a token replaced whole and long hex and base64 runs masked. The
+# log is streamed from gh through the tail stage into a file, never held whole in a variable.
+# Output over RUN_LOG_BYTE_LIMIT is refused whole, as a diff over DIFF_BYTE_LIMIT is, and nothing
+# is printed until all of it has been made.
+run_log() {
+    local redacted size
+    local -a call statuses scan
+    parse_command_options assign_run_option "--repo --run --job --lines" "" "$@"
+    require REPO --repo
+    require RUN_ID --run
+    [ -n "${LOG_LINES}" ] || LOG_LINES="${RUN_LOG_LINES_DEFAULT}"
+    require_gh
+    read_run
+    [ -z "${JOB_ID}" ] || read_run_job
+    [ "${RUN_STATUS}" = completed ] || run_log_pending "${RUN_STATUS}"
+
+    if [ -n "${JOB_ID}" ]; then
+        call=(run view --job "${JOB_ID}" --repo "${REPO}" --log-failed)
+    else
+        call=(run view "${RUN_ID}" --repo "${REPO}" --log-failed)
+    fi
+    ensure_temp_file GH_ERR_FILE
+    ensure_temp_file LOG_TMP
+    ensure_temp_file LOG_OUT_TMP
+    gh "${call[@]}" < /dev/null 2> "${GH_ERR_FILE}" | LC_ALL=C tr '\000' ' ' \
+        | LC_ALL=C awk -v keep="${LOG_LINES}" -v width="${RUN_LOG_LINE_BYTES}" "${RUN_LOG_TAIL_PROGRAM}" > "${LOG_TMP}"
+    statuses=("${PIPESTATUS[@]}")
+    GH_ERROR=$(< "${GH_ERR_FILE}")
+    GH_OUTPUT=""
+    if [ "${statuses[0]}" -ne 0 ]; then
+        [[ "${GH_ERROR}" != *"${RUN_LOG_PENDING_TEXT}"* ]] || run_log_pending in_progress
+        die "could not read the logs of the run ${RUN_ID} of ${REPO}: $(gh_failure_text)"
+    fi
+    [ "${statuses[1]}" -eq 0 ] || die "could not read the logs of the run ${RUN_ID} of ${REPO}"
+    case "${statuses[2]}" in
+        0) ;;
+        3) die "gh returned an unexpected log for the run ${RUN_ID} of ${REPO}" ;;
+        *) die "could not read the logs of the run ${RUN_ID} of ${REPO}" ;;
+    esac
+
+    # The lines that hold a token, by the same rules a posted body is refused under. Only their
+    # numbers are kept; the matched text never leaves this pipe.
+    redacted=$(LC_ALL=C grep -naE -e "${TOKEN_PATTERN}" -- "${LOG_TMP}" | LC_ALL=C cut -d: -f1 | LC_ALL=C tr '\n' ',')
+    scan=("${PIPESTATUS[@]}")
+    [ "${scan[0]}" -le 1 ] || die "could not scan the logs of the run ${RUN_ID} of ${REPO}"
+    LC_ALL=C awk -v redacted=",${redacted}" "${RUN_LOG_FORMAT_PROGRAM}" "${LOG_TMP}" > "${LOG_OUT_TMP}" \
+        || die "could not format the logs of the run ${RUN_ID} of ${REPO}"
+    size=$(LC_ALL=C wc -c < "${LOG_OUT_TMP}") || die "could not format the logs of the run ${RUN_ID} of ${REPO}"
+    size="${size//[!0-9]/}"
+    [ "${size}" -le "${RUN_LOG_BYTE_LIMIT}" ] \
+        || die "the failed steps' logs of the run ${RUN_ID} of ${REPO} are ${size} bytes, more than the ${RUN_LOG_BYTE_LIMIT} cfwf prints, so none is printed; use a smaller --lines, or --job for one job"
+    cat -- "${LOG_OUT_TMP}"
+}
+
 cmd_run() {
-    dispatch_subcommand run rerun run_rerun -- "$@"
+    dispatch_subcommand run list run_list view run_view log run_log rerun run_rerun -- "$@"
 }
 
 TASK_OUTPUT=""
