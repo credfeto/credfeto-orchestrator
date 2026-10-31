@@ -45,6 +45,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - The development-tools base image now installs bats from a pinned bats-core release instead of trixie apt, and verifies the release commit before installing (#1547)
 - The development-tools README describes where each tool comes from (apt, trixie-backports, pip or upstream release) and how each one is verified (#1547)
 - The docker login and docker buildx setup action pins in the build-development-tools workflow are bumped to their latest releases (#1547)
+- Agent prompts use cfwf instead of raw gh wherever cfwf covers the operation (#1761)
 ### Deprecated
 ### Removed
 ### Deployment Changes
