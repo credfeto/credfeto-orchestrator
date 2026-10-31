@@ -189,7 +189,7 @@ jobs:
             echo "## development-dotnet-tools image pushed"
             echo ""
             echo '```'
-            echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+            echo "${REGISTRY}/${IMAGE_NAME}:latest"
             echo '```'
             echo ""
             echo "NuGet version hash: \`${{ steps.cb.outputs.version-hash }}\`"
@@ -202,7 +202,7 @@ jobs:
           {
             echo "## development-dotnet-tools image built (not pushed — pull_request run)"
             echo ""
-            echo "Verified the Dockerfile builds; nothing was pushed to \`${{ env.REGISTRY }}\`."
+            echo "Verified the Dockerfile builds; nothing was pushed to \`${REGISTRY}\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: "Summarise (installed versions)"
