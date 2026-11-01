@@ -65,6 +65,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - cfwf issue plan-status --approval is now the single plan-approval check for repositories without a Workflow board, and the agent prompt runs it instead of its own gh issue view check. The rule is the stricter of the two it replaces: the approval must follow the latest plan (any revised one included), come from a human collaborator or the owner who is not a bot, the agent, the PR creator or the plan's author, and hold approved or lgtm as a whole word on a non-quoted line with no negation, condition or question. go ahead and looks good no longer count. The orchestrator's host-side check applies the same rule (#1772)
 - The agent prompts mark items Blocked with cfwf label add instead of raw gh issue edit and gh pr edit (#1593)
 - test/oneshot.bats is split into 17 per-concern test/oneshot-<concern>.bats files with the shared setup, teardown and fixture helpers in test/oneshot_helper.bash, so bats can run them in parallel; no test is added, removed or changed (#1579)
+- Five slow bats tests no longer wait on avoidable delays: the real retry sleep in a count_pr_comments_matching test, real gh calls in two notify_discord_work_item waiting-latch tests, a per-guide rescan of every script in the development-guides check, and 20 read-backs in a project_status_convert mismatch test; no assertion is changed (#1580)
 ### Deprecated
 ### Removed
 ### Deployment Changes
