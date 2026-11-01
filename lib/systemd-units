@@ -14,9 +14,10 @@ ORCHESTRATOR_TIMER_INTERVAL="${ORCHESTRATOR_TIMER_INTERVAL:-30sec}"
 # so a single network hang anywhere in the unit — e.g. the self-update git fetch below — would
 # otherwise leave the service permanently "activating" and the timer would never fire again,
 # silently stopping the orchestrator until a human notices and manually intervenes (#1098). Set
-# comfortably above oneshot's own AGENT_TIMEOUT_MINUTES (default 90) to leave margin for the
+# comfortably above oneshot's own AGENT_TIMEOUT_MINUTES (default 90) plus the pre-check that can
+# run before the agent (PRECHECK_TIMEOUT_MINUTES, default 20, #1785), to leave margin for the
 # self-update and agent-startup steps. Override with ORCHESTRATOR_TIMEOUT_START_SEC.
-ORCHESTRATOR_TIMEOUT_START_SEC="${ORCHESTRATOR_TIMEOUT_START_SEC:-6300}"
+ORCHESTRATOR_TIMEOUT_START_SEC="${ORCHESTRATOR_TIMEOUT_START_SEC:-7800}"
 
 # Grace period for ExecStop (removing the agent container) before systemd SIGKILLs the unit on
 # shutdown. Kept short: this only has to outlast a `podman rm -f`, and a long stop timeout
