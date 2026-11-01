@@ -112,6 +112,13 @@ Only once every one of these passes does the entrypoint exec `claude` itself, ha
 prompt built by `oneshot` (see [oneshot.md](oneshot.md) and
 [workflow-board.md](workflow-board.md) for what that prompt actually contains).
 
+The one exception is the pre-check (#1785): when `oneshot` starts the image with
+`ORCHESTRATOR_PRECHECK=1`, the entrypoint runs the same checks, prints
+`orchestrator-precheck: running pre-commit-check`, and execs `pre-commit-check` in the repo
+checkout instead of `claude`. No model runs. `oneshot` uses it before a session to check a PR's
+head (or `main`'s tip for an issue session) and puts the result in the agent's prompt; see
+`run_precommit_precheck` in [development/lib.md](development/lib.md).
+
 ## Session transcripts
 
 Claude Code writes each session's full conversation (every prompt, tool call and tool output) as

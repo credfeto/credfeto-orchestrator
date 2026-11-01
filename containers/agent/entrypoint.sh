@@ -423,4 +423,15 @@ export XDG_RUNTIME_DIR="${WORKSPACE_TMP_DIR:-/workspace/tmp}"
 # CWD tracking files, still hardcode /tmp/claude-* regardless - anthropics/claude-code#31024).
 export CLAUDE_CODE_TMPDIR="${WORKSPACE_TMP_DIR:-/workspace/tmp}"
 
+# Pre-check mode (#1785): oneshot's run_precommit_precheck (lib/podman) launches this image
+# with ORCHESTRATOR_PRECHECK=1 to run pre-commit-check on the checked-out head before an agent
+# session, with the same mounts, environment and pre-flight checks as the agent itself, but no
+# model. The marker line tells oneshot the check really started: an older image without this
+# mode runs the claude --version oneshot passes as its arguments instead, and prints no marker.
+if [ "${ORCHESTRATOR_PRECHECK:-}" = "1" ]; then
+    cd "${WORKSPACE_REPO_DIR:-/workspace/repo}" || die "Cannot enter ${WORKSPACE_REPO_DIR:-/workspace/repo} to run pre-commit-check"
+    info "orchestrator-precheck: running pre-commit-check"
+    exec pre-commit-check
+fi
+
 exec claude "$@"
