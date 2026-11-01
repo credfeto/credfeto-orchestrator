@@ -13440,26 +13440,27 @@ ${HAND_OFF_URL} auto-merge on" ]
     [ "$(sed -n 3p "${GH_FIXTURES}/comment-body.txt")" = "Reviewed and ready." ]
 }
 
-@test "pr hand-off marks a draft ready after the board and before the record, then defers auto-merge (exit 7) while the checks predate the ready time" {
+@test "pr hand-off marks a draft ready after the board and before the record, then enables auto-merge at once although the checks predate the ready time (#1798)" {
     prepare_hand_off
     write_hand_off_pr open true
     write_timeline 42 "$(timeline_event ready_for_review credfeto "" 2026-10-01T13:00:00Z)"
     run_hand_off
-    [ "${status}" -eq 7 ]
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
     [ "${output}" = "${HAND_OFF_URL} title and description set
 ${HAND_OFF_URL} Human Review
 ${HAND_OFF_URL} ready
 ${HAND_OFF_COMMENT_URL}
-${HAND_OFF_URL} auto-merge deferred: the required checks have not finished since the pull request was marked ready" ]
-    [[ "${stderr}" == "cfwf: auto-merge was not enabled on ${REPO}#42: "*"run pr hand-off again once the checks have finished" ]]
-    [[ "${stderr}" != *"steps done"* ]]
+${HAND_OFF_URL} auto-merge on" ]
     grep -qxF "pr ready 42 --repo ${REPO}" "${GH_LOG}"
     [ "$(gh_line_of "project item-edit")" -lt "$(gh_line_of "pr ready 42")" ]
     [ "$(gh_line_of "pr ready 42")" -lt "$(gh_line_of "pr comment 42")" ]
-    [ "$(gh_call_count "pr merge")" -eq 0 ]
+    [ "$(gh_line_of "pr comment 42")" -lt "$(gh_line_of "pr merge 42")" ]
+    grep -qxF "pr merge 42 --repo ${REPO} --auto --merge --match-head-commit ${HEAD_SHA}" "${GH_LOG}"
+    [ "$(gh_call_count "--admin")" -eq 0 ]
 }
 
-@test "pr hand-off defers auto-merge (exit 7) when a required check is pending, or failed, after the pull request was marked ready" {
+@test "pr hand-off enables auto-merge (exit 0) when a required check is pending, or failed, after the pull request was marked ready, since GitHub's auto-merge waits for it (#1798)" {
     local conclusion
     for conclusion in "" failure; do
         prepare_hand_off
@@ -13470,10 +13471,97 @@ ${HAND_OFF_URL} auto-merge deferred: the required checks have not finished since
             > "${GH_FIXTURES}/pr-ready.then/api-repos_credfeto_credfeto-orchestrator_commits_${HEAD_SHA}_check-runs.json"
         : > "${GH_LOG}"
         run_hand_off
-        [ "${status}" -eq 7 ]
-        [[ "${output##*$'\n'}" == "${HAND_OFF_URL} auto-merge deferred: "* ]]
-        [ "$(gh_call_count "pr merge")" -eq 0 ]
+        [ "${status}" -eq 0 ]
+        [ "${output##*$'\n'}" = "${HAND_OFF_URL} auto-merge on" ]
+        [ "$(gh_call_count "pr merge 42 --repo ${REPO} --auto --merge --match-head-commit ${HEAD_SHA}")" -eq 1 ]
         rm -rf "${GH_FIXTURES}/pr-ready.then"
+    done
+}
+
+# Makes main, the base of PR 42, an unprotected branch with no rules: it requires no check and no
+# review. The checks on the head are still judged before the hand-off (every check, since none is
+# required), so build passing lets it through.
+write_ungated_base() {
+    write_branch main
+    write_no_rulesets main
+}
+
+@test "pr hand-off leaves auto-merge off, and says so, on a base branch that requires no check and no review (#1798)" {
+    prepare_hand_off
+    write_ungated_base
+    run_hand_off
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "${HAND_OFF_URL} title and description set
+${HAND_OFF_URL} Human Review
+${HAND_OFF_URL} ready
+${HAND_OFF_COMMENT_URL}
+${HAND_OFF_URL} auto-merge not armed: the base branch requires no check and no review, so auto-merge would merge it at once; it is left ready for a human" ]
+    [ "$(gh_call_count "pr comment 42")" -eq 1 ]
+    [ "$(gh_call_count "pr merge")" -eq 0 ]
+
+    # A plan without rulesets has none, so the same unprotected branch is still ungated.
+    prepare_hand_off
+    write_branch main
+    fail_api "repos/${REPO}/rules/branches/main" "gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)"
+    : > "${GH_LOG}"
+    run_hand_off
+    [ "${status}" -eq 0 ]
+    [[ "${output##*$'\n'}" == "${HAND_OFF_URL} auto-merge not armed: "* ]]
+    [ "$(gh_call_count "pr merge")" -eq 0 ]
+
+    # A pull_request rule that asks for no approval and no code owner requires no review.
+    prepare_hand_off
+    write_branch main
+    jq -n '[{type: "pull_request", parameters: {required_approving_review_count: 0, require_code_owner_review: false}},
+        {type: "required_status_checks", parameters: {required_status_checks: []}}, {type: "deletion"}]' \
+        | write_api "repos/${REPO}/rules/branches/main"
+    : > "${GH_LOG}"
+    run_hand_off
+    [ "${status}" -eq 0 ]
+    [[ "${output##*$'\n'}" == "${HAND_OFF_URL} auto-merge not armed: "* ]]
+    [ "$(gh_call_count "pr merge")" -eq 0 ]
+}
+
+@test "pr hand-off enables auto-merge on an unprotected base branch whose rulesets require a review, a code owner or a check (#1798)" {
+    local rules
+    for rules in '[{type: "pull_request", parameters: {required_approving_review_count: 1}}]' \
+        '[{type: "pull_request", parameters: {required_approving_review_count: 0, require_code_owner_review: true}}]' \
+        '[{type: "required_status_checks", parameters: {required_status_checks: [{context: "build"}]}}]'; do
+        prepare_hand_off
+        write_branch main
+        jq -n "${rules}" | write_api "repos/${REPO}/rules/branches/main"
+        : > "${GH_LOG}"
+        run_hand_off
+        [ "${status}" -eq 0 ]
+        [ "${output##*$'\n'}" = "${HAND_OFF_URL} auto-merge on" ]
+        [ "$(gh_call_count "pr merge 42 --repo ${REPO} --auto --merge --match-head-commit ${HEAD_SHA}")" -eq 1 ]
+    done
+}
+
+@test "pr hand-off enables auto-merge when whether the base requires a review is unknown: a protected branch without required checks, or a branch or rules read that fails after ready (#1798)" {
+    local case_
+    # Classic protection's review rule needs admin rights to read, so a protected branch is unknown.
+    prepare_hand_off
+    write_protection main
+    write_no_rulesets main
+    run_hand_off
+    [ "${status}" -eq 0 ]
+    [ "${output##*$'\n'}" = "${HAND_OFF_URL} auto-merge on" ]
+
+    # The reads before the hand-off see an ungated base; the ones after ready fail.
+    for case_ in "branches/main" "rules/branches/main"; do
+        prepare_hand_off
+        write_hand_off_pr open true
+        write_ungated_base
+        after_ready
+        printf '%s\n' "gh: Bad Gateway (HTTP 502)" > "${GH_FIXTURES}/pr-ready.then/$(basename "$(api_fixture "repos/${REPO}/${case_}")").fail"
+        : > "${GH_LOG}"
+        run_hand_off
+        [ "${status}" -eq 0 ]
+        [ "${output##*$'\n'}" = "${HAND_OFF_URL} auto-merge on" ]
+        [ "$(gh_call_count "pr merge")" -eq 1 ]
+        rm -rf "${GH_FIXTURES}/pr-ready.then" "$(api_fixture "repos/${REPO}/${case_}").fail"
     done
 }
 
@@ -13663,7 +13751,7 @@ ${HAND_OFF_URL} auto-merge deferred: the required checks have not finished since
     [ "$(gh_call_count "pr merge")" -eq 0 ]
 }
 
-@test "pr hand-off help, from help pr hand-off, pr hand-off --help and -h, describes the order and exit 7; help pr and the general help point to it; none calls gh" {
+@test "pr hand-off help, from help pr hand-off, pr hand-off --help and -h, describes the order and that auto-merge is never deferred; help pr and the general help point to it; none calls gh" {
     local invocation
     for invocation in "help pr hand-off" "pr hand-off --help" "pr hand-off -h"; do
         # shellcheck disable=SC2086  # each invocation is split into its words on purpose
@@ -13673,12 +13761,14 @@ ${HAND_OFF_URL} auto-merge deferred: the required checks have not finished since
         [[ "${output}" == *"There is no --description."* ]]
         [[ "${output}" == *"### AI Review Loop: reviewed <head SHA>"* ]]
         [[ "${output}" == *"[--body-file <file>]"*"--description-file - <<'EOF'"* ]]
-        [[ "${output}" == *"7 ready and recorded, auto-merge deferred"* ]]
+        [[ "${output}" == *"Auto-merge is always enabled once the pull request is ready"* ]]
+        [[ "${output}" == *'"<url> auto-merge not'$'\n''armed: <reason>"'* ]]
+        [[ "${output}" != *"deferred"* ]]
     done
     run "${SCRIPT}" help pr
     [[ "${output}" == *"Run 'cfwf pr hand-off --help' for pr hand-off"* ]]
     run "${SCRIPT}" help
-    [[ "${output}" == *"  pr hand-off              Hand a PR to human review"* ]]
+    [[ "${output}" == *"  pr hand-off              Hand a PR to human review"*"then auto-merge (exit 8 refused)"$'\n'* ]]
     [ ! -s "${GH_LOG}" ]
 }
 
@@ -13769,16 +13859,28 @@ ${HAND_OFF_URL} auto-merge on" ]
     assert_never_hand_off_writes
 }
 
-@test "pr finalise-dependency marks a draft ready, then defers auto-merge (exit 7) while the checks predate the ready time (#1771)" {
+@test "pr finalise-dependency marks a draft ready, then enables auto-merge at once although the checks predate the ready time (#1771, #1798)" {
     prepare_dependency
     write_dependency_pr open true
     write_timeline 42 "$(timeline_event ready_for_review credfeto "" 2026-10-01T13:00:00Z)"
     run_finalise
-    [ "${status}" -eq 7 ]
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
     [ "${output}" = "${HAND_OFF_URL} ready
-${HAND_OFF_URL} auto-merge deferred: the required checks have not finished since the pull request was marked ready" ]
-    [[ "${stderr}" == *"run pr finalise-dependency again once the checks have finished" ]]
+${HAND_OFF_URL} auto-merge on" ]
     grep -qxF "pr ready 42 --repo ${REPO}" "${GH_LOG}"
+    [ "$(gh_line_of "pr ready 42")" -lt "$(gh_line_of "pr merge 42")" ]
+    grep -qxF "pr merge 42 --repo ${REPO} --auto --merge --match-head-commit ${HEAD_SHA}" "${GH_LOG}"
+    assert_never_hand_off_writes
+}
+
+@test "pr finalise-dependency leaves auto-merge off, and says so, on a base branch that requires no check and no review (#1798)" {
+    prepare_dependency
+    write_ungated_base
+    run_finalise
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${HAND_OFF_URL} ready
+${HAND_OFF_URL} auto-merge not armed: the base branch requires no check and no review, so auto-merge would merge it at once; it is left ready for a human" ]
     [ "$(gh_call_count "pr merge")" -eq 0 ]
     assert_never_hand_off_writes
 }
@@ -13870,7 +13972,7 @@ ${HAND_OFF_URL} auto-merge deferred: the required checks have not finished since
     done
 }
 
-@test "pr finalise-dependency help, from help pr finalise-dependency and --help, describes the rules and exit 7; help pr and the general help point to it; none calls gh (#1771)" {
+@test "pr finalise-dependency help, from help pr finalise-dependency and --help, describes the rules and that auto-merge is never deferred; help pr and the general help point to it; none calls gh (#1771)" {
     local invocation
     for invocation in "help pr finalise-dependency" "pr finalise-dependency --help" "pr finalise-dependency -h"; do
         # shellcheck disable=SC2086  # each invocation is split into its words on purpose
@@ -13878,12 +13980,13 @@ ${HAND_OFF_URL} auto-merge deferred: the required checks have not finished since
         [ "${status}" -eq 0 ]
         [[ "${output}" == "Usage: cfwf pr finalise-dependency --repo <owner/repo> --pr <n>"* ]]
         [[ "${output}" == *"never changes"*"the title, the description or the Workflow board"* ]]
-        [[ "${output}" == *"7 ready, auto-merge"* ]]
+        [[ "${output}" == *"Auto-merge is enabled as 'cfwf pr hand-off' enables it: always"* ]]
+        [[ "${output}" != *"deferred"* ]]
     done
     run "${SCRIPT}" help pr
     [[ "${output}" == *"Run 'cfwf pr finalise-dependency --help' for pr finalise-dependency"* ]]
     run "${SCRIPT}" help
-    [[ "${output}" == *"  pr finalise-dependency   Mark a bot dependency-update PR ready"* ]]
+    [[ "${output}" == *"  pr finalise-dependency   Mark a bot dependency-update PR ready"*"nothing else (exit 8 refused)"$'\n'* ]]
     [ ! -s "${GH_LOG}" ]
 }
 
