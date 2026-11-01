@@ -68,10 +68,12 @@ broken_links() {
 }
 
 @test "every file under docs/development/scripts is a guide for a script that exists" {
-    local guide name extra=""
+    local guide name names extra=""
+    # List the scripts once, not once per guide.
+    names=$(script_names)
     for guide in "${GUIDES}"/scripts/*.md; do
         name=$(basename "${guide}" .md)
-        script_names | grep -qxF "${name}" || extra+="${name} "
+        grep -qxF "${name}" <<< "${names}" || extra+="${name} "
     done
     [ -z "${extra}" ] || { printf 'guide without a script: %s\n' "${extra}" >&2; return 1; }
 }
