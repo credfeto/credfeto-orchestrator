@@ -242,10 +242,12 @@ COPY --chown=root:root --chmod=0755 claude-hooks/enforce-ssh-host-and-key /etc/c
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-curl-host /etc/claude-code/hooks/enforce-curl-host
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-background-for-long-running-commands /etc/claude-code/hooks/enforce-background-for-long-running-commands
 COPY --chown=root:root --chmod=0755 claude-hooks/cache-gh-lookups /etc/claude-code/hooks/cache-gh-lookups
+COPY --chown=root:root --chmod=0755 claude-hooks/block-secret-file-reads /etc/claude-code/hooks/block-secret-file-reads
 COPY --chown=root:root --chmod=0444 claude-hooks/command-allowlist /etc/claude-code/hooks/command-allowlist
 COPY --chown=root:root --chmod=0444 claude-hooks/command-blocklist /etc/claude-code/hooks/command-blocklist
 COPY --chown=root:root --chmod=0444 claude-hooks/env-var-blocklist /etc/claude-code/hooks/env-var-blocklist
 COPY --chown=root:root --chmod=0444 claude-hooks/allowed-dirs /etc/claude-code/hooks/allowed-dirs
+COPY --chown=root:root --chmod=0444 claude-hooks/secret-files /etc/claude-code/hooks/secret-files
 RUN chown root:root /etc/claude-code /etc/claude-code/hooks /etc/claude-code/mcp \
     && chmod 0755 /etc/claude-code /etc/claude-code/hooks /etc/claude-code/mcp
 
@@ -432,7 +434,7 @@ RUN set -e; \
         || { echo "FATAL sanity: managed-settings.json runs a hook from outside /etc/claude-code/hooks (listed above)" >&2; exit 1; }; \
     for h in reject-obfuscated-commands enforce-allowed-dirs block-config-skills enforce-git-identity enforce-git-dash-c \
              block-git-worktree block-dotnet-tool-install block-github-mcp-write-tools enforce-ssh-host-and-key enforce-curl-host \
-             enforce-background-for-long-running-commands cache-gh-lookups; do \
+             enforce-background-for-long-running-commands cache-gh-lookups block-secret-file-reads; do \
         [ "$(stat -c '%U:%G %a' /etc/claude-code/hooks/$h)" = "root:root 755" ] \
             || { echo "FATAL sanity: $h hook missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
     done; \
@@ -448,11 +450,13 @@ RUN set -e; \
         || { echo "FATAL sanity: managed-settings.json does not allow the cfwf MCP tools (mcp__cfwf__*)" >&2; exit 1; }; \
     [ ! -e /etc/claude-code/hooks/allowed-dirs.local ] \
         || { echo "FATAL sanity: an allowed-dirs.local override must never be baked into the image" >&2; exit 1; }; \
+    [ ! -e /etc/claude-code/hooks/secret-files.local ] \
+        || { echo "FATAL sanity: a secret-files.local override must never be baked into the image" >&2; exit 1; }; \
     for d in /workspace/repo /workspace/rules /workspace/tmp; do \
         grep -qxF "$d" /etc/claude-code/hooks/allowed-dirs \
             || { echo "FATAL sanity: allowed-dirs does not list the agent mount $d" >&2; exit 1; }; \
     done; \
-    for f in command-allowlist command-blocklist env-var-blocklist allowed-dirs; do \
+    for f in command-allowlist command-blocklist env-var-blocklist allowed-dirs secret-files; do \
         [ "$(stat -c '%U:%G %a' /etc/claude-code/hooks/$f)" = "root:root 444" ] \
             || { echo "FATAL sanity: hook policy file $f missing or wrong owner/perms" >&2; exit 1; }; \
     done; \

@@ -139,10 +139,12 @@ root_install() {
 # directory (scripts 0755, data files 0444), discovered via find rather than a
 # hardcoded name list so a newly added hook or data file is picked up
 # automatically, then the managed settings and any allowed-dirs.local.
-# An allowed-dirs.local sitting in the checkout is never copied: the agent can
-# write there, and enforce-allowed-dirs prefers that file to the shipped list,
-# so copying it would let the agent widen its own directory roots without a
-# reviewed change. It is installed only from the path given as the argument.
+# An allowed-dirs.local or secret-files.local sitting in the checkout is never
+# copied: the agent can write there, and enforce-allowed-dirs and
+# block-secret-file-reads prefer those files to the shipped lists, so copying
+# one would let the agent widen its own directory roots or shrink its own
+# secret-file patterns without a reviewed change. allowed-dirs.local is
+# installed only from the path given as the argument.
 install_managed_files() {
     local allowed_dirs_file="$1" merged_mcp_file="$2"
     local hooks_dir="${CLAUDE_MANAGED_DIR}/hooks"
@@ -155,7 +157,7 @@ install_managed_files() {
         mode=0444
         [ -x "${src}" ] && mode=0755
         root_install -m "${mode}" "${src}" "${hooks_dir}/$(basename "${src}")"
-    done < <(find "${SOURCE_HOOKS_DIR}" -mindepth 1 -maxdepth 1 -type f ! -name allowed-dirs.local | sort)
+    done < <(find "${SOURCE_HOOKS_DIR}" -mindepth 1 -maxdepth 1 -type f ! -name allowed-dirs.local ! -name secret-files.local | sort)
     root_install -m 0444 "${SOURCE_MANAGED_SETTINGS}" "${CLAUDE_MANAGED_DIR}/managed-settings.json"
     root_install -m 0755 "${SOURCE_MCP_HEADERS}" "${mcp_dir}/$(basename "${SOURCE_MCP_HEADERS}")"
     root_install -m 0444 "${merged_mcp_file}" "${CLAUDE_MANAGED_DIR}/managed-mcp.json"

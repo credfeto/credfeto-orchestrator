@@ -77,6 +77,12 @@ RATE_LIMIT_RESUME_BUFFER_SECS=3600
 # shellcheck disable=SC2034  # read by lib/state after sourcing
 CFWF_SCRIPT="${BASEDIR:?BASEDIR must be set by the script that sources lib/globals}/containers/base/development-full/scripts/cfwf"
 
+# The directory holding the secret-files pattern list (and any host-only secret-files.local) that
+# lib/podman reads to mask secret-bearing files in the repository, and that the block-secret-file-reads
+# hook reads from its own directory. One list serves both layers so they cannot drift apart.
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
+SECRET_FILES_DIR="${BASEDIR}/containers/base/development-full/claude-hooks"
+
 # Where unparseable 429 rate-limit messages are reported so parse_reset_time can be extended.
 # shellcheck disable=SC2034  # read by lib/state after sourcing
 RATE_LIMIT_ISSUE_REPO="credfeto/credfeto-orchestrator"

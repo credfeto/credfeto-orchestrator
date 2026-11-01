@@ -69,7 +69,7 @@ teardown() {
         [ -f "${target}" ] || { echo "missing ${name}" >&2; return 1; }
         [ ! -L "${target}" ] || { echo "${name} is a symlink" >&2; return 1; }
         diff "${src}" "${target}" || { echo "${name} differs from its source" >&2; return 1; }
-    done < <(find "${SOURCE_HOOKS_DIR}" -mindepth 1 -maxdepth 1 -type f ! -name allowed-dirs.local)
+    done < <(find "${SOURCE_HOOKS_DIR}" -mindepth 1 -maxdepth 1 -type f ! -name allowed-dirs.local ! -name secret-files.local)
 }
 
 @test "hook scripts are installed 0755 and data files 0444" {
@@ -88,7 +88,7 @@ teardown() {
     main
 
     local expected actual
-    expected=$(find "${SOURCE_HOOKS_DIR}" -mindepth 1 -maxdepth 1 -type f ! -name allowed-dirs.local -printf '%f\n' | sort)
+    expected=$(find "${SOURCE_HOOKS_DIR}" -mindepth 1 -maxdepth 1 -type f ! -name allowed-dirs.local ! -name secret-files.local -printf '%f\n' | sort)
     actual=$(find "${CLAUDE_MANAGED_DIR}/hooks" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
     [ "${expected}" = "${actual}" ]
 }
@@ -103,6 +103,19 @@ teardown() {
     [ -f "${CLAUDE_MANAGED_DIR}/hooks/allowed-dirs" ]
     [ ! -e "${CLAUDE_MANAGED_DIR}/hooks/allowed-dirs.local" ]
     run grep -c 'allowed-dirs.local' "${SUDO_LOG}"
+    [ "${output}" = "0" ]
+}
+
+@test "a secret-files.local left in the checkout's claude-hooks dir is never installed" {
+    allow_sudo
+    SOURCE_HOOKS_DIR="${TEST_TMP}/claude-hooks"
+    cp -r "${REPO_DIR}/containers/base/development-full/claude-hooks" "${SOURCE_HOOKS_DIR}"
+    printf 'nothing-matches-this\n' > "${SOURCE_HOOKS_DIR}/secret-files.local"
+    main
+
+    [ -f "${CLAUDE_MANAGED_DIR}/hooks/secret-files" ]
+    [ ! -e "${CLAUDE_MANAGED_DIR}/hooks/secret-files.local" ]
+    run grep -c 'secret-files.local' "${SUDO_LOG}"
     [ "${output}" = "0" ]
 }
 
@@ -650,10 +663,20 @@ installed_mcp_names() {
     [ "${output}" = '/etc/claude-code/hooks/block-github-mcp-write-tools' ]
 }
 
-@test "enforce-allowed-dirs is registered against the Edit, Write and NotebookEdit tools" {
+@test "enforce-allowed-dirs and block-secret-file-reads are registered against the Edit, Write and NotebookEdit tools" {
     run jq -r '.hooks.PreToolUse[] | select(.matcher == "Edit|Write|NotebookEdit") | .hooks[] | .command' "${SOURCE_MANAGED_SETTINGS}"
     [ "${status}" -eq 0 ]
-    [ "${output}" = '/etc/claude-code/hooks/enforce-allowed-dirs' ]
+    [ "${output}" = '/etc/claude-code/hooks/enforce-allowed-dirs
+/etc/claude-code/hooks/block-secret-file-reads' ]
+}
+
+@test "block-secret-file-reads is registered against the Bash chain and the Read tool" {
+    run jq -r '.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[] | .command' "${SOURCE_MANAGED_SETTINGS}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *'/etc/claude-code/hooks/block-secret-file-reads'* ]]
+    run jq -r '.hooks.PreToolUse[] | select(.matcher == "Read") | .hooks[] | .command' "${SOURCE_MANAGED_SETTINGS}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = '/etc/claude-code/hooks/block-secret-file-reads' ]
 }
 
 @test "the repo's own .claude settings, .mcp.json and ~/.claude.json are denied to Edit by relative path" {
