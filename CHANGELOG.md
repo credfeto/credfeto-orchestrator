@@ -46,6 +46,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Block POSIXLY_CORRECT and multi-match --target-directory globs in cp, mv and ln hook checks - #1698
 - Close gaps in Claude hooks found while reviewing #1620 (symlinked repo claude config, absolute vendored block-no-verify hook, empty git -C, dead xargs allowlist entry, git worktree quoting/move, env-var blocklist bypasses, instruction file issue references)
 - Claude hooks (block-git-worktree, block-dotnet-tool-install, reject-obfuscated-commands, enforce-curl-host, enforce-ssh-host-and-key, enforce-git-identity) now compare unquoted words as bash passes them (backslash escapes removed), so `inst\all`, `work\tree` and `d\otnet` no longer bypass the hooks - #1683
+- Hooks pass command words as JSON with per-word base64, so words containing tabs, newlines or empty strings no longer desync - #1530
 ### Changed
 - `cfwf pr hand-off` now takes two mandatory options, `--title <title>` (a Conventional Commits title, leak-checked) and `--description-file <file|->` (leak-checked and refused for a plan-approval keyword, as the record body is; there is no text form), and sets the pull request's title and description as its first write, before the board, ready, record and auto-merge steps, so a pull request reaches human review saying what it holds instead of the placeholder it was opened with (#1755)
 - Cleaned up ai/local instruction files (em dashes, load conditions, issue references)
