@@ -43,6 +43,10 @@ setup_main_mocks() {
     # this fallback existed is exactly what "no fallback match" reproduces. Tests exercising the
     # fallback itself override this individually.
     pr_review_pipeline_finished_without_auto_merge() { return 1; }
+    # Default: no repo allows auto-merge and nothing is ever armed (#1798), so the #1479 fallback
+    # tests above stay settled and no test reaches the real gh. Tests of the re-arm path override.
+    repo_allows_auto_merge() { return 1; }
+    arm_missing_auto_merge() { return 1; }
     # Stub resolve_gh_me for the assignee standoff check (#1142) — no real gh call
     # in integration tests.  := preserves any _GH_ME set directly by unit tests.
     resolve_gh_me()                      { _GH_ME="${_GH_ME:-testuser}"; return 0; }

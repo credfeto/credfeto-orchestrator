@@ -95,7 +95,8 @@ source "${ONESHOT_DIR}/lib/podman" \
 # reset_issue_invocation_counts_if_capped, record_session_outcome, and run_daily_digest_rollover
 # are declared in lib/state.
 
-# pr_json_is_terminal, pr_json_has_placeholder_file, pr_json_has_failed_required_check, gh_noun_for_item_type,
+# pr_json_is_terminal, repo_allows_auto_merge, pr_should_arm_missing_auto_merge, arm_missing_auto_merge,
+# pr_json_has_placeholder_file, pr_json_has_failed_required_check, gh_noun_for_item_type,
 # apply_blocked_label, apply_blocked_label_with_reason, item_confirmed_not_blocked_live,
 # block_pr_for_idle_exhausted_failure,
 # pr_json_has_unaddressed_review_request, block_pr_for_idle_exhausted_review,
@@ -618,6 +619,23 @@ main() {
                     review_pipeline_finished=false
                     pr_review_pipeline_finished_without_auto_merge "${pr_json}" "${open_pr}" \
                         && review_pipeline_finished=true
+                    # The board fallback stands only where auto-merge cannot be armed (#1798): on a repo that
+                    # allows it, a finished PR with no auto-merge request is not settled, since it would never
+                    # merge once approved. oneshot arms it itself, with no agent session, and re-reads it to
+                    # confirm (see pr_should_arm_missing_auto_merge and arm_missing_auto_merge, lib/github-status).
+                    # An unaddressed trusted comment goes to the agent first, as it does for a settled PR.
+                    if [ "${review_pipeline_finished}" = "true" ] && [ "${pr_has_unaddressed_comment}" != "true" ] \
+                        && pr_should_arm_missing_auto_merge "${pr_json}" "${item_repo}"; then
+                        if arm_missing_auto_merge "${open_pr}" "${item_repo}" "${pr_json}"; then
+                            info "PR #${open_pr} in ${item_repo}: auto-merge armed after missing auto-merge"
+                            count_unchanged=$((count_unchanged + 1))
+                            item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "auto-merge armed after missing auto-merge")")
+                            continue
+                        fi
+                        # Not settled without it: the agent's finalise phase hands it off again.
+                        warn "PR #${open_pr} in ${item_repo}: could not arm the missing auto-merge — not settled"
+                        review_pipeline_finished=false
+                    fi
                     if pr_json_is_terminal "${pr_json}" "${review_pipeline_finished}"; then
                         # Discord's review-approval nudge fires regardless of
                         # pr_has_unaddressed_comment below — an unrelated trusted comment must not
@@ -1101,6 +1119,23 @@ main() {
                 review_pipeline_finished=false
                 pr_review_pipeline_finished_without_auto_merge "${pr_json}" "${item_id}" \
                     && review_pipeline_finished=true
+                # The board fallback stands only where auto-merge cannot be armed (#1798): on a repo that
+                # allows it, a finished PR with no auto-merge request is not settled, since it would never
+                # merge once approved. oneshot arms it itself, with no agent session, and re-reads it to
+                # confirm (see pr_should_arm_missing_auto_merge and arm_missing_auto_merge, lib/github-status).
+                # An unaddressed trusted comment goes to the agent first, as it does for a settled PR.
+                if [ "${review_pipeline_finished}" = "true" ] && [ "${pr_has_unaddressed_comment}" != "true" ] \
+                    && pr_should_arm_missing_auto_merge "${pr_json}" "${item_repo}"; then
+                    if arm_missing_auto_merge "${item_id}" "${item_repo}" "${pr_json}"; then
+                        info "PR #${item_id} in ${item_repo}: auto-merge armed after missing auto-merge"
+                        count_unchanged=$((count_unchanged + 1))
+                        item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "auto-merge armed after missing auto-merge")")
+                        continue
+                    fi
+                    # Not settled without it: the agent's finalise phase hands it off again.
+                    warn "PR #${item_id} in ${item_repo}: could not arm the missing auto-merge — not settled"
+                    review_pipeline_finished=false
+                fi
                 if pr_json_is_terminal "${pr_json}" "${review_pipeline_finished}"; then
                     # Discord's review-approval nudge fires regardless of
                     # pr_has_unaddressed_comment below — an unrelated trusted comment must not
