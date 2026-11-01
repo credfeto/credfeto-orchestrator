@@ -103,7 +103,7 @@ State files, all named `<Type>_<id>.<suffix>` under `SESSION_BASE_DIR` (`ORCHEST
 
 1. Put new code in the `lib/` module that owns the concern, not in `oneshot`.
 2. `shellcheck oneshot` must be clean; it follows the annotated `source` lines, so it covers `lib/`. Also run `shellcheck test/*.bats` after a test change.
-3. Write the test with the change, run the relevant subset, and mutation-check every new test (break the code, watch it fail, restore). Leave the full run to the pre-commit hook.
+3. Write the test with the change, run the relevant subset, and mutation-check every new test (break the code, watch it fail, restore). Leave the full run to CI.
 4. If a hashed field of `fingerprint_issue_json` or `fingerprint_pr_json` is added, removed or changes meaning, bump `FINGERPRINT_SCHEMA_VERSION` by 1 and update the field list in [fingerprinting.instructions.md](../../../ai/local/fingerprinting.instructions.md); see the test "fingerprint_issue_json and fingerprint_pr_json prepend FINGERPRINT_SCHEMA_VERSION".
 5. Do not add guidance to `build_issue_prompt` or `build_pr_prompt`; they stay a two-line launch prompt, and rules belong in instruction files ([oneshot-prompts.instructions.md](../../../ai/local/oneshot-prompts.instructions.md)). Editing a `build_*_claude_md` heredoc is a behaviour change. `MAX_PROMPT_CHARS` is only a sanity guard in `invoke_claude`.
 6. Update `README.md`, this guide and the affected `docs/` pages, and add the changelog entry with `dotnet changelog`, never by hand.

@@ -8,7 +8,9 @@
 
 - Tests use [bats-core](https://github.com/bats-core/bats-core) (the `bats` command), which is already installed.
 - Tests live in the `test/` directory as `*.bats` files, with shared setup in `test/test_helper.bash`.
-- Run the whole suite with `bats test/` from the repository root.
+- Run only the bats files that cover what you changed: `bats test/<file>.bats`, or `bats -f '<name>' test/<file>.bats` for a subset. Do this after every change and before every commit.
+- Do not run the whole suite yourself: CI runs every test on each push (the `shell-tests` check), and a full run in the agent container takes 15 minutes or more, which uses up the session's time limit. If CI then fails, fix the failing tests it names.
+- The exception is a change to something every test depends on and no single test file covers, such as `test/test_helper.bash`, `lib/globals` or a shared fixture. Then run the whole suite once with `bats --jobs 4 test/`, in the background with its output in a file, and wait for it with one blocking `cfwf task wait --output <file>`, not by polling.
 - Every behaviour added to a shell script must have a corresponding bats test before committing.
 - The suite covers every script in the repository (see [docs/development/README.md](../../docs/development/README.md) for the list, with a guide for each); the same conventions apply to all of them.
 
