@@ -105,8 +105,9 @@ link in these pages is broken.
 - Mutation-check every new test: break the code (or the one line the test is about), see the
   test fail, then put the code back. A test that passes on broken code proves nothing, and a
   glue mistake such as a missing space between two arguments is exactly what this catches.
-- Run one file with `bats test/<name>.bats`, or a subset of the very large
-  `test/oneshot.bats` with `bats -f '<pattern>' test/oneshot.bats`. The whole suite takes
+- Run one file with `bats test/<name>.bats`, or a subset of one with `bats -f '<pattern>'`. The
+  `oneshot` tests are split by concern into `test/oneshot-<concern>.bats` files that share
+  `test/oneshot_helper.bash`, so run the one for the area you changed. The whole suite takes
   minutes; CI runs it as `shell-tests`. The global pre-commit hooks (the hooks are not in this
   repository; they come from the developer's global `core.hooksPath`) also run it when a `.bats`
   file is staged, and always under `pre-commit-check`, so such a commit takes minutes.

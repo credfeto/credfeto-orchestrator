@@ -3720,9 +3720,9 @@ readonly HOLD_LABELS_DEF='def has_label_named($name): any(.labels[]; .name | asc
 # The plan-approval rule (#1772), the single source of truth for "has a human approved this plan"
 # in a repository with no Workflow board: issue plan-status --approval applies it, and lib/prompts
 # runs that rather than a check of its own. lib/github-status applies the same rule host-side with
-# the same four patterns (lib/globals; test/oneshot.bats checks the copies are identical). It is the
-# stricter of the two rules it replaced on every dimension, so it can only ever refuse what either
-# accepted, never accept what either refused:
+# the same four patterns (lib/globals; test/oneshot-approval.bats checks the copies are identical).
+# It is the stricter of the two rules it replaced on every dimension, so it can only ever refuse
+# what either accepted, never accept what either refused:
 # - LOOSE_PLAN_HEADING_PATTERN: a comment matching it, in any case and anywhere in its body, is a
 #   plan for approval purposes, so the latest of them (a revised plan included) is the one an
 #   approval must follow; it matches every comment plan-status itself calls a plan, and more.
