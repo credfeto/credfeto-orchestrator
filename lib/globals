@@ -187,8 +187,9 @@ TOOL_DENIED_NEGATED_WORKAROUND_PATTERNS=(
 
 # The plan-approval rule's patterns (#1772): copies of the four of the same name in cfwf, which
 # applies the rule in issue plan-status --approval; issue_json_has_human_plan_approval
-# (lib/github-status) applies it host-side. test/oneshot.bats checks each copy is identical to cfwf's,
-# so the two can never disagree on what counts as a human approving a plan. See cfwf for each.
+# (lib/github-status) applies it host-side. test/oneshot-approval.bats checks each copy is identical
+# to cfwf's, so the two can never disagree on what counts as a human approving a plan. See cfwf for
+# each.
 # shellcheck disable=SC2034  # read by lib/github-status after sourcing
 LOOSE_PLAN_HEADING_PATTERN='##[[:space:]]*Implementation Plan'
 # shellcheck disable=SC2034  # read by lib/github-status after sourcing
