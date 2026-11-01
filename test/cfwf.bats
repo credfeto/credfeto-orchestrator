@@ -9507,7 +9507,7 @@ read_once_asking_for() {
     run --separate-stderr "${SCRIPT}" pr
     [ "${status}" -eq 2 ]
     [ -z "${output}" ]
-    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, checks-wait, view, list, comments, reply, create, ready-at, auto-merge-at, diff, edit, hand-off, finalise-dependency, take-back, close, reopen, search)"* ]]
+    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, checks-wait, view, list, comments, reply, create, ready-at, status, auto-merge-at, diff, edit, hand-off, finalise-dependency, take-back, close, reopen, search)"* ]]
     [[ "${stderr}" == *"Usage: cfwf pr checks"*"Run 'cfwf pr view --help' for pr view"* ]]
 
     run --separate-stderr "${SCRIPT}" pr frobnicate
@@ -15385,4 +15385,303 @@ write_workflows() {
     run "${SCRIPT}" help pr
     [[ "${output}" == *"Run 'cfwf pr search --help' for pr search"* ]]
     [ ! -f "${GH_LOG}" ]
+}
+
+# --- pr status (#1782) -----------------------------------------------------------
+
+STATUS_READY_AT="2026-10-08T12:00:00Z"
+STATUS_FIELDS=(state draft title url base head head-sha auto-merge review-decision merge-state mergeable labels
+    assignees author board ready-at checks checks-failed checks-pending files comments reviews threads unresolved
+    activity-since-ready last-activity)
+STATUS_VIEW_JSON="state,isDraft,title,url,baseRefName,headRefName,headRefOid,autoMergeRequest,reviewDecision,mergeStateStatus,mergeable,labels,assignees,author,files,changedFiles"
+# PR 42's items on the boards: one on a decoy project, and AI Review on the Workflow project.
+STATUS_BOARD_ITEMS='[{"project": {"id": "PVT_other"}, "legacy": null, "status": {"name": "Human Review"}},
+    {"project": {"id": "PVT_proj"}, "legacy": null, "status": {"name": "AI Review"}}]'
+
+# Writes the one answer setup's gh stand-in gives every GraphQL call, which serves both reads pr
+# status makes with it, each --jq program picking its own part: PR 42's board items $1 (a JSON
+# array) for the board read, and the discussion for pr comments' read, the comments $2, the reviews
+# $3 and the threads $4, each a discussion_list object.
+write_status_graphql() {
+    jq -n --argjson items "$1" --argjson comments "$2" --argjson reviews "$3" --argjson threads "$4" \
+        '{data: {repository: {pullRequest: {projectItems: {nodes: $items}, reviewDecision: null,
+            comments: $comments, reviews: $reviews, reviewThreads: $threads}}}}' > "${GH_FIXTURES}/graphql-target.json"
+}
+
+# Writes PR 42's discussion: one top-level comment by credfeto at 2026-10-08T10:17:52Z, before
+# STATUS_READY_AT; one review by reviewer at 2026-10-08T14:44:59Z, after it; and one unresolved
+# thread. $1 is the board items (STATUS_BOARD_ITEMS by default).
+write_status_discussion() {
+    write_status_graphql "${1:-${STATUS_BOARD_ITEMS}}" \
+        "$(discussion_list 1 false "" "$(issue_comment_node 7 credfeto User "Looks close.")")" \
+        "$(discussion_list 1 false "" "$(review_node 8 reviewer User CHANGES_REQUESTED "Please fix the test.")")" \
+        "$(discussion_list 1 false "" "$(thread_node false false README.md 3 3 "$(inline_node 500 "" 8 reviewer User "This line.")")")"
+}
+
+# PR 42 as write_pull_request writes it (open, ready, one changed file, head HEAD_SHA), AI Review on
+# the Workflow board, last marked ready at STATUS_READY_AT; main requires build, which passed; and
+# write_status_discussion's discussion. Each test changes what it needs.
+prepare_pr_status() {
+    write_pull_request
+    prepare_pr_checks
+    write_issue_kind 42 pull
+    write_timeline 42 "$(timeline_event ready_for_review credfeto "" "${STATUS_READY_AT}")"
+    write_status_discussion
+}
+
+run_pr_status() {
+    run --separate-stderr "${SCRIPT}" pr status --repo "${REPO}" --pr 42
+}
+
+# Prints the output of prepare_pr_status's pull request, with the values given as name=value in
+# place of its own.
+status_output() {
+    local -A values=(
+        ["state"]=OPEN ["draft"]=no ["title"]="feat: add a thing" ["url"]="${PR_URL}" ["base"]=main ["head"]=feat/thing
+        ["head-sha"]="${HEAD_SHA}" ["auto-merge"]=off ["review-decision"]="" ["merge-state"]=BLOCKED
+        ["mergeable"]=MERGEABLE ["labels"]="" ["assignees"]="" ["author"]=prpixie ["board"]="AI Review"
+        ["ready-at"]="${STATUS_READY_AT}" ["checks"]=pass ["checks-failed"]="" ["checks-pending"]="" ["files"]=1
+        ["comments"]=1 ["reviews"]=1 ["threads"]=1 ["unresolved"]=1 ["activity-since-ready"]=1
+        ["last-activity"]="2026-10-08T14:44:59Z reviewer"
+    )
+    local change name
+    for change in "$@"; do
+        values["${change%%=*}"]="${change#*=}"
+    done
+    for name in "${STATUS_FIELDS[@]}"; do
+        printf '%s\t%s\n' "${name}" "${values["${name}"]}"
+    done
+}
+
+# Nothing was written: pr status only reads.
+assert_status_read_only() {
+    [ "$(gh_call_count "project item-")" -eq 0 ]
+    [ "$(gh_call_count "--method")" -eq 0 ]
+    [ "$(gh_call_count "pr ready")" -eq 0 ]
+    [ "$(gh_call_count "pr edit")" -eq 0 ]
+    [ "$(gh_call_count "pr merge")" -eq 0 ]
+    [ "$(gh_call_count "pr comment")" -eq 0 ]
+    [ "$(gh_call_count "issue comment")" -eq 0 ]
+    [ "$(gh_call_count "mutation")" -eq 0 ]
+}
+
+@test "pr status help, from help pr status, pr status --help and pr status -h, lists every field and exit code and calls no gh" {
+    local flag name
+    for flag in "pr status --help" "pr status -h" "help pr status"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run "${SCRIPT}" ${flag}
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == "Usage: cfwf pr status --repo <owner/repo> --pr <n>"$'\n'* ]]
+        for name in "${STATUS_FIELDS[@]}"; do
+            grep -qE "^  ${name} +[A-Za-z0-9]" <<< "${output}" || {
+                echo "not listed: ${name}" >&2
+                return 1
+            }
+        done
+        [[ "${output}" == *"0 every judged check passed;"$'\n'"3 at least one failed; 4 none failed and at least one is pending; 5 the head has no check runs or"* ]]
+        [[ "${output}" == *"9 the pull request does not exist"* ]]
+        [[ "${output}" == *"2 a usage error."* ]]
+        [[ "${output}" == *"--json, --jq, --template, --field and --all are not options"* ]]
+    done
+    run "${SCRIPT}" help
+    [[ "${output}" == *$'\n'"  pr status                Print a PR's whole state in one call: metadata, board, checks, comments (exit 0, 3, 4, 5 or 9)"$'\n'* ]]
+    run "${SCRIPT}" help pr
+    [[ "${output}" == *"Run 'cfwf pr status --help' for pr status"* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "pr status usage errors exit 2 before any gh call" {
+    local -a call
+    local calls=("--repo ${REPO}" "--pr 42" "--repo ${REPO} --pr 0" "--repo ${REPO} --pr abc" "--repo ${REPO} --pr 42 --json state"
+        "--repo ${REPO} --pr 42 --field state" "--repo ${REPO} --pr 42 --all" "--repo ${REPO} --pr 42 --pr 43" "--repo owner --pr 42")
+    local arguments
+    for arguments in "${calls[@]}"; do
+        read -ra call <<< "${arguments}"
+        run --separate-stderr "${SCRIPT}" pr status "${call[@]}"
+        [ "${status}" -eq 2 ] || {
+            echo "accepted: ${arguments}" >&2
+            return 1
+        }
+        [ -z "${output}" ]
+        [[ "${stderr}" == "cfwf: "*"Usage: cfwf pr status --repo <owner/repo> --pr <n>"* ]]
+    done
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "pr status prints every field in the fixed order and exits 0 when the required checks passed, only reading" {
+    prepare_pr_status
+    run_pr_status
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "$(status_output)" ]
+    [ "$(grep -c . <<< "${output}")" -eq "${#STATUS_FIELDS[@]}" ]
+    [ "$(grep -c $'^[a-z-]*\t' <<< "${output}")" -eq "${#STATUS_FIELDS[@]}" ]
+    # One pr view read, for its fields and the file count; the commits are never read.
+    [ "$(gh_call_count "pr view 42 --repo ${REPO} --json ${STATUS_VIEW_JSON} --jq ")" -eq 1 ]
+    [ "$(gh_call_count "pr view")" -eq 1 ]
+    # The board read and the discussion read.
+    [ "$(gh_call_count "api graphql")" -eq 2 ]
+    [ "$(gh_line_of "pr view")" -eq 1 ]
+    assert_status_read_only
+}
+
+@test "pr status exits 3 and names each failed check when a required check failed, and 4 naming each pending one" {
+    prepare_pr_status
+    write_protection main build lint test
+    write_check_runs "${HEAD_SHA}" "$(check_run build failure 11)" "$(check_run lint failure 12)" "$(check_run test success 13)"
+    run_pr_status
+    [ "${status}" -eq 3 ]
+    [ "${output}" = "$(status_output checks=fail checks-failed=build,lint)" ]
+
+    write_check_runs "${HEAD_SHA}" "$(check_run build "" 11)" "$(check_run lint success 12)" "$(check_run test "" 13)"
+    run_pr_status
+    [ "${status}" -eq 4 ]
+    [ "${output}" = "$(status_output checks=pending checks-pending=build,test)" ]
+
+    write_check_runs "${HEAD_SHA}" "$(check_run build failure 11)" "$(check_run lint success 12)" "$(check_run test "" 13)"
+    run_pr_status
+    [ "${status}" -eq 3 ]
+    [ "${output}" = "$(status_output checks=fail checks-failed=build checks-pending=test)" ]
+}
+
+@test "pr status exits 5 with checks none when the head has no check runs or statuses at all" {
+    prepare_pr_status
+    write_check_runs "${HEAD_SHA}"
+    run_pr_status
+    [ "${status}" -eq 5 ]
+    [ -z "${stderr}" ]
+    # The required check has no result, so pr checks judges it pending, as here.
+    [ "${output}" = "$(status_output checks=none checks-pending=build)" ]
+}
+
+@test "pr status prints a draft never marked ready with its creation time as ready-at, counting the activity since then" {
+    prepare_pr_status
+    write_pull_request '.isDraft = true | .mergeStateStatus = "DRAFT" | .reviewDecision = "REVIEW_REQUIRED"'
+    write_timeline 42 "$(timeline_event labeled credfeto Medium 2026-10-01T10:00:00Z)"
+    run_pr_status
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(status_output draft=yes merge-state=DRAFT review-decision=REVIEW_REQUIRED ready-at="${CREATED_AT}" activity-since-ready=2)" ]
+}
+
+@test "pr status prints an empty board, not an error, when the repository has no Workflow board" {
+    prepare_pr_status
+    jq -n '{projectsV2: {Nodes: [{id: "PVT_other", title: "Roadmap", number: 9, resourcePath: "/users/credfeto/projects/9", closed: false},
+        {id: "PVT_old", title: "Workflow", number: 3, resourcePath: "/users/credfeto/projects/3", closed: true}]}}' > "${GH_FIXTURES}/repo-view.json"
+    run_pr_status
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "$(status_output board=)" ]
+    # No board, so only the discussion is read through GraphQL.
+    [ "$(gh_call_count "api graphql")" -eq 1 ]
+}
+
+@test "pr status prints an empty board, not an error, when the pull request is not on the Workflow board" {
+    prepare_pr_status
+    write_status_discussion '[{"project": {"id": "PVT_other"}, "legacy": null, "status": {"name": "Human Review"}}]'
+    run_pr_status
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "$(status_output board=)" ]
+}
+
+@test "pr status counts only the top-level comments and submitted reviews after ready-at, and names the newest of all" {
+    prepare_pr_status
+    write_status_graphql "${STATUS_BOARD_ITEMS}" \
+        "$(discussion_list 2 false "" "$(issue_comment_node 7 credfeto User "Before.")" \
+            "$(discussion_node issuecomment- 9 octocat User "After." '{"createdAt": "2026-10-09T08:00:00Z", "isMinimized": false}')")" \
+        "$(discussion_list 3 false "" "$(review_node 8 reviewer User APPROVED "Fine.")" \
+            "$(discussion_node pullrequestreview- 10 pending User "Draft." '{"state": "PENDING", "submittedAt": null}')" \
+            "$(discussion_node pullrequestreview- 11 bot Bot "" '{"state": "COMMENTED", "submittedAt": "2026-10-10T08:00:00Z"}')")" \
+        "$(empty_list)"
+    run_pr_status
+    [ "${status}" -eq 0 ]
+    # The pending review has no time, and the empty COMMENTED review, the wrapper of inline
+    # comments, is not one pr comments prints or counts as a review.
+    [ "${output}" = "$(status_output comments=2 reviews=2 threads=0 unresolved=0 activity-since-ready=2 last-activity="2026-10-09T08:00:00Z octocat")" ]
+
+    write_status_graphql "${STATUS_BOARD_ITEMS}" "$(empty_list)" "$(empty_list)" "$(empty_list)"
+    run_pr_status
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(status_output comments=0 reviews=0 threads=0 unresolved=0 activity-since-ready=0 last-activity=)" ]
+}
+
+@test "pr status prints 100+ files, rather than failing as pr view --field files does, when gh lists fewer than the pull request changes" {
+    prepare_pr_status
+    write_pull_request '.changedFiles = 250 | .files = [range(100) | {path: "f\(.)", additions: 1, deletions: 0}]'
+    run_pr_status
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(status_output files=100+)" ]
+
+    write_pull_request '.changedFiles = 100 | .files = [range(100) | {path: "f\(.)", additions: 1, deletions: 0}]'
+    run_pr_status
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(status_output files=100)" ]
+}
+
+@test "pr status prints each control character of a value as a space, so a line is always one field" {
+    prepare_pr_status
+    write_pull_request '.title = "a\tb\nc\u001b[31md" | .labels = [{name: "x\ny"}, {name: "Blocked"}]'
+    run_pr_status
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(status_output "title=a b c [31md" "labels=x y,Blocked")" ]
+}
+
+@test "pr status exits 9 and prints nothing when the pull request is not there, reading nothing else" {
+    prepare_pr_status
+    fail_pull_request "GraphQL: Could not resolve to a PullRequest with the number of 42. (repository.pullRequest)"
+    run_pr_status
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the pull request ${REPO}#42 was not found" ]
+    [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
+}
+
+@test "pr status prints nothing and exits 1 when any read fails part way" {
+    local endpoint
+    for endpoint in "repos/${REPO}/issues/42/timeline" "repos/${REPO}/branches/main" "repos/${REPO}/commits/${HEAD_SHA}/check-runs"; do
+        prepare_pr_status
+        fail_api "${endpoint}"
+        run_pr_status
+        [ "${status}" -eq 1 ] || {
+            echo "${endpoint}: exit ${status}" >&2
+            return 1
+        }
+        [ -z "${output}" ]
+        [[ "${stderr}" == "cfwf: "*"(HTTP 502)" ]]
+        rm -f "$(api_fixture "${endpoint}").fail"
+    done
+
+    # A failed read of the projects, of the board item (both the direct read and the listing), and
+    # of the discussion (on a repository with no board, so it is the only GraphQL read).
+    prepare_pr_status
+    printf 'boom\n' > "${GH_FIXTURES}/repo-view.fail"
+    run_pr_status
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == *"cfwf: could not read the projects of ${REPO}" ]]
+    rm -f "${GH_FIXTURES}/repo-view.fail"
+
+    printf 'GraphQL: something went wrong\n' > "${GH_FIXTURES}/graphql.fail"
+    printf 'boom\n' > "${GH_FIXTURES}/item-list.fail"
+    run_pr_status
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == *"cfwf: could not read the status of ${REPO}#42: both the direct query and the listing of project 74 failed" ]]
+
+    jq -n '{projectsV2: {Nodes: []}}' > "${GH_FIXTURES}/repo-view.json"
+    run_pr_status
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read the comments of ${REPO}#42: GraphQL: something went wrong" ]
+}
+
+@test "pr status prints nothing and exits 1 when the head changed between the pull request read and the checks read" {
+    prepare_pr_status
+    jq -n --arg sha "${OLD_SHA}" '{number: 42, head: {sha: $sha}, base: {ref: "main"}}' | write_api "repos/${REPO}/pulls/42"
+    write_check_runs "${OLD_SHA}" "$(check_run build success 11 "" "${OLD_SHA}")"
+    write_statuses "${OLD_SHA}"
+    run_pr_status
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the head of ${REPO}#42 changed while it was read, so nothing is printed: run it again" ]
 }
