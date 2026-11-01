@@ -39,6 +39,15 @@ teardown() {
     [ "${status}" -eq 2 ]
 }
 
+@test "git commit with --config-env in both spellings before -C is still blocked" {
+    run_hook "git --config-env core.pager=PAGER -C . commit -m test"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'git commit must run with run_in_background: true'* ]]
+    run_hook "git --config-env=core.pager=PAGER -C . commit -m test"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'git commit must run with run_in_background: true'* ]]
+}
+
 @test "a bare git commit prefixed with sudo is blocked" {
     run_hook "sudo git commit -m test"
     [ "${status}" -eq 2 ]

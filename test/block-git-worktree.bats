@@ -57,6 +57,15 @@ run_hook_enter_worktree() {
     [ "${status}" -eq 2 ]
 }
 
+@test "--config-env in both spellings before -C is still checked for worktree add" {
+    run_hook "git --config-env core.pager=PAGER -C . worktree add ../foo"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'git worktree add is prohibited'* ]]
+    run_hook "git --config-env=core.pager=PAGER -C . worktree add ../foo"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'git worktree add is prohibited'* ]]
+}
+
 @test "git worktree remove is allowed" {
     run_hook "git worktree remove ../foo"
     [ "${status}" -eq 0 ]

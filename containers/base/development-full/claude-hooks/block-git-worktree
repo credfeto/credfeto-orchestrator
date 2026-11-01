@@ -210,10 +210,16 @@ while IFS= read -r call_line; do
     tok="${words[$i]:-}"
     if [ "$tok" = "git" ] || [[ "$tok" == */git ]]; then
       j=$((i + 1))
-      # skip `-C <dir>` / `-c <key>=<value>` global option pairs before the
+      # skip `-C <dir>` / `-c <key>=<value>` / `--config-env <key>=<env>` global
+      # option pairs and the one-word `--config-env=<key>=<env>` form before the
       # subcommand, in any order — e.g. `git -c core.pager=cat -C . worktree add ...`.
-      while [ "${words[$j]:-}" = "-c" ] || [ "${words[$j]:-}" = "-C" ]; do
-        j=$((j + 2))
+      # This hook must find worktree on its own, whichever other hooks are installed.
+      while :; do
+        case "${words[$j]:-}" in
+          -c | -C | --config-env) j=$((j + 2)) ;;
+          --config-env=*) j=$((j + 1)) ;;
+          *) break ;;
+        esac
       done
       if [ "${words[$j]:-}" = "worktree" ]; then
         case "${words[$((j + 1))]:-}" in
