@@ -377,6 +377,7 @@ Commands:
   pr finalise-dependency   Mark a bot dependency-update PR ready and enable auto-merge, nothing else (exit 7 deferred, 8 refused)
   pr take-back             Take a PR back from human review: auto-merge off, draft, board Development, then a comment (exit 8 refused)
   pr view                  Print a PR's state and metadata, one key and value a line (exit 9 when not found)
+  pr status                Print a PR's whole state in one call: metadata, board, checks, comments (exit 0, 3, 4, 5 or 9)
   pr ready-at              Print when a PR was last marked ready for review, or when it was created (exit 9 when not found)
   pr auto-merge-at         Print when auto-merge was last enabled on a PR and its last change (exit 9 when not found)
   pr diff                  Print a PR's diff, its changed files or a per-file line count (exit 9 when not found)
@@ -1552,6 +1553,8 @@ review threads.
 Run 'cfwf pr reply --help' for pr reply, which replies to an inline review comment.
 Run 'cfwf pr ready-at --help' for pr ready-at, which prints when a pull request was last marked
 ready for review.
+Run 'cfwf pr status --help' for pr status, which prints a pull request's whole state in one call:
+its metadata, board status, ready time, checks verdict and comment counts.
 Run 'cfwf pr auto-merge-at --help' for pr auto-merge-at, which prints when auto-merge was last
 enabled on a pull request.
 Run 'cfwf pr hand-off --help' for pr hand-off, which hands a pull request off to human review in one
@@ -1976,6 +1979,69 @@ at.
 Exit codes: 0 printed; ${PR_NOT_FOUND_EXIT} the pull request does not exist (the number of an issue included); 1 a
 runtime failure, such as a gh or network error or a repository that was not found, prefixed
 "cfwf:"; 2 a usage error.
+USAGE
+}
+
+usage_pr_status() {
+    cat << USAGE
+Usage: cfwf pr status --repo <owner/repo> --pr <n>
+
+Prints the whole state of a pull request in one call, for deciding what to do with it next. It
+only reads, and each field is judged exactly as the single-purpose command named beside it judges
+it, by the same code.
+
+--repo  Always required; never taken from the current directory.
+--pr    The pull request's number, above 0.
+--json, --jq, --template, --field and --all are not options: the output has one fixed format.
+
+Output, one line a field, each <field><TAB><value>, in this order:
+  state                 OPEN, CLOSED or MERGED (pr view)
+  draft                 yes or no (pr view)
+  title                 the title (pr view)
+  url                   the pull request's URL (pr view)
+  base                  the base branch (pr view)
+  head                  the head branch (pr view)
+  head-sha              the head commit (pr view)
+  auto-merge            on or off (pr view)
+  review-decision       GitHub's own value, such as APPROVED, CHANGES_REQUESTED or
+                        REVIEW_REQUIRED; empty when there is none (pr view)
+  merge-state           GitHub's own value, such as BEHIND, BLOCKED, CLEAN, DIRTY, DRAFT or
+                        UNKNOWN (pr view)
+  mergeable             GitHub's own value: MERGEABLE, CONFLICTING or UNKNOWN (pr view)
+  labels                the label names, comma-joined (pr view)
+  assignees             the assignees' logins, comma-joined (pr view)
+  author                the author's login (pr view)
+  board                 the Workflow board status (workflow-status --check); empty when the
+                        repository has no Workflow board or the pull request is not on it
+  ready-at              when it was last marked ready for review, or when it was created
+                        (pr ready-at)
+  checks                pass, fail, pending or none: the verdict of its required checks
+                        (pr checks --pr), none when the head has no check runs or statuses
+  checks-failed         the names of the checks judged fail, comma-joined
+  checks-pending        the names of the checks judged pending, comma-joined
+  files                 the number of changed files; 100+ when it changes more than the 100 files
+                        gh lists (where pr view --field files is refused)
+  comments              the number of top-level comments (pr comments' summary)
+  reviews               the number of reviews, the empty wrappers of inline comments left out
+                        (pr comments' summary)
+  threads               the number of review threads (pr comments' summary)
+  unresolved            the number of review threads not resolved (pr comments' summary)
+  activity-since-ready  the number of top-level comments and submitted reviews created after
+                        ready-at
+  last-activity         the newest top-level comment or submitted review, as its time, a space
+                        and its author as pr comments prints it; empty when there is none
+A field with no value prints its name, the tab and nothing after it. Each control character in a
+value (a tab or a newline included) is printed as a space, so a line is always one field. No body
+is printed: read them with 'cfwf pr comments'.
+
+The head is read twice, by pr view and by pr checks; when they differ (a push between the two
+reads) nothing is printed and the command fails, so run it again. Nothing is printed unless every
+read succeeded.
+
+Exit codes, those of pr checks, so one call can drive the decision: 0 every judged check passed;
+${CHECKS_FAILED_EXIT} at least one failed; ${CHECKS_PENDING_EXIT} none failed and at least one is pending; ${NO_CHECKS_EXIT} the head has no check runs or
+statuses at all; ${PR_NOT_FOUND_EXIT} the pull request does not exist (the number of an issue included); 1 a runtime
+failure, such as a gh or network error, prefixed "cfwf:", with nothing printed; 2 a usage error.
 USAGE
 }
 
@@ -2559,6 +2625,7 @@ usage_for() {
         "pr checks-wait") usage_pr_checks_wait ;;
         "pr view") usage_pr_view ;;
         "pr ready-at") usage_pr_ready_at ;;
+        "pr status") usage_pr_status ;;
         "pr auto-merge-at") usage_pr_auto_merge_at ;;
         "pr diff") usage_pr_diff ;;
         "pr list") usage_pr_list ;;
@@ -2733,12 +2800,17 @@ repository_not_found() {
 
 # Finds the open project titled "Workflow" linked to REPO (a closed one left over from a
 # replaced board is ignored) and sets PROJECT_ID, PROJECT_NUMBER and OWNER. The owner is read
-# from the project's own path rather than assumed to be the repository's owner.
+# from the project's own path rather than assumed to be the repository's owner. With $1 optional,
+# a repository with no such project leaves PROJECT_ID empty instead of dying (pr status).
 resolve_project() {
     local projects resource_path
     projects=$(gh repo view "${REPO}" --json projectsV2 \
         --jq '.projectsV2.Nodes[] | select(.title=="Workflow" and .closed != true) | [.id, (.number|tostring), .resourcePath] | @tsv') \
         || die "could not read the projects of ${REPO}"
+    if [ -z "${projects}" ] && [ "${1:-}" = optional ]; then
+        PROJECT_ID=""
+        return 0
+    fi
     [ -n "${projects}" ] || die "no project titled Workflow is linked to ${REPO}"
     [[ "${projects}" != *$'\n'* ]] || die "more than one project titled Workflow is linked to ${REPO}"
 
@@ -7137,7 +7209,7 @@ pr_take_back() {
 
 cmd_pr() {
     dispatch_subcommand pr checks pr_checks checks-wait pr_checks_wait view pr_view list pr_list comments pr_comments reply pr_reply create pr_create \
-        ready-at pr_ready_at auto-merge-at pr_auto_merge_at diff pr_diff edit pr_edit hand-off pr_hand_off finalise-dependency pr_finalise_dependency take-back pr_take_back \
+        ready-at pr_ready_at status pr_status auto-merge-at pr_auto_merge_at diff pr_diff edit pr_edit hand-off pr_hand_off finalise-dependency pr_finalise_dependency take-back pr_take_back \
         close pr_close reopen pr_reopen search pr_search -- "$@"
 }
 
@@ -7572,6 +7644,197 @@ pr_ready_at() {
     require_gh
     read_last_ready_at
     printf 'ready-at\t%s\nsource\t%s\n' "${READY_AT}" "${READY_SOURCE}"
+}
+
+# pr status: the fields of pr view it prints, in pr view's order, and the fields it prints, in
+# their order. files is its own: a count, not pr view's list.
+readonly PR_STATUS_VIEW_FIELDS=(state draft title url base head head-sha auto-merge review-decision merge-state
+    mergeable labels assignees author)
+readonly PR_STATUS_FIELDS=("${PR_STATUS_VIEW_FIELDS[@]}" board ready-at checks checks-failed checks-pending files
+    comments reviews threads unresolved activity-since-ready last-activity)
+# The jq expression of files: the number of changed files when gh listed them all, or the number
+# listed and a + when it changes more (gh lists the first 100), so it never fails as
+# print_view_files does.
+# shellcheck disable=SC2016  # $listed is a jq variable
+readonly PR_STATUS_FILES_EXPRESSION='([.files[]?] | length) as $listed | if (.changedFiles // 0) <= $listed then .changedFiles // 0 else "\($listed)+" end'
+# What the last status_read printed and the code it exited with.
+STATUS_READ_OUTPUT=""
+STATUS_READ_CODE=0
+declare -gA STATUS_VALUES=()
+
+# Runs "$@" in a subshell, as the single-purpose command it stands for would run it, and sets
+# STATUS_READ_OUTPUT to what it printed and STATUS_READ_CODE to the code it exited with. Each read
+# exits rather than returns on a failure (die, pr_not_found, report_checks' verdict), so the
+# subshell keeps that exit from ending pr status. A code not in the space-separated list $1 ends pr
+# status at once with that code, before anything is printed: the read has already put its "cfwf:"
+# message on stderr.
+status_read() {
+    local accepted="$1"
+    shift
+    STATUS_READ_CODE=0
+    STATUS_READ_OUTPUT=$("$@") || STATUS_READ_CODE=$?
+    [[ " ${accepted} " == *" ${STATUS_READ_CODE} "* ]] || exit "${STATUS_READ_CODE}"
+}
+
+# Prints pr view's lines for PR_STATUS_VIEW_FIELDS and the files count, from the one gh call
+# print_view_lines makes.
+status_view() {
+    local name
+    for name in "${PR_STATUS_VIEW_FIELDS[@]}"; do
+        REQUESTED_FIELDS["${name}"]=1
+    done
+    resolve_view_fields
+    VIEW_NAMES+=(files)
+    VIEW_JSON_FIELDS+=",files,changedFiles"
+    VIEW_EXPRESSIONS+=("${PR_STATUS_FILES_EXPRESSION}")
+    print_view_lines
+}
+
+# Prints the board status as workflow-status --check reads it, or nothing when the repository has
+# no Workflow board or the pull request is not on it.
+status_board() {
+    require_target
+    resolve_project optional
+    [ -n "${PROJECT_ID}" ] || return 0
+    read_target_status || die "could not read the status of ${REPO}#${TARGET_NUMBER}: both the direct query and the listing of project ${PROJECT_NUMBER} failed"
+    printf '%s\n' "${ITEM_STATUS}"
+}
+
+# Prints the ready-at of pr ready-at.
+status_ready_at() {
+    require_target
+    read_last_ready_at
+    printf '%s\n' "${READY_AT}"
+}
+
+# Prints pr comments' output.
+status_comments() {
+    read_pr_discussion
+    print_pr_discussion
+}
+
+# Keeps the line "<name><TAB><value>" of each field in $1 in STATUS_VALUES, dying when a field in
+# the rest of the arguments is missing.
+record_status_lines() {
+    local line name
+    while IFS= read -r line; do
+        [[ "${line}" == *$'\t'* ]] || continue
+        STATUS_VALUES["${line%%$'\t'*}"]="${line#*$'\t'}"
+    done <<< "$1"
+    shift
+    for name in "$@"; do
+        [ -n "${STATUS_VALUES["${name}"]+set}" ] || die "gh returned an unexpected result for ${REPO}#${PR}"
+    done
+}
+
+# Sets checks, checks-failed and checks-pending from pr checks' output, the verdict being its exit
+# code. It must be of the head pr view read, or the fields would describe two heads.
+record_status_checks() {
+    local line name verdict rest failed="" pending="" head="${CHECKS_WAIT_OUTPUT##*head=}"
+    [[ "${CHECKS_WAIT_OUTPUT##*$'\n'}" == "summary "* ]] || die "gh returned an unexpected result for the checks of ${REPO}#${PR}"
+    [ "${head}" = "${STATUS_VALUES["head-sha"]}" ] \
+        || die "the head of ${REPO}#${PR} changed while it was read, so nothing is printed: run it again"
+    while IFS= read -r line; do
+        [[ "${line}" == *$'\t'* ]] || continue
+        name="${line%%$'\t'*}"
+        rest="${line#*$'\t'}"
+        verdict="${rest%%$'\t'*}"
+        case "${verdict}" in
+            fail) failed+="${failed:+,}${name}" ;;
+            pending) pending+="${pending:+,}${name}" ;;
+        esac
+    done <<< "${CHECKS_WAIT_OUTPUT}"
+    case "${CHECKS_WAIT_STATUS}" in
+        0) STATUS_VALUES["checks"]=pass ;;
+        "${CHECKS_FAILED_EXIT}") STATUS_VALUES["checks"]=fail ;;
+        "${CHECKS_PENDING_EXIT}") STATUS_VALUES["checks"]=pending ;;
+        *) STATUS_VALUES["checks"]=none ;;
+    esac
+    STATUS_VALUES["checks-failed"]="${failed}"
+    STATUS_VALUES["checks-pending"]="${pending}"
+}
+
+# Sets the comment counts from the summary of pr comments' output $1, and activity-since-ready and
+# last-activity from its comment and review blocks: a block is header lines up to a blank line, its
+# kind the key of its first line, and a body line, which starts with |, is never read. A review not
+# submitted (PENDING) has no time and is left out; so is an empty wrapper of inline comments, which
+# pr comments does not print. Times are ISO 8601 in UTC, so they compare as text in the C locale.
+record_status_comments() {
+    local LC_ALL=C
+    local line key value kind="" at="" author="" since=0 newest="" newest_by="" summary
+    local summary_pattern='^summary comments=([0-9]+) reviews=([0-9]+) reviews-empty=[0-9]+ threads=([0-9]+) unresolved=([0-9]+) inline=[0-9]+$'
+    summary="${1##*$'\n'}"
+    [[ "${summary}" =~ ${summary_pattern} ]] || die "gh returned an unexpected result for the comments of ${REPO}#${PR}"
+    STATUS_VALUES["comments"]="${BASH_REMATCH[1]}"
+    STATUS_VALUES["reviews"]="${BASH_REMATCH[2]}"
+    STATUS_VALUES["threads"]="${BASH_REMATCH[3]}"
+    STATUS_VALUES["unresolved"]="${BASH_REMATCH[4]}"
+    while IFS= read -r line; do
+        if [ -z "${line}" ] || [ "${line}" = "${summary}" ]; then
+            if [[ "${kind}" =~ ^(comment|review)$ ]] && [ -n "${at}" ]; then
+                matches_pattern "${at}" "${TIMESTAMP_PATTERN}" || die "gh returned an unexpected time for the comments of ${REPO}#${PR}"
+                if [[ "${at}" > "${STATUS_VALUES["ready-at"]}" ]]; then
+                    since=$((since + 1))
+                fi
+                if [ -z "${newest}" ] || [[ ! "${at}" < "${newest}" ]]; then
+                    newest="${at}"
+                    newest_by="${author}"
+                fi
+            fi
+            kind=""
+            at=""
+            author=""
+            continue
+        fi
+        [[ "${line}" != "|"* ]] || continue
+        key="${line%%$'\t'*}"
+        value="${line#*$'\t'}"
+        [ -n "${kind}" ] || kind="${key}"
+        case "${kind}:${key}" in
+            comment:author | review:author) author="${value}" ;;
+            comment:created-at | review:submitted-at) at="${value}" ;;
+        esac
+    done <<< "$1"
+    STATUS_VALUES["activity-since-ready"]="${since}"
+    STATUS_VALUES["last-activity"]="${newest}${newest_by:+ ${newest_by}}"
+}
+
+# Prints the field $1 and its value $2, a tab between them, with each control character of the
+# value printed as a space, as pr view does, so no value can add a line or a field. The C locale
+# makes [[:cntrl:]] a byte class, so no byte of a UTF-8 character is touched.
+print_status_line() {
+    local LC_ALL=C
+    printf '%s\t%s\n' "$1" "${2//[[:cntrl:]]/ }"
+}
+
+# Prints the whole state of the pull request from the reads of pr view, workflow-status --check,
+# pr ready-at, pr checks --pr and pr comments, each run as that command runs it, then exits with
+# pr checks' verdict. pr view goes first, so a pull request that is not there exits 9 before
+# anything else is read. Nothing is printed until every read has succeeded.
+pr_status() {
+    local name
+    parse_command_options assign_view_option "--repo --pr" "" "$@"
+    require REPO --repo
+    require PR --pr
+    require_gh
+    # Made before the first read, so every read in its subshell reuses it and the EXIT trap removes it.
+    ensure_temp_file GH_ERR_FILE
+    status_read 0 status_view
+    record_status_lines "${STATUS_READ_OUTPUT}" "${PR_STATUS_VIEW_FIELDS[@]}" files
+    status_read 0 status_board
+    STATUS_VALUES["board"]="${STATUS_READ_OUTPUT}"
+    status_read 0 status_ready_at
+    STATUS_VALUES["ready-at"]="${STATUS_READ_OUTPUT}"
+    matches_pattern "${STATUS_VALUES["ready-at"]}" "${TIMESTAMP_PATTERN}" || die "gh returned an unexpected ready time for ${REPO}#${PR}"
+    checks_wait_read
+    [[ " 0 ${CHECKS_FAILED_EXIT} ${CHECKS_PENDING_EXIT} ${NO_CHECKS_EXIT} " == *" ${CHECKS_WAIT_STATUS} "* ]] || exit "${CHECKS_WAIT_STATUS}"
+    record_status_checks
+    status_read 0 status_comments
+    record_status_comments "${STATUS_READ_OUTPUT}"
+    for name in "${PR_STATUS_FIELDS[@]}"; do
+        print_status_line "${name}" "${STATUS_VALUES["${name}"]}"
+    done
+    exit "${CHECKS_WAIT_STATUS}"
 }
 
 # The most auto-merge events read from one timeline. More are refused, never printed in part.

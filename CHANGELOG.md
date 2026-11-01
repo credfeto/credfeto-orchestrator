@@ -32,6 +32,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - cfwf label list lists a repository's label names (#1595)
 - cfwf issue close closes an issue with a reason (completed or not-planned) and an optional checked comment, refusing an issue on hold or one an open pull request will close (#1597)
 - cfwf repo list, repo search, pr search, code search and workflow list: read-only searching and listing for agents (#1765, #1766)
+- `cfwf pr status --repo <owner/repo> --pr <n>` prints the whole state of a pull request in one read-only call: its metadata, Workflow board status (empty when there is no board or it is not on it), ready time, required-checks verdict and the names of failed and pending checks, changed-file count, and comment, review and thread counts with the activity since it was marked ready. Each field is judged by the code of the single-purpose command, and it exits with the `pr checks` verdict (0, 3, 4 or 5), 9 when not found (#1782)
 ### Fixed
 - CI: workflow expressions in run and script bodies are passed through env, so the no-expressions-in-scripts check passes
 - CI: the remaining workflow expressions in run bodies (image summaries, dispatch-secret check, runner name) are passed through env
