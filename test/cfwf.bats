@@ -4322,7 +4322,7 @@ assert_set_to_development() {
         # shellcheck disable=SC2086  # each invocation is split into its words on purpose
         run "${SCRIPT}" ${invocation}
         [ "${status}" -eq 0 ]
-        [[ "${output}" == "Usage: cfwf pr checks"*$'\n'"Run 'cfwf pr create --help' for pr create, which creates a draft pull request on the Workflow board."$'\n'"Run 'cfwf pr edit --help' for pr edit, which changes a pull request's title or body, or assigns the agent."$'\n'"Run 'cfwf pr close --help' for pr close, which closes the agent's own pull request without merging it."$'\n'"Run 'cfwf pr reopen --help' for pr reopen, which reopens the agent's own closed pull request."$'\n'"Run 'cfwf branch required-checks --help' for branch required-checks, which lists the checks a branch"$'\n'"requires without judging them." ]]
+        [[ "${output}" == "Usage: cfwf pr checks"*$'\n'"Run 'cfwf pr create --help' for pr create, which creates a draft pull request on the Workflow board."$'\n'"Run 'cfwf pr edit --help' for pr edit, which changes a pull request's title, body or priority, or assigns the agent."$'\n'"Run 'cfwf pr close --help' for pr close, which closes the agent's own pull request without merging it."$'\n'"Run 'cfwf pr reopen --help' for pr reopen, which reopens the agent's own closed pull request."$'\n'"Run 'cfwf branch required-checks --help' for branch required-checks, which lists the checks a branch"$'\n'"requires without judging them." ]]
     done
 
     run "${SCRIPT}" help
@@ -12796,7 +12796,7 @@ commit_reads() {
     [[ "${stderr}" == "cfwf: missing required option --pr"* ]]
     run_pr_edit
     [ "${status}" -eq 2 ]
-    [[ "${stderr}" == "cfwf: nothing to change: give --title, --body-file or --assign-self"* ]]
+    [[ "${stderr}" == "cfwf: nothing to change: give --title, --body-file, --priority or --assign-self"* ]]
     run_pr_edit --title "${EDIT_TITLE}" --title "${EDIT_TITLE}"
     [ "${status}" -eq 2 ]
     [[ "${stderr}" == "cfwf: --title can only be given once"* ]]
@@ -12827,15 +12827,16 @@ commit_reads() {
         # shellcheck disable=SC2086  # the invocation is split into its words on purpose
         run --separate-stderr "${SCRIPT}" ${invocation}
         [ "${status}" -eq 0 ]
-        [[ "${output}" == "Usage: cfwf pr edit --repo <owner/repo> --pr <n> [--title <title>] [--body-file <file|->] [--assign-self]"* ]]
+        [[ "${output}" == "Usage: cfwf pr edit --repo <owner/repo> --pr <n> [--title <title>] [--body-file <file|->] [--priority <priority>] [--assign-self]"* ]]
         [[ "${output}" == *"PR_CREATOR_LOGIN, default prpixie"* ]]
         [[ "${output}" == *'"cfwf: edit refused: <rule>"'* ]]
-        [[ "${output}" == *"Exit codes: 0 edited; 1 a runtime failure"*"; 9 the pull request does not exist"* ]]
+        [[ "${output}" == *"Exit codes: 0 edited, or nothing to write; 1 a runtime failure"*"or the priority by the Security rule;"*"9 the pull request does not exist"* ]]
+        [[ "${output}" == *"--priority     Make the pull request's priority Security, Urgent, High, Medium or Low"*"Security is never replaced"* ]]
     done
     run --separate-stderr "${SCRIPT}" help pr
-    [[ "${output}" == *$'\n'"Run 'cfwf pr edit --help' for pr edit, which changes a pull request's title or body, or assigns the agent."$'\n'* ]]
+    [[ "${output}" == *$'\n'"Run 'cfwf pr edit --help' for pr edit, which changes a pull request's title, body or priority, or assigns the agent."$'\n'* ]]
     run --separate-stderr "${SCRIPT}" help
-    [[ "${output}" == *$'\n'"  pr edit                  Change the agent's own PR's title or body, or assign the agent (exit 8 when refused, 9 when not found)"$'\n'* ]]
+    [[ "${output}" == *$'\n'"  pr edit                  Change the agent's own PR's title, body or priority, or assign the agent (exit 8 when refused, 9 when not found)"$'\n'* ]]
     [ ! -f "${GH_LOG}" ]
 }
 
@@ -13012,7 +13013,7 @@ issue_edits_made() {
     [[ "${stderr}" == "cfwf: missing required option --issue"* ]]
     run_issue_edit
     [ "${status}" -eq 2 ]
-    [[ "${stderr}" == "cfwf: nothing to change: give --title, --body-file or --assign-self"* ]]
+    [[ "${stderr}" == "cfwf: nothing to change: give --title, --body-file, --priority or --assign-self"* ]]
     run_issue_edit --title "${EDIT_ISSUE_TITLE}" --title "${EDIT_ISSUE_TITLE}"
     [ "${status}" -eq 2 ]
     [[ "${stderr}" == "cfwf: --title can only be given once"* ]]
@@ -13043,14 +13044,15 @@ issue_edits_made() {
         # shellcheck disable=SC2086  # the invocation is split into its words on purpose
         run --separate-stderr "${SCRIPT}" ${invocation}
         [ "${status}" -eq 0 ]
-        [[ "${output}" == "Usage: cfwf issue edit --repo <owner/repo> --issue <n> [--title <title>] [--body-file <file|->] [--assign-self]"* ]]
+        [[ "${output}" == "Usage: cfwf issue edit --repo <owner/repo> --issue <n> [--title <title>] [--body-file <file|->] [--priority <priority>] [--assign-self]"* ]]
         [[ "${output}" == *"It need not be a Conventional Commits title"* ]]
-        [[ "${output}" == *"Exit codes: 0 edited; 1 a runtime failure"*"; 9 the issue does"*"not exist, or the number is a pull request's."* ]]
+        [[ "${output}" == *"Exit codes: 0 edited, or nothing to write; 1 a runtime failure"*"or the priority by the Security rule; 9 the issue does"*"not exist, or the number is a pull request's."* ]]
+        [[ "${output}" == *"--priority     Make the issue's priority Security, Urgent, High, Medium or Low"*"Security is never replaced"* ]]
     done
     run --separate-stderr "${SCRIPT}" help issue
     [[ "${output}" == *"Usage: cfwf issue edit "* ]]
     run --separate-stderr "${SCRIPT}" help
-    [[ "${output}" == *$'\n'"  issue edit               Change an issue's title or body, or assign the agent (exit 8 when refused, 9 when not found)"$'\n'* ]]
+    [[ "${output}" == *$'\n'"  issue edit               Change an issue's title, body or priority, or assign the agent (exit 8 when refused, 9 when not found)"$'\n'* ]]
     [ ! -f "${GH_LOG}" ]
 }
 
@@ -13061,6 +13063,297 @@ issue_edits_made() {
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
     [[ "${stderr}" == "cfwf: gh is not installed"* ]]
+}
+
+# --- issue edit and pr edit --priority -----------------------------------------
+
+# Writes the fixtures of a pr edit --priority run: the agent's own pull request (prepare_pr_edit)
+# carrying each argument as a label, and a repository that has every priority label.
+prepare_pr_priority() {
+    prepare_pr_edit
+    jq --args '.labels = ($ARGS.positional | map({name: ., color: "ffffff"}))' "$@" \
+        < "$(api_fixture "repos/${REPO}/pulls/${EDIT_PR}").json" > "${TEST_TMP}/pull.json"
+    write_api "repos/${REPO}/pulls/${EDIT_PR}" < "${TEST_TMP}/pull.json"
+    write_repository_labels Security Urgent High Medium Low Bug
+}
+
+# Writes the fixtures of an issue edit --priority run: issue EDIT_ISSUE carrying each argument as a
+# label, and a repository that has every priority label.
+prepare_issue_priority() {
+    prepare_issue_edit
+    write_issue "${EDIT_ISSUE}" "tool(cfwf): an old title" OPEN "The old body." "$@"
+    write_repository_labels Security Urgent High Medium Low Bug
+}
+
+@test "pr edit --priority replaces Medium with Low in one gh pr edit call and prints the change after the URL" {
+    prepare_pr_priority Bug Medium
+    run_pr_edit --priority Low
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_PR_URL}"$'\n'"priority Medium -> Low" ]
+    [ -z "${stderr}" ]
+    issue_create_called_with "pr edit ${EDIT_PR} --repo ${REPO} --add-label Low --remove-label Medium"
+    [ "$(edits_made)" -eq 1 ]
+    [ "$(gh_call_count "label create")" -eq 0 ]
+}
+
+@test "issue edit --priority replaces Medium with Low in one gh issue edit call and prints the change after the URL" {
+    prepare_issue_priority Bug Medium
+    run_issue_edit --priority Low
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_ISSUE_URL}"$'\n'"priority Medium -> Low" ]
+    [ -z "${stderr}" ]
+    issue_create_called_with "issue edit ${EDIT_ISSUE} --repo ${REPO} --add-label Low --remove-label Medium"
+    [ "$(issue_edits_made)" -eq 1 ]
+    [ "$(gh_call_count "label create")" -eq 0 ]
+}
+
+@test "pr edit --priority adds Low to a pull request with no priority label, creating the label first when the repository lacks it" {
+    prepare_pr_priority Bug
+    write_repository_labels Security Urgent High Medium Bug
+    run_pr_edit --priority Low
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_PR_URL}"$'\n'"priority none -> Low" ]
+    grep -qxF "label create --repo ${REPO} --color cc8899 --description Low Priority -- Low" "${GH_LOG}"
+    issue_create_called_with "pr edit ${EDIT_PR} --repo ${REPO} --add-label Low"
+    [ "$(gh_line_of "label create")" -lt "$(gh_line_of "pr edit ${EDIT_PR} ")" ]
+    [ "$(edits_made)" -eq 1 ]
+}
+
+@test "issue edit --priority adds Low to an issue with no priority label, creating the label first when the repository lacks it" {
+    prepare_issue_priority Bug
+    write_repository_labels Security Urgent High Medium Bug
+    run_issue_edit --priority Low
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_ISSUE_URL}"$'\n'"priority none -> Low" ]
+    grep -qxF "label create --repo ${REPO} --color cc8899 --description Low Priority -- Low" "${GH_LOG}"
+    issue_create_called_with "issue edit ${EDIT_ISSUE} --repo ${REPO} --add-label Low"
+    [ "$(gh_line_of "label create")" -lt "$(gh_line_of "issue edit ${EDIT_ISSUE} ")" ]
+    [ "$(issue_edits_made)" -eq 1 ]
+}
+
+@test "pr edit --priority leaves exactly one priority label on a pull request that had two" {
+    prepare_pr_priority High Bug Low
+    run_pr_edit --priority Medium
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_PR_URL}"$'\n'"priority High,Low -> Medium" ]
+    issue_create_called_with "pr edit ${EDIT_PR} --repo ${REPO} --add-label Medium --remove-label High --remove-label Low"
+    [ "$(edits_made)" -eq 1 ]
+
+    # The one asked for among others is kept, and only the others are removed.
+    rm -f "${GH_LOG}"
+    prepare_pr_priority High Low
+    run_pr_edit --priority Low
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_PR_URL}"$'\n'"priority High,Low -> Low" ]
+    issue_create_called_with "pr edit ${EDIT_PR} --repo ${REPO} --remove-label High"
+    [ "$(gh_call_count "label list")" -eq 0 ]
+}
+
+@test "issue edit --priority leaves exactly one priority label on an issue that had two" {
+    prepare_issue_priority High Bug Low
+    run_issue_edit --priority Medium
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_ISSUE_URL}"$'\n'"priority High,Low -> Medium" ]
+    issue_create_called_with "issue edit ${EDIT_ISSUE} --repo ${REPO} --add-label Medium --remove-label High --remove-label Low"
+    [ "$(issue_edits_made)" -eq 1 ]
+
+    rm -f "${GH_LOG}"
+    prepare_issue_priority High Low
+    run_issue_edit --priority Low
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_ISSUE_URL}"$'\n'"priority High,Low -> Low" ]
+    issue_create_called_with "issue edit ${EDIT_ISSUE} --repo ${REPO} --remove-label High"
+    [ "$(gh_call_count "label list")" -eq 0 ]
+}
+
+@test "pr edit --priority writes nothing when the pull request already has only that priority, and prints only the URL" {
+    prepare_pr_priority Bug Low
+    run_pr_edit --priority Low
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_PR_URL}" ]
+    [ -z "${stderr}" ]
+    [ "$(edits_made)" -eq 0 ]
+    [ "$(gh_call_count "label ")" -eq 0 ]
+}
+
+@test "issue edit --priority writes nothing when the issue already has only that priority, and prints only the URL" {
+    prepare_issue_priority Bug Low
+    run_issue_edit --priority Low
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_ISSUE_URL}" ]
+    [ -z "${stderr}" ]
+    [ "$(issue_edits_made)" -eq 0 ]
+    [ "$(gh_call_count "label ")" -eq 0 ]
+}
+
+@test "pr edit --priority with --title makes one gh pr edit call holding both, and a title alone is still written when the priority is already set" {
+    prepare_pr_priority Medium
+    run_pr_edit --title "${EDIT_TITLE}" --priority Low
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_PR_URL}"$'\n'"priority Medium -> Low" ]
+    issue_create_called_with "pr edit ${EDIT_PR} --repo ${REPO} --title ${EDIT_TITLE} --add-label Low --remove-label Medium"
+    [ "$(edits_made)" -eq 1 ]
+
+    rm -f "${GH_LOG}"
+    prepare_pr_priority Low
+    run_pr_edit --title "${EDIT_TITLE}" --priority Low
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_PR_URL}" ]
+    issue_create_called_with "pr edit ${EDIT_PR} --repo ${REPO} --title ${EDIT_TITLE}"
+    [ "$(edits_made)" -eq 1 ]
+}
+
+@test "issue edit --priority with --title makes one gh issue edit call holding both, and a title alone is still written when the priority is already set" {
+    prepare_issue_priority Medium
+    run_issue_edit --title "${EDIT_ISSUE_TITLE}" --priority Low
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_ISSUE_URL}"$'\n'"priority Medium -> Low" ]
+    issue_create_called_with "issue edit ${EDIT_ISSUE} --repo ${REPO} --title ${EDIT_ISSUE_TITLE} --add-label Low --remove-label Medium"
+    [ "$(issue_edits_made)" -eq 1 ]
+
+    rm -f "${GH_LOG}"
+    prepare_issue_priority Low
+    run_issue_edit --title "${EDIT_ISSUE_TITLE}" --priority Low
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_ISSUE_URL}" ]
+    issue_create_called_with "issue edit ${EDIT_ISSUE} --repo ${REPO} --title ${EDIT_ISSUE_TITLE}"
+    [ "$(issue_edits_made)" -eq 1 ]
+}
+
+@test "pr edit --priority refuses (exit 8) to replace Security, writing nothing, not even the title; Security itself drops the other priorities" {
+    prepare_pr_priority Security
+    run_pr_edit --title "${EDIT_TITLE}" --priority Low
+    [ "${status}" -eq 8 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: priority refused: Security is never replaced by --priority" ]
+    [ "$(edits_made)" -eq 0 ]
+    [ "$(gh_call_count "label ")" -eq 0 ]
+
+    prepare_pr_priority Low security
+    run_pr_edit --priority urgent
+    [ "${status}" -eq 8 ]
+    [ "${stderr}" = "cfwf: priority refused: Security is never replaced by --priority" ]
+    [ "$(edits_made)" -eq 0 ]
+
+    rm -f "${GH_LOG}"
+    run_pr_edit --priority Security
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_PR_URL}"$'\n'"priority Low,security -> Security" ]
+    issue_create_called_with "pr edit ${EDIT_PR} --repo ${REPO} --remove-label Low"
+}
+
+@test "issue edit --priority refuses (exit 8) to replace Security, writing nothing, not even the title; Security itself drops the other priorities" {
+    prepare_issue_priority Security
+    run_issue_edit --title "${EDIT_ISSUE_TITLE}" --priority Low
+    [ "${status}" -eq 8 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: priority refused: Security is never replaced by --priority" ]
+    [ "$(issue_edits_made)" -eq 0 ]
+    [ "$(gh_call_count "label ")" -eq 0 ]
+
+    prepare_issue_priority Low security
+    run_issue_edit --priority urgent
+    [ "${status}" -eq 8 ]
+    [ "${stderr}" = "cfwf: priority refused: Security is never replaced by --priority" ]
+    [ "$(issue_edits_made)" -eq 0 ]
+
+    rm -f "${GH_LOG}"
+    run_issue_edit --priority Security
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_ISSUE_URL}"$'\n'"priority Low,security -> Security" ]
+    issue_create_called_with "issue edit ${EDIT_ISSUE} --repo ${REPO} --remove-label Low"
+}
+
+@test "pr edit --priority refuses an unknown priority, or one given twice (exit 2), before any gh call" {
+    prepare_pr_priority Medium
+    run_pr_edit --priority Critical
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: unknown --priority (expected Security, Urgent, High, Medium or Low)"*"Usage: cfwf pr edit "* ]]
+    run_pr_edit --priority Low --priority Low
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: --priority can only be given once: a pull request has exactly one priority"* ]]
+    run_pr_edit --priority
+    [ "${status}" -eq 2 ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue edit --priority refuses an unknown priority, or one given twice (exit 2), before any gh call" {
+    prepare_issue_priority Medium
+    run_issue_edit --priority Critical
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: unknown --priority (expected Security, Urgent, High, Medium or Low)"*"Usage: cfwf issue edit "* ]]
+    run_issue_edit --priority Low --priority Low
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: --priority can only be given once: an issue has exactly one priority"* ]]
+    run_issue_edit --priority
+    [ "${status}" -eq 2 ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "pr edit --priority exits 9 for a pull request that is not there, writing nothing" {
+    jq -n --arg login "${AGENT}" '{login: $login}' > "${GH_FIXTURES}/api-user.json"
+    jq -n '{id: 1}' | write_api "repos/${REPO}"
+    write_repository_labels Security Urgent High Medium Low
+    run_pr_edit --priority Low
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the pull request ${REPO}#${EDIT_PR} was not found" ]
+    [ "$(edits_made)" -eq 0 ]
+    [ "$(gh_call_count "label ")" -eq 0 ]
+}
+
+@test "issue edit --priority exits 9 for an issue that is not there, or a pull request's number, writing nothing" {
+    write_repository_labels Security Urgent High Medium Low
+    run_issue_edit --priority Low
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: ${REPO}#${EDIT_ISSUE} was not found" ]
+    jq -n --arg url "https://github.com/${REPO}/pull/${EDIT_ISSUE}" '{url: $url, number: 1596, labels: [{name: "Medium"}]}' > "$(issue_fixture "${EDIT_ISSUE}").json"
+    run_issue_edit --priority Low
+    [ "${status}" -eq 9 ]
+    [ "${stderr}" = "cfwf: ${REPO}#${EDIT_ISSUE} is a pull request, not an issue" ]
+    [ "$(issue_edits_made)" -eq 0 ]
+    [ "$(gh_call_count "label ")" -eq 0 ]
+}
+
+@test "pr edit --priority takes a priority in any case and writes it in its standard spelling, removing an old one in the pull request's own spelling" {
+    prepare_pr_priority medium
+    run_pr_edit --priority lOW
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_PR_URL}"$'\n'"priority medium -> Low" ]
+    issue_create_called_with "pr edit ${EDIT_PR} --repo ${REPO} --add-label Low --remove-label medium"
+
+    # A priority carried in another case is the one asked for: nothing is written.
+    rm -f "${GH_LOG}"
+    run_pr_edit --priority MEDIUM
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_PR_URL}" ]
+    [ "$(edits_made)" -eq 0 ]
+}
+
+@test "issue edit --priority takes a priority in any case and writes it in its standard spelling, removing an old one in the issue's own spelling" {
+    prepare_issue_priority medium
+    run_issue_edit --priority lOW
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_ISSUE_URL}"$'\n'"priority medium -> Low" ]
+    issue_create_called_with "issue edit ${EDIT_ISSUE} --repo ${REPO} --add-label Low --remove-label medium"
+
+    rm -f "${GH_LOG}"
+    run_issue_edit --priority MEDIUM
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_ISSUE_URL}" ]
+    [ "$(issue_edits_made)" -eq 0 ]
+}
+
+@test "pr edit --priority still applies the ownership rule first: someone else's pull request is refused (exit 8) with nothing written" {
+    prepare_pr_priority Medium
+    jq '.user.login = "someone-else"' < "$(api_fixture "repos/${REPO}/pulls/${EDIT_PR}").json" > "${TEST_TMP}/pull.json"
+    write_api "repos/${REPO}/pulls/${EDIT_PR}" < "${TEST_TMP}/pull.json"
+    run_pr_edit --priority Low
+    [ "${status}" -eq 8 ]
+    [ "${stderr}" = "cfwf: edit refused: the pull request was opened by someone other than the agent" ]
+    [ "$(edits_made)" -eq 0 ]
+    [ "$(gh_call_count "label ")" -eq 0 ]
 }
 
 # --- pr hand-off ---------------------------------------------------------------
