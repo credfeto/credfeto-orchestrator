@@ -182,6 +182,47 @@ make_writable_repo() {
     [ "${status}" -eq 0 ]
 }
 
+@test "-c flags after -C are accepted as hardened" {
+    run_hook_in_dir "git -C . -c core.pager=cat log"
+    [ "${status}" -eq 0 ]
+}
+
+@test "git --config-env is blocked in both spellings before -C" {
+    run_hook_in_dir "git --config-env core.pager=PAGER -C . log"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'git --config-env is not permitted'* ]]
+    run_hook_in_dir "git --config-env=core.pager=PAGER -C . log"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'git --config-env is not permitted'* ]]
+}
+
+@test "git --config-env is blocked in both spellings after -C" {
+    run_hook_in_dir "git -C . --config-env core.pager=PAGER log"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'git --config-env is not permitted'* ]]
+    run_hook_in_dir "git -C . --config-env=core.pager=PAGER log"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'git --config-env is not permitted'* ]]
+}
+
+# git has no unspaced -c form, so -ccore.pager=cat is left as the subcommand
+@test "git -c glued to its argument is blocked" {
+    run_hook_in_dir "git -C . -ccore.pager=cat log"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"subcommand '-ccore.pager=cat' is not permitted"* ]]
+}
+
+@test "a quoted -c is opaque and fails closed" {
+    run_hook_in_dir 'git -C . "-c" core.pager=cat log'
+    [ "${status}" -eq 2 ]
+}
+
+@test "a second -C is left as the subcommand and blocked" {
+    run_hook_in_dir "git -C . -C . log"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"subcommand '-C' is not permitted"* ]]
+}
+
 @test "a single bare pipe before git is blocked" {
     run_hook_in_dir "true | git push"
     [ "${status}" -eq 2 ]
