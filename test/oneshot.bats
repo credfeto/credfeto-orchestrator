@@ -14193,7 +14193,7 @@ STUBEOF
     _WF_PROJECT_ID="PVT_test123"
     run build_issue_claude_md 42 "/resolved/.ai-instructions" "" "false"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *'search. If a Workflow board update is denied, retry it once as `cfwf workflow-status --set --repo '"${REPO_FULL}"' --issue 42 --status "<Status>"`; never hand-write GraphQL. If that form is also denied'* ]]
+    [[ "${output}" == *'whole state. If a Workflow board update is denied, retry it once as `cfwf workflow-status --set --repo '"${REPO_FULL}"' --issue 42 --status "<Status>"`; never hand-write GraphQL. If that form is also denied'* ]]
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "true" ""
     [ "${status}" -eq 0 ]
     [[ "${output}" == *'If a Workflow board update is denied, retry it once as `cfwf workflow-status --set --repo '"${REPO_FULL}"' --pr 7 --status "<Status>"`; never hand-write GraphQL.'* ]]
@@ -15502,6 +15502,51 @@ EOF
     [[ "${output}" != *"opt_hr_id"* ]]
     [[ "${output}" != *"WF_PROJECT_ID"* ]]
     [[ "${output}" != *"--issue 7"* ]]
+}
+
+# --- build_pr_claude_md FIRST COMMAND section (#1787) -------------------------
+
+@test "build_pr_claude_md with a board starts the session with cfwf pr status for the real repo and PR (#1787)" {
+    REPO_FULL="credfeto/example-repo"
+    _WF_PROJECT_ID="PVT_pr_proj"
+    run build_pr_claude_md 1234 "/resolved/.ai-instructions" "CLEAN" "feat/x" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"FIRST COMMAND (MANDATORY):"* ]]
+    [[ "${output}" == *"- Start the session with exactly this command, as its own Bash call: cfwf pr status --repo credfeto/example-repo --pr 1234"$'\n'* ]]
+    [[ "${output}" == *"Its exit code follows cfwf pr checks: 0 every required check passed, 3 at least one failed, 4 at least one pending, 5 no checks yet."* ]]
+    [[ "${output}" == *"- Run one cfwf command per Bash call, with no \`;\`, \`&&\`, \`|\`, \`echo \$?\` or redirection around it, and read the exit code from the tool result. A compound command containing cfwf is refused in unattended runs and ends the session."* ]]
+    [[ "${output}" == *"- Use cfwf pr comments, cfwf pr view --field ... and cfwf pr diff only for detail cfwf pr status does not print, each as its own Bash call."* ]]
+    # Placed after the board block and ahead of the phase instructions.
+    local before_first="${output%%FIRST COMMAND (MANDATORY):*}"
+    local before_phases="${output%%PHASE DISCIPLINE (MANDATORY*}"
+    [[ "${before_first}" == *"Read this pull request's status: cfwf workflow-status --check --repo credfeto/example-repo --pr 1234"* ]]
+    [ "${#before_first}" -lt "${#before_phases}" ]
+}
+
+@test "build_pr_claude_md without a board still starts the session with cfwf pr status for the real repo and PR (#1787)" {
+    REPO_FULL="credfeto/example-repo"
+    _WF_PROJECT_ID=""
+    run build_pr_claude_md 1234 "/resolved/.ai-instructions" "CLEAN" "feat/x" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"Workflow board: this repository has a Workflow board"* ]]
+    [[ "${output}" == *"FIRST COMMAND (MANDATORY):"* ]]
+    [[ "${output}" == *"- Start the session with exactly this command, as its own Bash call: cfwf pr status --repo credfeto/example-repo --pr 1234"$'\n'* ]]
+    [[ "${output}" == *"- Run one cfwf command per Bash call"* ]]
+    local before_first="${output%%FIRST COMMAND (MANDATORY):*}"
+    local before_phases="${output%%PHASE DISCIPLINE (MANDATORY*}"
+    [ "${#before_first}" -lt "${#before_phases}" ]
+}
+
+@test "_build_permission_denial_rule tells the agent to split chained cfwf calls or use cfwf pr status, with and without a board (#1787)" {
+    local sentence="If the refused command chained cfwf calls, run each as its own Bash call, or use \`cfwf pr status\` for the PR's whole state."
+    _WF_PROJECT_ID="PVT_pr_proj"
+    run _build_permission_denial_rule pr 7
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"one simple command instead of a \`;\`/\`&&\` chain, and the mandated exclusions on any \`find\`/\`grep -r\` search. ${sentence} If a Workflow board update is denied"* ]]
+    _WF_PROJECT_ID=""
+    run _build_permission_denial_rule pr 7
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"search. ${sentence} If that form is also denied"* ]]
 }
 
 # --- _build_wf_section unit tests ---------------------------------------------
