@@ -73,6 +73,7 @@ Review `build_issue_prompt` and `build_pr_prompt` whenever adding a new rule. If
 | Data block | Source | Purpose |
 | --- | --- | --- |
 | Workflow board section (the status names in order and the `cfwf workflow-status --set`/`--check` commands for this item; never raw project, field or option IDs) | `_build_wf_section()` and `_board_set_clause()` - board presence from `discover_or_create_workflow_project` | Agent uses these to move the issue/PR through the Workflow board mid-session; every step that moves the board names its exact cfwf command |
+| FIRST COMMAND section of the full PR flow (`cfwf pr status --repo <REPO_FULL> --pr <n>`, with this PR's real repository and number, and the one-`cfwf`-command-per-Bash-call rule) | `build_pr_claude_md` - `REPO_FULL` and the item id | The agent's first move: one call gives it the PR's whole state, instead of a chain of `cfwf` reads that unattended runs refuse (#1787) |
 
 This is not policy - it is per-repo instance data that changes between runs. Do not move it to instruction files.
 

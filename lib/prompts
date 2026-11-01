@@ -156,7 +156,7 @@ _build_permission_denial_rule() {
         board_retry=" If a Workflow board update is denied, retry it once as \`${board_cmd}\`; never hand-write GraphQL."
     fi
     cat <<PDRULE
-MANDATORY: a "don't ask mode" permission denial refuses only the one command it names; Bash is still available. Never end the session, report Bash as disabled, or treat the item as blocked because of one. Rewrite the command in its rule-compliant form and retry: \`git -C <dir>\` instead of \`cd <dir>; git\`, literal values instead of \`\$VAR\`, one simple command instead of a \`;\`/\`&&\` chain, and the mandated exclusions on any \`find\`/\`grep -r\` search.${board_retry} If that form is also denied, add a comment to credfeto/credfeto-orchestrator#1167 (check it is not already listed first) giving only the denied command's name (its first word, e.g. \`find\`) and a one-line generic reason, then carry on with the rest of the task. That issue is public: never include the command's arguments, paths, search patterns, heredoc or body content or literal values, and never name the source repository if it is private.
+MANDATORY: a "don't ask mode" permission denial refuses only the one command it names; Bash is still available. Never end the session, report Bash as disabled, or treat the item as blocked because of one. Rewrite the command in its rule-compliant form and retry: \`git -C <dir>\` instead of \`cd <dir>; git\`, literal values instead of \`\$VAR\`, one simple command instead of a \`;\`/\`&&\` chain, and the mandated exclusions on any \`find\`/\`grep -r\` search. If the refused command chained cfwf calls, run each as its own Bash call, or use \`cfwf pr status\` for the PR's whole state.${board_retry} If that form is also denied, add a comment to credfeto/credfeto-orchestrator#1167 (check it is not already listed first) giving only the denied command's name (its first word, e.g. \`find\`) and a one-line generic reason, then carry on with the rest of the task. That issue is public: never include the command's arguments, paths, search patterns, heredoc or body content or literal values, and never name the source repository if it is private.
 PDRULE
 }
 
@@ -526,6 +526,12 @@ $(_build_git_ssh_section)
 $(_build_scratch_dir_note)
 Follow all mandatory rules from the AI instructions (GitHub CLI comment bodies, label management, CI checks).
 $(_build_wf_section pr "${item_id}")
+
+FIRST COMMAND (MANDATORY):
+- Start the session with exactly this command, as its own Bash call: cfwf pr status --repo ${REPO_FULL} --pr ${item_id}
+  It prints the PR metadata, the Workflow board status, ready-at, the required-check verdict with the failing and pending check names, the changed-file count and the comment activity. Its exit code follows cfwf pr checks: 0 every required check passed, 3 at least one failed, 4 at least one pending, 5 no checks yet.
+- Run one cfwf command per Bash call, with no \`;\`, \`&&\`, \`|\`, \`echo \$?\` or redirection around it, and read the exit code from the tool result. A compound command containing cfwf is refused in unattended runs and ends the session.
+- Use cfwf pr comments, cfwf pr view --field ... and cfwf pr diff only for detail cfwf pr status does not print, each as its own Bash call.
 
 PHASE DISCIPLINE (MANDATORY — read first):
 - This is a FRESH session with no memory of previous runs. All state lives in GitHub (the branch, commits, PR comments, labels, and the Workflow board status above).
