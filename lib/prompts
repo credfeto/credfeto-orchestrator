@@ -247,8 +247,68 @@ _build_issue_branch_step() {
     fi
 }
 
+# Outputs the pre-commit results section for a session (#1785), from the pre-check oneshot ran
+# before it (prepare_precheck_section, lib/podman). kind "pr" reports on the PR's head; kind
+# "main" reports the default branch's baseline to an Issue session about to branch from it.
+# status is pass, fail, timeout or error; summary is the indented failing-hook (or last-lines)
+# block; error says why an error run could not check anything; container_log is where the full
+# log is in the session's container (empty: no log).
+build_precheck_section() {
+    local kind="$1" sha="$2" status="$3" summary="$4" error="$5" container_log="$6"
+    local log_line=""
+    [ -n "${container_log}" ] && log_line="- Full log: ${container_log} (read it with the Read tool)."
+
+    if [ "${kind}" = "main" ]; then
+        printf '%s\n' "PRE-COMMIT BASELINE for main at ${sha} (run by the orchestrator in this same image before this session, with no agent):"
+        case "${status}" in
+            pass)
+                printf '%s\n' "- \`pre-commit-check\` passed on \`main\` at \`${sha}\` before this session. The baseline is clean, so don't run a baseline check; any failure after your change comes from your change."
+                ;;
+            fail)
+                printf '%s\n' "- \`pre-commit-check\` FAILED on \`main\` at \`${sha}\` before this session. The hooks below were already failing before your change: they are pre-existing failures, not yours, so don't mistake them for your own and don't spend this session chasing them unless this issue is about them. Don't run a baseline check. Already failing on main (up to ${PRECHECK_SUMMARY_LINES} error lines per hook):"
+                printf '%s\n' "${summary}"
+                [ -n "${log_line}" ] && printf '%s\n' "${log_line}"
+                printf '%s\n' "- After your change, a failure in any hook not listed above comes from your change."
+                ;;
+            timeout)
+                printf '%s\n' "- \`pre-commit-check\` did not finish on \`main\` at \`${sha}\` within ${PRECHECK_TIMEOUT_MINUTES} minutes and was stopped, so there is no baseline result. Don't repeat the full baseline check; after your change, run only the checks that cover it. The last lines it printed:"
+                printf '%s\n' "${summary}"
+                [ -n "${log_line}" ] && printf '%s\n' "${log_line}"
+                ;;
+            *)
+                printf '%s\n' "- The baseline pre-check could not run on \`main\` at \`${sha}\` (${error}), so there is no baseline result. Check the baseline as the AI instructions say."
+                ;;
+        esac
+        return 0
+    fi
+
+    printf '%s\n' "PRE-COMMIT RESULTS for ${sha} (pre-commit-check run by the orchestrator on this PR's head, in this same image, before this session, with no agent):"
+    case "${status}" in
+        pass)
+            printf '%s\n' "- Passed: every hook passed on ${sha}. Don't run pre-commit-check just to find out whether the head is clean."
+            ;;
+        fail)
+            printf '%s\n' "- FAILED on ${sha}. Failing hooks, with up to ${PRECHECK_SUMMARY_LINES} error lines each:"
+            printf '%s\n' "${summary}"
+            [ -n "${log_line}" ] && printf '%s\n' "${log_line}"
+            ;;
+        timeout)
+            printf '%s\n' "- No result: pre-commit-check did not finish on ${sha} within ${PRECHECK_TIMEOUT_MINUTES} minutes and was stopped. Don't re-run the whole check to find out; run only the checks you need. The last lines it printed:"
+            printf '%s\n' "${summary}"
+            [ -n "${log_line}" ] && printf '%s\n' "${log_line}"
+            ;;
+        *)
+            printf '%s\n' "- No result: the pre-check could not run on ${sha} (${error}). Check the head as the AI instructions say."
+            ;;
+    esac
+    printf '%s\n' "- These are the results for the head as it was when this session started; after you change code, re-run only the checks that cover your change."
+}
+
 build_issue_claude_md() {
-    local item_id="$1" ai_instructions="$2" repo_path="${3:-${REPO_WORK_DIR}}" plan_approved="${4:-false}" trusted_logins="${5:-}" dirty_branch="${6:-}" stale_branch="${7:-}" background_stall="${8:-false}"
+    local item_id="$1" ai_instructions="$2" repo_path="${3:-${REPO_WORK_DIR}}" plan_approved="${4:-false}" trusted_logins="${5:-}" dirty_branch="${6:-}" stale_branch="${7:-}" background_stall="${8:-false}" precheck_section="${9:-}"
+    # The pre-check baseline (#1785), with its own blank line after it only when there is one.
+    local precheck_block=""
+    [ -n "${precheck_section}" ] && precheck_block="${precheck_section}"$'\n\n'
     cat <<EOF
 You are the Orchestrator agent.
 
@@ -265,7 +325,7 @@ $(_build_wf_section issue "${item_id}")
 $(_build_issue_dirty_branch_section "${dirty_branch}" "${repo_path}" "${stale_branch}")
 $(_build_issue_stale_branch_section "${stale_branch}" "${repo_path}" "${dirty_branch}")
 
-PHASE DISCIPLINE (MANDATORY — read first):
+${precheck_block}PHASE DISCIPLINE (MANDATORY — read first):
 - This is a FRESH session with no memory of previous runs. All state lives in GitHub (the issue, its comments, labels, and the Workflow board status above).
 $(_build_container_vs_github_note)
 $(_build_background_stall_warning "${background_stall}")
@@ -433,8 +493,11 @@ _build_pr_next_phase_section() {
 }
 
 build_pr_claude_md() {
-    local item_id="$1" ai_instructions="$2" merge_state="${3:-UNKNOWN}" branch_name="${4:-}" repo_path="${5:-${REPO_WORK_DIR}}" dirty_branch="${6:-}" is_dependency_pr="${7:-false}" trusted_logins="${8:-}" background_stall="${9:-false}" unaddressed_comments="${10:-}" next_phase="${11:-}"
+    local item_id="$1" ai_instructions="$2" merge_state="${3:-UNKNOWN}" branch_name="${4:-}" repo_path="${5:-${REPO_WORK_DIR}}" dirty_branch="${6:-}" is_dependency_pr="${7:-false}" trusted_logins="${8:-}" background_stall="${9:-false}" unaddressed_comments="${10:-}" next_phase="${11:-}" precheck_section="${12:-}"
     local checkout_step
+    # The pre-check results (#1785), with their own blank line after them only when there are any.
+    local precheck_block=""
+    [ -n "${precheck_section}" ] && precheck_block="${precheck_section}"$'\n\n'
     local needs_rebase=0
     # Assigned here, ahead of the heredoc that uses it below, per _build_round_cap_check_line's
     # own doc comment on why callers pass this via a variable rather than a literal.
@@ -533,7 +596,7 @@ FIRST COMMAND (MANDATORY):
 - Run one cfwf command per Bash call, with no \`;\`, \`&&\`, \`|\`, \`echo \$?\` or redirection around it, and read the exit code from the tool result. A compound command containing cfwf is refused in unattended runs and ends the session.
 - Use cfwf pr comments, cfwf pr view --field ... and cfwf pr diff only for detail cfwf pr status does not print, each as its own Bash call.
 
-PHASE DISCIPLINE (MANDATORY — read first):
+${precheck_block}PHASE DISCIPLINE (MANDATORY — read first):
 - This is a FRESH session with no memory of previous runs. All state lives in GitHub (the branch, commits, PR comments, labels, and the Workflow board status above).
 $(_build_container_vs_github_note)
 $(_build_background_stall_warning "${background_stall}")
