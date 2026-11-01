@@ -432,6 +432,23 @@ _build_pr_next_phase_section() {
     printf '%s\n' "NEXT PHASE (named by the orchestrator): this PR has not changed since the last session, and its state and Workflow board status name ${next_phase} as the next phase. Run it now unless the trusted-comments step above or PHASE A-C applies first. Required checks that report SKIPPED (workflows skip them while a PR is a draft) count as passed for PHASE D-H. A session that only reads state and stops makes no progress and is charged against this PR's idle budget."
 }
 
+# Outputs the FIRST COMMAND rule both PR prompts share (#1787, #1800): start with cfwf pr status
+# for this PR, as its own Bash call, and run one cfwf command per Bash call. The full flow puts it
+# under its FIRST COMMAND heading; the dependency-PR variant puts it in its first numbered step,
+# so the optional second argument indents every line to sit under that step. One text, so the
+# two prompts cannot drift.
+_build_pr_first_command_rule() {
+    local pr_number="$1" indent="${2:-}" line
+    while IFS= read -r line; do
+        printf '%s%s\n' "${indent}" "${line}"
+    done << FCRULE
+- Start the session with exactly this command, as its own Bash call: cfwf pr status --repo ${REPO_FULL} --pr ${pr_number}
+  It prints the PR metadata, the Workflow board status, ready-at, the required-check verdict with the failing and pending check names, the changed-file count and the comment activity. Its exit code follows cfwf pr checks: 0 every required check passed, 3 at least one failed, 4 at least one pending, 5 no checks yet.
+- Run one cfwf command per Bash call, with no \`;\`, \`&&\`, \`|\`, \`echo \$?\` or redirection around it, and read the exit code from the tool result. A compound command containing cfwf is refused in unattended runs and ends the session.
+- Use cfwf pr comments, cfwf pr view --field ... and cfwf pr diff only for detail cfwf pr status does not print, each as its own Bash call.
+FCRULE
+}
+
 build_pr_claude_md() {
     local item_id="$1" ai_instructions="$2" merge_state="${3:-UNKNOWN}" branch_name="${4:-}" repo_path="${5:-${REPO_WORK_DIR}}" dirty_branch="${6:-}" is_dependency_pr="${7:-false}" trusted_logins="${8:-}" background_stall="${9:-false}" unaddressed_comments="${10:-}" next_phase="${11:-}"
     local checkout_step
@@ -497,20 +514,23 @@ $(_build_git_ssh_section)
 This is a dependency update PR. Do NOT make any code changes. Your only job is to verify CI and either enable auto-merge or mark as blocked.
 
 Steps:
-1. Assign yourself: cfwf pr edit --repo ${REPO_FULL} --pr ${item_id} --assign-self
-2. Labels from linked closing issues are already synced onto this PR by the orchestrator before every session (Blocked/On-Hold excluded). Do NOT sync labels yourself.
-3. Check CI: cfwf pr checks --repo ${REPO_FULL} --pr ${item_id} (exit 0 every required check passed; 3 at least one failed; 4 none failed and at least one is pending; 5 no checks yet, treat as pending)
+1. FIRST COMMAND (MANDATORY): read this PR's whole state.
+$(_build_pr_first_command_rule "${item_id}" "   ")
+   Its exit code is the CI verdict step 4 uses; do NOT run a separate cfwf pr checks call.
+2. Assign yourself: cfwf pr edit --repo ${REPO_FULL} --pr ${item_id} --assign-self
+3. Labels from linked closing issues are already synced onto this PR by the orchestrator before every session (Blocked/On-Hold excluded). Do NOT sync labels yourself.
+4. Decide from the exit code of step 1's cfwf pr status (0 every required check passed; 3 at least one failed; 4 none failed and at least one is pending; 5 no checks yet, treat as pending)
    Evaluate in this order — auto-merge being enabled does NOT mean there is nothing to do; it
    only means GitHub will merge automatically once every required check has actually passed, so
    a FAILED required check always takes priority over "auto-merge is enabled" below:
    - If any required check has FAILED: stop without taking action. The orchestrator gives a PR with a failed required check the full flow, which fixes the build, so the next cycle handles it.
-   - Else if auto-merge is already enabled (cfwf pr view --repo ${REPO_FULL} --pr ${item_id} --field auto-merge prints on): $(_build_placeholder_disarm_note "${item_id}") Otherwise stop — nothing more to do.
+   - Else if auto-merge is already enabled (the auto-merge line of step 1's cfwf pr status reads on): $(_build_placeholder_disarm_note "${item_id}") Otherwise stop — nothing more to do.
    - Else if ALL required checks have passed: $(_build_placeholder_guard_note "${item_id}") Otherwise finalise it in one command, which marks it ready if it is still a draft and then enables auto-merge (it never touches the title, description or board), and stop:
      cfwf pr finalise-dependency --repo ${REPO_FULL} --pr ${item_id}
      Exit 0: done (auto-merge on, or unavailable on the repository, which leaves the PR ready without auto-merge). Exit 7: ready, auto-merge deferred until the post-ready checks finish; the next cycle runs it again. Exit 8: refused, nothing written; read the reason on stderr, post it as a PR comment and stop.
    - Else (checks are still PENDING): stop without taking action — the next cycle will re-evaluate.
-4. All interaction with humans must be made as a comment to the pull request (the one exception is the denied-command report on credfeto/credfeto-orchestrator#1167 in step 5). Do NOT open issues.
-5. $(_build_permission_denial_rule pr "${item_id}")
+5. All interaction with humans must be made as a comment to the pull request (the one exception is the denied-command report on credfeto/credfeto-orchestrator#1167 in step 6). Do NOT open issues.
+6. $(_build_permission_denial_rule pr "${item_id}")
 EOF
     else
         cat <<EOF
@@ -528,10 +548,7 @@ Follow all mandatory rules from the AI instructions (GitHub CLI comment bodies, 
 $(_build_wf_section pr "${item_id}")
 
 FIRST COMMAND (MANDATORY):
-- Start the session with exactly this command, as its own Bash call: cfwf pr status --repo ${REPO_FULL} --pr ${item_id}
-  It prints the PR metadata, the Workflow board status, ready-at, the required-check verdict with the failing and pending check names, the changed-file count and the comment activity. Its exit code follows cfwf pr checks: 0 every required check passed, 3 at least one failed, 4 at least one pending, 5 no checks yet.
-- Run one cfwf command per Bash call, with no \`;\`, \`&&\`, \`|\`, \`echo \$?\` or redirection around it, and read the exit code from the tool result. A compound command containing cfwf is refused in unattended runs and ends the session.
-- Use cfwf pr comments, cfwf pr view --field ... and cfwf pr diff only for detail cfwf pr status does not print, each as its own Bash call.
+$(_build_pr_first_command_rule "${item_id}")
 
 PHASE DISCIPLINE (MANDATORY — read first):
 - This is a FRESH session with no memory of previous runs. All state lives in GitHub (the branch, commits, PR comments, labels, and the Workflow board status above).
