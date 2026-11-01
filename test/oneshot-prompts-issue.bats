@@ -774,7 +774,7 @@ declare -gA _WF_OPTION_IDS
     [[ "${output}" == *"the mandated exclusions on any"* ]]
     [[ "${output}" == *"credfeto/credfeto-orchestrator#1167 (check it is not already listed first) giving only the denied command's name"* ]]
     [[ "${output}" == *"never include the command's arguments, paths, search patterns, heredoc or body content or literal values, and never name the source repository if it is private."* ]]
-    [[ "${output}" == *"comment to the pull request (the one exception is the denied-command report on credfeto/credfeto-orchestrator#1167 in step 5). Do NOT open issues."* ]]
+    [[ "${output}" == *"comment to the pull request (the one exception is the denied-command report on credfeto/credfeto-orchestrator#1167 in step 6). Do NOT open issues."* ]]
 }
 
 @test "main passes DIRTY merge state and branch name to build_pr_claude_md" {
