@@ -523,6 +523,9 @@ STUBEOF
 @test "notify_discord_work_item waiting suppresses an identical repeat but re-sends on a real change (#1375)" {
     DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
     set_repo_context "org/repo"
+    # No board: the Sub-status lookup fails fast, the same as the real gh does with no login,
+    # instead of spawning the real gh (or reaching GitHub when a token is set).
+    make_stub gh 'exit 1'
     local call_log="${TEST_TMP}/curl_calls"
     make_stub curl "printf 'call\n' >> '${call_log}'"
 
@@ -544,6 +547,9 @@ STUBEOF
 @test "notify_discord_work_item start clears the waiting latch so a repeated later waiting episode re-sends (#1375)" {
     DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
     set_repo_context "org/repo"
+    # No board: the Sub-status lookup fails fast, the same as the real gh does with no login,
+    # instead of spawning the real gh (or reaching GitHub when a token is set).
+    make_stub gh 'exit 1'
     local call_log="${TEST_TMP}/curl_calls"
     make_stub curl "printf 'call\n' >> '${call_log}'"
 

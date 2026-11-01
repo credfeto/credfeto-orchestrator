@@ -844,6 +844,8 @@ STUBEOF
 }
 
 @test "count_pr_comments_matching returns 0 when nothing matches or the fetch fails" {
+    # The failing fetch still makes every retry, just without the real 2 s wait between them.
+    GH_ITEM_FETCH_RETRY_DELAY_SECS=0
     set_repo_context "org/repo"
     make_stub gh 'printf "%s" "{\"comments\":[{\"body\":\"unrelated\"}]}"'
     run count_pr_comments_matching "5" "Code review round:"

@@ -194,6 +194,9 @@ PR_LINKED='[{"id":"W_ADD","name":"Item added to project","enabled":true},{"id":"
 }
 
 @test "project_status_convert keeps the Workflow Status field when a value does not read back, and names the step (#1519)" {
+    # Two read-backs still retry once before giving up; the default 20 is tested on its own below.
+    # shellcheck disable=SC2034  # read by lib/project-status
+    PROJECT_STATUS_READBACK_ATTEMPTS=2
     write_project "$(all_states_json)" "${LEGACY_FIELD}" '[]'
     write_items 1 '[["I1","Approved","Not Started"]]'
     write_items 2 '[["I1","Approved","Not Started"]]'
