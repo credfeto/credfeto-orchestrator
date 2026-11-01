@@ -8,7 +8,9 @@
 
 - Tests use [bats-core](https://github.com/bats-core/bats-core) (the `bats` command), which is already installed.
 - Tests live in the `test/` directory as `*.bats` files, with shared setup in `test/test_helper.bash`.
-- Run the whole suite with `bats test/` from the repository root.
+- While iterating, run only the bats files that cover the changed scripts: `bats test/<file>.bats`, or `bats -f '<name>' test/<file>.bats` for a subset.
+- Run the full suite once, before marking the work done, with `bats --jobs 4 test/` from the repository root. The agent container has 4 CPUs, and a serial run takes over 40 minutes.
+- Start the full suite in the background with its output in a file, then wait for it with one blocking `cfwf task wait --output <file>`, not by polling.
 - Every behaviour added to a shell script must have a corresponding bats test before committing.
 - The suite covers every script in the repository (see [docs/development/README.md](../../docs/development/README.md) for the list, with a guide for each); the same conventions apply to all of them.
 
