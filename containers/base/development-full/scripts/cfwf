@@ -350,7 +350,7 @@ Commands:
   issue list               List a repository's open issues, highest priority first, one line each
   issue search             Search one repository's issues by words in their title or body, one line each
   issue label-history      Print when each label was added to or removed from an issue or PR, and by whom (exit 9 when not found)
-  issue edit               Change an issue's title or body, or assign the agent (exit 8 when refused, 9 when not found)
+  issue edit               Change an issue's title, body or priority, or assign the agent (exit 8 when refused, 9 when not found)
   issue reopen             Reopen a closed issue, with an optional comment first (exit 8 when refused, 9 when not found)
   issue close              Close an issue with a reason, with an optional comment first (exit 8 when refused, 9 when not found)
   issue comments           Print an issue's or PR's top-level comments with their bodies, oldest first (exit 9 when not found)
@@ -383,7 +383,7 @@ Commands:
   pr diff                  Print a PR's diff, its changed files or a per-file line count (exit 9 when not found)
   pr list                  List a repository's open pull requests, one line each
   pr create                Create a draft PR and put it on the Workflow board as Development (prints the existing one's URL if the branch has one)
-  pr edit                  Change the agent's own PR's title or body, or assign the agent (exit 8 when refused, 9 when not found)
+  pr edit                  Change the agent's own PR's title, body or priority, or assign the agent (exit 8 when refused, 9 when not found)
   pr close                 Close the agent's own PR without merging it, with an optional comment first (exit 8 refused, 9 not found)
   pr reopen                Reopen the agent's own closed PR, with an optional comment first (exit 8 refused, 9 not found)
   pr search                Search one repository's pull requests by words in their title or body, one line each
@@ -486,10 +486,12 @@ USAGE
 
 usage_issue_edit() {
     cat << USAGE
-Usage: cfwf issue edit --repo <owner/repo> --issue <n> [--title <title>] [--body-file <file|->] [--assign-self]
+Usage: cfwf issue edit --repo <owner/repo> --issue <n> [--title <title>] [--body-file <file|->] [--priority <priority>] [--assign-self]
 
-Changes an issue's title, its body or both, and can assign the agent to it, in one gh issue edit
-call, then prints the issue URL and nothing else.
+Changes an issue's title, its body, its priority or any of them, and can assign the agent to it, in
+one gh issue edit call, then prints the issue URL, followed by a "priority <old> -> <new>" line when
+the priority changed (<old> is none when the issue had no priority label, or a comma-separated list
+when it had several).
 
 --repo         Always required; never taken from the current directory.
 --issue        Always required: the issue's number, above 0.
@@ -500,21 +502,32 @@ call, then prints the issue URL and nothing else.
 --body-file    The new body, a regular file, or - to read it from stdin. It replaces the whole
                body: there is no append. An empty body is an error. It is read once, into a private
                copy that is both checked and posted. There is no --body.
+--priority     Make the issue's priority ${PRIORITY_LIST} (matched without
+               regard to case and written in that spelling, as for issue create). Every other
+               priority label is removed and this one added, in the same gh issue edit call, so the
+               issue ends with exactly one; a priority label the repository lacks is created first,
+               with its standard colour. When it is already the only one, nothing is written for it.
+               Security is never replaced: any other priority on an issue that carries Security is
+               refused, and nothing is written at all.
 --assign-self  Add the authenticated account (the agent) as an assignee. It is the only assignee
                option: --add-assignee and --remove-assignee are not options.
-At least one of --title, --body-file and --assign-self; each at most once. --add-label,
---remove-label, --milestone, --json and --jq are not options either: labels have commands of
-their own.
+At least one of --title, --body-file, --priority and --assign-self; each at most once. --add-label,
+--remove-label, --milestone, --json and --jq are not options either: other labels have commands of
+their own (label add and label remove, which never change a priority: --priority is the one way).
 
 Everything is checked before anything is written. The title and the body are checked for leaks
 first (see 'cfwf help body'): a refused one exits ${BODY_REFUSED_EXIT} with "cfwf: body refused: <rule>" or
 "cfwf: title refused: <rule>" on stderr, never naming the text that matched. Then, with
---assign-self, the agent's login is read (gh api user), and the issue is read once, so a number
-that is a pull request's is never edited. Editing the body does not revise an implementation plan,
+--assign-self, the agent's login is read (gh api user), and the issue is read once, labels included,
+so a number that is a pull request's is never edited. A --priority asked for on an issue that
+carries Security exits ${POLICY_REFUSED_EXIT} with "cfwf: priority refused: Security is never replaced by
+--priority". With a priority label to add, the repository's labels are read (gh label list). An
+issue already as asked is not edited. Editing the body does not revise an implementation plan,
 which is a comment of its own.
 
-Exit codes: 0 edited; 1 a runtime failure, such as a gh or network error, prefixed "cfwf:"; 2 a
-usage error; ${BODY_REFUSED_EXIT} the title or the body was refused by the leak check; ${ISSUE_NOT_FOUND_EXIT} the issue does
+Exit codes: 0 edited, or nothing to write; 1 a runtime failure, such as a gh or network error,
+prefixed "cfwf:"; 2 a usage error, an unknown --priority included; ${BODY_REFUSED_EXIT} the title or the body was
+refused by the leak check, or the priority by the Security rule; ${ISSUE_NOT_FOUND_EXIT} the issue does
 not exist, or the number is a pull request's.
 USAGE
 }
@@ -965,7 +978,8 @@ USAGE
          be one of the standard labels (as .github/labels.yml has them), matched without regard to
          case and written in its standard spelling; a label given twice is changed once. A
          priority label (${PRIORITY_LIST}) is refused: label add and
-         label remove never change an item's priority.
+         label remove never change an item's priority; issue edit --priority and pr edit
+         --priority do.
 --json, --jq and --web are not options.
 
 USAGE
@@ -1568,7 +1582,7 @@ Run 'cfwf pr view --help' for pr view, which prints a pull request's state and m
 Run 'cfwf pr list --help' for pr list, which lists a repository's open pull requests.
 Run 'cfwf pr diff --help' for pr diff, which prints a pull request's diff, changed files or line counts.
 Run 'cfwf pr create --help' for pr create, which creates a draft pull request on the Workflow board.
-Run 'cfwf pr edit --help' for pr edit, which changes a pull request's title or body, or assigns the agent.
+Run 'cfwf pr edit --help' for pr edit, which changes a pull request's title, body or priority, or assigns the agent.
 Run 'cfwf pr close --help' for pr close, which closes the agent's own pull request without merging it.
 Run 'cfwf pr reopen --help' for pr reopen, which reopens the agent's own closed pull request.
 Run 'cfwf branch required-checks --help' for branch required-checks, which lists the checks a branch
@@ -1631,10 +1645,12 @@ USAGE
 
 usage_pr_edit() {
     cat << USAGE
-Usage: cfwf pr edit --repo <owner/repo> --pr <n> [--title <title>] [--body-file <file|->] [--assign-self]
+Usage: cfwf pr edit --repo <owner/repo> --pr <n> [--title <title>] [--body-file <file|->] [--priority <priority>] [--assign-self]
 
-Changes a pull request's title, its body or both, and can assign the agent to it, in one gh pr edit
-call, then prints the pull request URL and nothing else.
+Changes a pull request's title, its body, its priority or any of them, and can assign the agent to
+it, in one gh pr edit call, then prints the pull request URL, followed by a "priority <old> -> <new>"
+line when the priority changed (<old> is none when the pull request had no priority label, or a
+comma-separated list when it had several).
 
 --repo         Always required; never taken from the current directory.
 --pr           Always required: the pull request's number, above 0.
@@ -1644,11 +1660,19 @@ call, then prints the pull request URL and nothing else.
 --body-file    The new body, a regular file, or - to read it from stdin. It replaces the whole
                body: there is no append. An empty body is an error. It is read once, into a private
                copy that is both checked and posted. There is no --body.
+--priority     Make the pull request's priority ${PRIORITY_LIST} (matched without
+               regard to case and written in that spelling, as for issue create). Every other
+               priority label is removed and this one added, in the same gh pr edit call, so the
+               pull request ends with exactly one; a priority label the repository lacks is created
+               first, with its standard colour. When it is already the only one, nothing is written
+               for it. Security is never replaced: any other priority on a pull request that
+               carries Security is refused, and nothing is written at all.
 --assign-self  Add the authenticated account (the agent) as an assignee. It is the only assignee
                option: --add-assignee and --remove-assignee are not options.
-At least one of --title, --body-file and --assign-self; each at most once. --add-label,
---remove-label, --base, --milestone, --reviewer, --json and --jq are not options either: labels
-have commands of their own.
+At least one of --title, --body-file, --priority and --assign-self; each at most once. --add-label,
+--remove-label, --base, --milestone, --reviewer, --json and --jq are not options either: other
+labels have commands of their own (label add and label remove, which never change a priority:
+--priority is the one way).
 
 Everything is checked before anything is written. The title and the body are checked for leaks
 first (see 'cfwf help body'): a refused one exits ${BODY_REFUSED_EXIT} with "cfwf: body refused: <rule>" or
@@ -1661,10 +1685,15 @@ is read (gh api user), and so is the pull request, once, to check who owns it:
   anyone else's          is refused
 A refusal exits ${POLICY_REFUSED_EXIT} with "cfwf: edit refused: <rule>" on stderr, and nothing is written. A
 pull request with more commits than GitHub lists (250) cannot be checked, and is a runtime failure.
+The same read gives the pull request's labels. A --priority asked for on a pull request that
+carries Security exits ${POLICY_REFUSED_EXIT} with "cfwf: priority refused: Security is never replaced by
+--priority". With a priority label to add, the repository's labels are read (gh label list). A
+pull request already as asked is not edited.
 
-Exit codes: 0 edited; 1 a runtime failure, such as a gh or network error, prefixed "cfwf:"; 2 a
-usage error; ${BODY_REFUSED_EXIT} the title or the body was refused by the leak check, or the edit by the ownership
-rule; ${PR_NOT_FOUND_EXIT} the pull request does not exist (the number of an issue included).
+Exit codes: 0 edited, or nothing to write; 1 a runtime failure, such as a gh or network error,
+prefixed "cfwf:"; 2 a usage error, an unknown --priority included; ${BODY_REFUSED_EXIT} the title or the body was
+refused by the leak check, the edit by the ownership rule, or the priority by the Security rule;
+${PR_NOT_FOUND_EXIT} the pull request does not exist (the number of an issue included).
 USAGE
 }
 
@@ -6649,6 +6678,10 @@ assign_pr_edit_option() {
             require_number_above_zero "${flag}" "${PR}"
             ;;
         --assign-self) assign_self_option "${flag}" ;;
+        --priority)
+            assign_once PRIORITY "${flag}" "a pull request has exactly one priority"
+            assign_issue_option "${flag}" "${value}"
+            ;;
         *) assign_issue_option "${flag}" "${value}" ;;
     esac
 }
@@ -6672,21 +6705,33 @@ pr_creator_login() {
     printf '%s\n' "${login,,}"
 }
 
-# Reads PR of REPO for pr edit in one REST read, setting EDIT_AUTHOR, EDIT_AUTHOR_TYPE, EDIT_URL and
-# EDIT_COMMITS. A 404 is a pull request that is not there (the number of an issue included) once the
-# repository has been read and found; any other failure dies. The answer is refused unless the
-# author is a login, the number of commits is a number and the URL is this pull request's.
+# Reads PR of REPO for pr edit in one REST read, setting EDIT_AUTHOR, EDIT_AUTHOR_TYPE, EDIT_URL,
+# EDIT_COMMITS and EDIT_LABELS. A 404 is a pull request that is not there (the number of an issue
+# included) once the repository has been read and found; any other failure dies. The answer is
+# refused unless the author is a login, the number of commits is a number, the URL is this pull
+# request's and as many labels came as it says it has.
 read_pull_request_for_edit() {
-    local end
+    local end count row tag name
+    local -a rows
     api_read "could not read ${REPO}#${PR}" "repos/${REPO}/pulls/${PR}" \
-        "${FIELDS_ROW_DEF} [.user.login, .user.type, .html_url, .commits, \"end\"] | fields_row" \
+        "${FIELDS_ROW_DEF} ([.user.login, .user.type, .html_url, .commits, (.labels // [] | length), \"end\"] | fields_row),
+         ((.labels // [])[] | [\"label\", .name, \"end\"] | fields_row)" \
         || not_found_in_repository "${PR_NOT_FOUND_EXIT}" "the pull request ${REPO}#${PR} was not found"
-    IFS="${ROW_SEPARATOR}" read -r EDIT_AUTHOR EDIT_AUTHOR_TYPE EDIT_URL EDIT_COMMITS end <<< "${GH_OUTPUT}"
+    mapfile -t rows <<< "${GH_OUTPUT}"
+    IFS="${ROW_SEPARATOR}" read -r EDIT_AUTHOR EDIT_AUTHOR_TYPE EDIT_URL EDIT_COMMITS count end <<< "${rows[0]}"
     if [ "${end}" != end ] || ! matches_pattern "${EDIT_AUTHOR}" "${LOGIN_PATTERN}" \
         || ! matches_pattern "${EDIT_COMMITS}" '^[0-9]+$' \
-        || ! matches_pattern "${EDIT_URL}" "${REPOSITORY_URL_PATTERN}/pull/${PR}\$"; then
+        || ! matches_pattern "${EDIT_URL}" "${REPOSITORY_URL_PATTERN}/pull/${PR}\$" \
+        || ! matches_pattern "${count}" '^[0-9]+$' || [ "$((${#rows[@]} - 1))" -ne "${count}" ]; then
         die "gh returned an unexpected result for ${REPO}#${PR}"
     fi
+    EDIT_LABELS=()
+    for row in "${rows[@]:1}"; do
+        IFS="${ROW_SEPARATOR}" read -r tag name end <<< "${row}"
+        [ "${tag}" = label ] && [ "${end}" = end ] && [ -n "${name}" ] \
+            || die "gh returned an unexpected result for ${REPO}#${PR}"
+        EDIT_LABELS+=("${name}")
+    done
 }
 
 # Refuses (exit POLICY_REFUSED_EXIT) the edit unless every commit of PR is authored by the agent
@@ -6725,12 +6770,79 @@ check_edit_ownership() {
     require_all_commits_by_agent
 }
 
+# --priority of pr edit and issue edit: the labels the item carries as read before any write, the
+# arguments of its one gh pr edit or gh issue edit call, and what plan_priority_change works out:
+# the priority labels to remove, whether PRIORITY is to be added, and the line to print after the
+# URL ("" when the priority does not change).
+EDIT_LABELS=()
+EDIT_ARGS=()
+PRIORITY_REMOVE=()
+PRIORITY_ADD=""
+PRIORITY_CHANGE=""
+
+# Works out the label changes that leave PRIORITY the only priority label of the item that carries
+# EDIT_LABELS, each matched without regard to case (canonical_priority): every other priority label
+# is to be removed, in the item's own spelling, and PRIORITY added unless the item carries it
+# already. Security is never replaced: any other PRIORITY for an item that carries it is refused
+# (exit POLICY_REFUSED_EXIT) before anything is written. When the priority changes,
+# PRIORITY_CHANGE is "priority <old> -> <new>", <old> being the priority labels the item carried,
+# comma-separated, or none. Without --priority there is nothing to change.
+plan_priority_change() {
+    local label canonical old=""
+    PRIORITY_REMOVE=()
+    PRIORITY_ADD=""
+    PRIORITY_CHANGE=""
+    [ -n "${PRIORITY}" ] || return 0
+    PRIORITY_ADD=1
+    for label in "${EDIT_LABELS[@]}"; do
+        canonical=$(canonical_priority "${label}") || continue
+        if [ "${canonical}" = Security ] && [ "${PRIORITY}" != Security ]; then
+            refuse_policy priority "Security is never replaced by --priority"
+        fi
+        old+="${old:+,}${label}"
+        if [ "${canonical}" = "${PRIORITY}" ]; then
+            PRIORITY_ADD=""
+        else
+            PRIORITY_REMOVE+=("${label}")
+        fi
+    done
+    [ -n "${PRIORITY_ADD}" ] || [ "${#PRIORITY_REMOVE[@]}" -gt 0 ] || return 0
+    PRIORITY_CHANGE="priority ${old:-none} -> ${PRIORITY}"
+}
+
+# Adds the label changes plan_priority_change worked out to EDIT_ARGS, creating the PRIORITY label
+# first, with its standard colour, when it is to be added and the repository lacks it, as issue
+# create does (ensure_labels_exist).
+add_priority_arguments() {
+    local label
+    if [ -n "${PRIORITY_ADD}" ]; then
+        ISSUE_LABELS=("${PRIORITY}")
+        ensure_labels_exist
+        EDIT_ARGS+=(--add-label "${PRIORITY}")
+    fi
+    for label in "${PRIORITY_REMOVE[@]}"; do
+        EDIT_ARGS+=(--remove-label "${label}")
+    done
+}
+
+# Makes the one gh issue edit or gh pr edit call EDIT_ARGS holds, unless it holds no change (only
+# the first $1 arguments, which name the item), then prints the item's URL $2 and, when the
+# priority changed, PRIORITY_CHANGE.
+run_edit() {
+    local named="$1" url="$2"
+    if [ "${#EDIT_ARGS[@]}" -gt "${named}" ]; then
+        gh_capture "${EDIT_ARGS[@]}" || die "could not edit ${REPO}#${EDIT_ARGS[2]}: $(gh_failure_text)"
+    fi
+    printf '%s\n' "${url}"
+    [ -z "${PRIORITY_CHANGE}" ] || printf '%s\n' "${PRIORITY_CHANGE}"
+}
+
 pr_edit() {
-    parse_command_options assign_pr_edit_option "--repo --pr --title --body-file" "--assign-self" "$@"
+    parse_command_options assign_pr_edit_option "--repo --pr --title --body-file --priority" "--assign-self" "$@"
     require REPO --repo
     require PR --pr
-    [ -n "${TITLE}${BODY_FILE}${ASSIGN_SELF}" ] \
-        || usage_error "nothing to change: give --title, --body-file or --assign-self"
+    [ -n "${TITLE}${BODY_FILE}${PRIORITY}${ASSIGN_SELF}" ] \
+        || usage_error "nothing to change: give --title, --body-file, --priority or --assign-self"
     [ -z "${TITLE}" ] || validate_pull_request_title "${TITLE}" "${REPO}"
     require_gh
     [ -z "${BODY_FILE}" ] || resolve_body
@@ -6739,13 +6851,14 @@ pr_edit() {
     read_agent_login
     read_pull_request_for_edit
     check_edit_ownership
+    plan_priority_change
 
-    local args=(pr edit "${PR}" --repo "${REPO}")
-    [ -z "${TITLE}" ] || args+=(--title "${TITLE}")
-    [ -z "${BODY_FILE}" ] || args+=(--body-file "${BODY_FILE}")
-    [ -z "${ASSIGN_SELF}" ] || args+=(--add-assignee "${AGENT_LOGIN}")
-    gh_capture "${args[@]}" || die "could not edit ${REPO}#${PR}: $(gh_failure_text)"
-    printf '%s\n' "${EDIT_URL}"
+    EDIT_ARGS=(pr edit "${PR}" --repo "${REPO}")
+    [ -z "${TITLE}" ] || EDIT_ARGS+=(--title "${TITLE}")
+    [ -z "${BODY_FILE}" ] || EDIT_ARGS+=(--body-file "${BODY_FILE}")
+    [ -z "${ASSIGN_SELF}" ] || EDIT_ARGS+=(--add-assignee "${AGENT_LOGIN}")
+    add_priority_arguments
+    run_edit 5 "${EDIT_URL}"
 }
 
 assign_issue_edit_option() {
@@ -6761,35 +6874,40 @@ assign_issue_edit_option() {
     esac
 }
 
-# Changes ISSUE of REPO: its title, its body or both, and adds the agent as an assignee with
-# --assign-self, in one gh issue edit call, then prints the issue's URL. The title is checked as
-# issue create checks it (its shape where TITLE_CHECK_OWNERS applies, then the leak check) and the
-# body goes through resolve_body, all before gh is called. The issue is read once first
-# (read_issue), so a missing number, or one that is a pull request's, exits ISSUE_NOT_FOUND_EXIT
-# with nothing written.
+# Changes ISSUE of REPO: its title, its body, its priority (--priority, plan_priority_change) or any
+# of them, and adds the agent as an assignee with --assign-self, in one gh issue edit call, then
+# prints the issue's URL and any priority change. The title is checked as issue create checks it
+# (its shape where TITLE_CHECK_OWNERS applies, then the leak check) and the body goes through
+# resolve_body, all before gh is called. The issue is read once first (read_issue), labels
+# included, so a missing number, or one that is a pull request's, exits ISSUE_NOT_FOUND_EXIT with
+# nothing written.
 issue_edit() {
     local url
-    parse_command_options assign_issue_edit_option "--repo --issue --title --body-file" "--assign-self" "$@"
+    parse_command_options assign_issue_edit_option "--repo --issue --title --body-file --priority" "--assign-self" "$@"
     require REPO --repo
     require ISSUE --issue
-    [ -n "${TITLE}${BODY_FILE}${ASSIGN_SELF}" ] \
-        || usage_error "nothing to change: give --title, --body-file or --assign-self"
+    [ -n "${TITLE}${BODY_FILE}${PRIORITY}${ASSIGN_SELF}" ] \
+        || usage_error "nothing to change: give --title, --body-file, --priority or --assign-self"
     [ -z "${TITLE}" ] || check_title_shape "${TITLE}" "${REPO}"
     require_gh
     [ -z "${BODY_FILE}" ] || resolve_body
     [ -z "${TITLE}" ] || check_value_for_leaks "${TITLE}" "${REPO}" title
 
     [ -z "${ASSIGN_SELF}" ] || read_agent_login
-    read_issue number '.url'
-    url="${GH_OUTPUT}"
+    # The URL, then one label name a line, made printable so none spans two lines.
+    read_issue number,labels "${PRINTABLE_DEF} .url, ((.labels // [])[] | .name | printable)"
+    url="${GH_OUTPUT%%$'\n'*}"
     [[ "${url}" =~ ${REPOSITORY_URL_PATTERN}/issues/${ISSUE}$ ]] || unexpected_issue_result
+    EDIT_LABELS=()
+    [[ "${GH_OUTPUT}" != *$'\n'* ]] || mapfile -t EDIT_LABELS <<< "${GH_OUTPUT#*$'\n'}"
+    plan_priority_change
 
-    local args=(issue edit "${ISSUE}" --repo "${REPO}")
-    [ -z "${TITLE}" ] || args+=(--title "${TITLE}")
-    [ -z "${BODY_FILE}" ] || args+=(--body-file "${BODY_FILE}")
-    [ -z "${ASSIGN_SELF}" ] || args+=(--add-assignee "${AGENT_LOGIN}")
-    gh_capture "${args[@]}" || die "could not edit ${REPO}#${ISSUE}: $(gh_failure_text)"
-    printf '%s\n' "${url}"
+    EDIT_ARGS=(issue edit "${ISSUE}" --repo "${REPO}")
+    [ -z "${TITLE}" ] || EDIT_ARGS+=(--title "${TITLE}")
+    [ -z "${BODY_FILE}" ] || EDIT_ARGS+=(--body-file "${BODY_FILE}")
+    [ -z "${ASSIGN_SELF}" ] || EDIT_ARGS+=(--add-assignee "${AGENT_LOGIN}")
+    add_priority_arguments
+    run_edit 5 "${url}"
 }
 
 # pr hand-off: the pull request as read before any write (its URL, state, whether it is a draft, its
