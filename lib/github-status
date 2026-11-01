@@ -160,6 +160,60 @@ pr_json_is_terminal() {
     ' > /dev/null 2>&1
 }
 
+# Returns 0 when the repository $1 allows auto-merge (its allow_auto_merge setting, the one cfwf's
+# read_auto_merge_allowed reads), 1 when it does not, and 2 when the setting cannot be read. Each
+# answer read is kept in _REPO_AUTO_MERGE_ALLOWED for the rest of the run (#1798).
+repo_allows_auto_merge() {
+    local repo="$1" allowed
+    allowed="${_REPO_AUTO_MERGE_ALLOWED["${repo}"]:-}"
+    if [ -z "${allowed}" ]; then
+        allowed=$(gh api "repos/${repo}" --jq '.allow_auto_merge // false' 2> /dev/null) || return 2
+        [[ "${allowed}" =~ ^(true|false)$ ]] || return 2
+        _REPO_AUTO_MERGE_ALLOWED["${repo}"]="${allowed}"
+    fi
+    [ "${allowed}" = true ]
+}
+
+# Returns 0 (true) when a PR whose review pipeline has finished without auto-merge (the board says
+# Human Review and autoMergeRequest is null; see pr_review_pipeline_finished_without_auto_merge,
+# lib/workflow-board) should have auto-merge armed by oneshot itself rather than be called settled
+# (#1798). cfwf pr hand-off arms it once the PR is ready, so a missing request means that step was
+# skipped or lost (an older hand-off deferred it, or it was turned off since), and a settled PR
+# without it never merges when it is approved. Everything pr_json_is_terminal asks besides the
+# auto-merge request must hold (not a draft, no failed required check, no CHANGES_REQUESTED), and
+# the repository $2 must allow auto-merge: where it does not, or that cannot be read, the #1479
+# board fallback stands and the PR is settled. Arming must never merge at once, so the base must
+# gate the merge: a review GitHub reports as required (reviewDecision REVIEW_REQUIRED, or APPROVED)
+# or a required status check on the base branch (fetch_branch_requires_status_checks). A base that
+# requires neither, or whose checks cannot be read, is left as hand-off leaves it: ready, for a
+# human to merge.
+pr_should_arm_missing_auto_merge() {
+    local pr_json="$1" repo="$2" base requires_checks
+    printf '%s' "${pr_json}" | jq -e '.autoMergeRequest == null' > /dev/null 2>&1 || return 1
+    pr_json_is_terminal "${pr_json}" true || return 1
+    repo_allows_auto_merge "${repo}" || return 1
+    if printf '%s' "${pr_json}" | jq -e '.reviewDecision == "REVIEW_REQUIRED" or .reviewDecision == "APPROVED"' > /dev/null 2>&1; then
+        return 0
+    fi
+    base=$(printf '%s' "${pr_json}" | jq -r '.baseRefName // empty' 2> /dev/null)
+    requires_checks=$(fetch_branch_requires_status_checks "${base}" "${repo}") || return 1
+    [ "${requires_checks}" = true ]
+}
+
+# Arms merge-commit auto-merge on PR $1 of the repository $2, non-agentically (#1798): the request
+# cfwf pr hand-off makes, `gh pr merge --auto --merge`, never --admin, pinned to the head in
+# pr_json $3 so a push since it was read is never merged unseen. Then reads the PR again and
+# returns 0 only when GitHub shows the auto-merge request; 1 when the head is not a commit SHA,
+# the request fails, or the re-read does not confirm it.
+arm_missing_auto_merge() {
+    local item_id="$1" repo="$2" pr_json="$3" head armed
+    head=$(printf '%s' "${pr_json}" | jq -r '.headRefOid // empty' 2> /dev/null)
+    [[ "${head}" =~ ^[0-9a-f]{40}$ ]] || return 1
+    gh pr merge "${item_id}" --repo "${repo}" --auto --merge --match-head-commit "${head}" > /dev/null 2>&1 || return 1
+    armed=$(gh pr view "${item_id}" --repo "${repo}" --json autoMergeRequest --jq '.autoMergeRequest != null' 2> /dev/null) || return 1
+    [ "${armed}" = true ]
+}
+
 # Runs jq_program over pr_json with the REST-shaped review and issue comment arrays bound as
 # $reviewComments and $issueComments, and prints its output; any further arguments are jq options
 # (-r, --arg, --argjson). The arrays go through temporary files read with --rawfile rather than

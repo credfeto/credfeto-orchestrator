@@ -1326,6 +1326,100 @@ esac'
     [ "${status}" -ne 0 ]
 }
 
+# --- re-arming a missing auto-merge (#1798) -------------------------------------------------------
+
+ARM_SHA="1111111111111111111111111111111111111111"
+
+@test "repo_allows_auto_merge reads allow_auto_merge once per repo, and returns 2 when it cannot be read (#1798)" {
+    # shellcheck disable=SC2016  # expanded by the stub, not here
+    make_stub gh 'printf "%s\n" "$*" >> "'"${TEST_TMP}"'/gh_args"; cat "'"${TEST_TMP}"'/allowed"'
+    printf 'true' > "${TEST_TMP}/allowed"
+    repo_allows_auto_merge "org/repo"
+    repo_allows_auto_merge "org/repo"
+    [ "$(grep -c 'api repos/org/repo --jq .allow_auto_merge // false' "${TEST_TMP}/gh_args")" -eq 1 ]
+    printf 'false' > "${TEST_TMP}/allowed"
+    run repo_allows_auto_merge "org/other"
+    [ "${status}" -eq 1 ]
+    printf 'surprise' > "${TEST_TMP}/allowed"
+    run repo_allows_auto_merge "org/third"
+    [ "${status}" -eq 2 ]
+    make_stub gh 'exit 1'
+    run repo_allows_auto_merge "org/fourth"
+    [ "${status}" -eq 2 ]
+}
+
+@test "pr_should_arm_missing_auto_merge arms a finished PR on a repo that allows auto-merge when a review or a required check gates the merge (#1798)" {
+    repo_allows_auto_merge() { return 0; }
+    fetch_branch_requires_status_checks() { printf 'false'; }
+    run pr_should_arm_missing_auto_merge '{"isDraft":false,"statusCheckRollup":[],"autoMergeRequest":null,"reviewDecision":"REVIEW_REQUIRED"}' "org/repo"
+    [ "${status}" -eq 0 ]
+    run pr_should_arm_missing_auto_merge '{"isDraft":false,"statusCheckRollup":[],"autoMergeRequest":null,"reviewDecision":"APPROVED"}' "org/repo"
+    [ "${status}" -eq 0 ]
+    fetch_branch_requires_status_checks() { [ "$1" = main ] && [ "$2" = org/repo ] && printf 'true'; }
+    run pr_should_arm_missing_auto_merge '{"isDraft":false,"statusCheckRollup":[],"autoMergeRequest":null,"reviewDecision":null,"baseRefName":"main"}' "org/repo"
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_should_arm_missing_auto_merge does not arm a PR already armed, not finished, on a repo without auto-merge, or whose base requires nothing (#1798)" {
+    repo_allows_auto_merge() { return 0; }
+    fetch_branch_requires_status_checks() { printf 'false'; }
+    local ok='"isDraft":false,"statusCheckRollup":[],"reviewDecision":"REVIEW_REQUIRED"'
+    run pr_should_arm_missing_auto_merge "{${ok},\"autoMergeRequest\":{\"enabledAt\":\"now\"}}" "org/repo"
+    [ "${status}" -eq 1 ]
+    run pr_should_arm_missing_auto_merge '{"isDraft":true,"statusCheckRollup":[],"autoMergeRequest":null,"reviewDecision":"REVIEW_REQUIRED"}' "org/repo"
+    [ "${status}" -eq 1 ]
+    run pr_should_arm_missing_auto_merge '{"isDraft":false,"statusCheckRollup":[],"autoMergeRequest":null,"reviewDecision":"CHANGES_REQUESTED"}' "org/repo"
+    [ "${status}" -eq 1 ]
+    run pr_should_arm_missing_auto_merge '{"isDraft":false,"statusCheckRollup":[{"__typename":"CheckRun","name":"build","isRequired":true,"status":"COMPLETED","conclusion":"FAILURE"}],"autoMergeRequest":null,"reviewDecision":"REVIEW_REQUIRED"}' "org/repo"
+    [ "${status}" -eq 1 ]
+    # No review policy, and a base that requires no check, or whose checks cannot be read.
+    run pr_should_arm_missing_auto_merge '{"isDraft":false,"statusCheckRollup":[],"autoMergeRequest":null,"reviewDecision":null,"baseRefName":"main"}' "org/repo"
+    [ "${status}" -eq 1 ]
+    fetch_branch_requires_status_checks() { return 1; }
+    run pr_should_arm_missing_auto_merge '{"isDraft":false,"statusCheckRollup":[],"autoMergeRequest":null,"reviewDecision":"","baseRefName":"main"}' "org/repo"
+    [ "${status}" -eq 1 ]
+    # A repo that disallows auto-merge, or whose setting cannot be read, keeps the #1479 fallback.
+    repo_allows_auto_merge() { return 1; }
+    run pr_should_arm_missing_auto_merge "{${ok},\"autoMergeRequest\":null}" "org/repo"
+    [ "${status}" -eq 1 ]
+    repo_allows_auto_merge() { return 2; }
+    run pr_should_arm_missing_auto_merge "{${ok},\"autoMergeRequest\":null}" "org/repo"
+    [ "${status}" -eq 1 ]
+}
+
+@test "arm_missing_auto_merge requests a merge-commit auto-merge pinned to the head, never --admin, and confirms it by re-reading the PR (#1798)" {
+    # shellcheck disable=SC2016  # expanded by the stub, not here
+    make_stub gh 'printf "%s\n" "$*" >> "'"${TEST_TMP}"'/gh_args"
+case "$1 $2" in
+    "pr merge") exit 0 ;;
+    "pr view") cat "'"${TEST_TMP}"'/armed" ;;
+    *) exit 1 ;;
+esac'
+    printf 'true' > "${TEST_TMP}/armed"
+    run arm_missing_auto_merge 42 "org/repo" "{\"headRefOid\":\"${ARM_SHA}\"}"
+    [ "${status}" -eq 0 ]
+    grep -qxF "pr merge 42 --repo org/repo --auto --merge --match-head-commit ${ARM_SHA}" "${TEST_TMP}/gh_args"
+    grep -qxF "pr view 42 --repo org/repo --json autoMergeRequest --jq .autoMergeRequest != null" "${TEST_TMP}/gh_args"
+    [ "$(grep -c -- "--admin" "${TEST_TMP}/gh_args")" -eq 0 ]
+
+    # The re-read does not show the request.
+    printf 'false' > "${TEST_TMP}/armed"
+    run arm_missing_auto_merge 42 "org/repo" "{\"headRefOid\":\"${ARM_SHA}\"}"
+    [ "${status}" -eq 1 ]
+}
+
+@test "arm_missing_auto_merge fails without a merge request for a head that is not a commit SHA, and when the request fails (#1798)" {
+    # shellcheck disable=SC2016  # expanded by the stub, not here
+    make_stub gh 'printf "%s\n" "$*" >> "'"${TEST_TMP}"'/gh_args"; exit 1'
+    run arm_missing_auto_merge 42 "org/repo" '{"headRefOid":"abc"}'
+    [ "${status}" -eq 1 ]
+    [ ! -f "${TEST_TMP}/gh_args" ]
+    run arm_missing_auto_merge 42 "org/repo" "{\"headRefOid\":\"${ARM_SHA}\"}"
+    [ "${status}" -eq 1 ]
+    [ "$(grep -c "pr merge" "${TEST_TMP}/gh_args")" -eq 1 ]
+    [ "$(grep -c "pr view" "${TEST_TMP}/gh_args")" -eq 0 ]
+}
+
 @test "annotate_pr_json_required_checks marks each check required or not by name or context" {
     local pr='{"statusCheckRollup":[{"name":"build","conclusion":"FAILURE","status":"COMPLETED"},{"name":"badge","conclusion":"FAILURE","status":"COMPLETED"},{"context":"legacy/ci","state":"SUCCESS"}]}'
     run annotate_pr_json_required_checks "${pr}" '["build","legacy/ci"]'
