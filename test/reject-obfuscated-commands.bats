@@ -560,8 +560,8 @@ git status'
 }
 
 # A backslash-escaped tab (a\<TAB>b) is one word at runtime, but shfmt keeps it as a single Lit
-# whose raw Value contains the tab byte; the word must not split into two tab-joined fields and
-# shift every later argument's words/resolved pairing past the real inline-code flag.
+# whose raw Value contains the tab byte; the word must stay one entry so every later argument's
+# words/resolved pairing still lines up with the real inline-code flag.
 @test "a backslash-escaped tab decoy before a nested python3 -c is still blocked" {
     run_hook $'uv run a\\\tb python3 -c "import os"'
     [ "${status}" -eq 2 ]
@@ -1101,4 +1101,77 @@ stub_shfmt_rewriting() {
     run_hook 'while true; do eval "git push"; break; done'
     [ "${status}" -eq 2 ]
     [[ "${output}" == *'command did not run'* ]]
+}
+
+# ---- per-word base64 transport -------------------------------------------------
+
+@test "a quoted argument with an embedded newline before a nested python3 -c is still blocked" {
+    run_hook $'uv run "a\nb" python3 -c "import os"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "a quoted argument with an embedded carriage return before a nested python3 -c is still blocked" {
+    run_hook $'uv run "a\rb" python3 -c "import os"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "a quoted argument with an embedded tab before a nested node -e is still blocked" {
+    run_hook $'npx "a\tb" node -e "1"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "a non-literal argument before a nested python3 -c is still blocked" {
+    # shellcheck disable=SC2016  # literal $X — must reach the hook unexpanded
+    run_hook 'uv run "$X" python3 -c "import os"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "an empty quoted argument before a nested python3 -c is still blocked" {
+    run_hook 'uv run "" python3 -c "import os"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "empty quoted arguments in the middle and at the end are allowed" {
+    run_hook 'git status "" x'
+    [ "${status}" -eq 0 ]
+    run_hook 'ls ""'
+    [ "${status}" -eq 0 ]
+}
+
+@test "missing jq fails closed" {
+    mkdir -p "${STUB_BIN}/nojq"
+    ln -s "$(command -v base64)" "${STUB_BIN}/nojq/base64"
+    ln -s "$(command -v shfmt)" "${STUB_BIN}/nojq/shfmt"
+    ln -s "$(command -v bash)" "${STUB_BIN}/nojq/bash"
+    ln -s "$(command -v cat)" "${STUB_BIN}/nojq/cat"
+    local payload
+    payload=$(jq -n --arg cmd 'git push' '{tool_input: {command: $cmd}}')
+    run bash -c 'printf "%s" "$1" | PATH="$2" "$3"' _ "$payload" "${STUB_BIN}/nojq" "$HOOK"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'jq is not available'* ]]
+}
+
+@test "missing base64 fails closed" {
+    mkdir -p "${STUB_BIN}/nobase64"
+    ln -s "$(command -v jq)" "${STUB_BIN}/nobase64/jq"
+    ln -s "$(command -v shfmt)" "${STUB_BIN}/nobase64/shfmt"
+    ln -s "$(command -v bash)" "${STUB_BIN}/nobase64/bash"
+    ln -s "$(command -v cat)" "${STUB_BIN}/nobase64/cat"
+    local payload
+    payload=$(jq -n --arg cmd 'git push' '{tool_input: {command: $cmd}}')
+    run bash -c 'printf "%s" "$1" | PATH="$2" "$3"' _ "$payload" "${STUB_BIN}/nobase64" "$HOOK"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'base64 is not available'* ]]
+}
+
+@test "a failing base64 decode fails closed instead of decoding words to empty strings" {
+    make_stub base64 'exit 1'
+    run_hook 'python3 -c "import os"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'command words could not be decoded'* ]]
 }
