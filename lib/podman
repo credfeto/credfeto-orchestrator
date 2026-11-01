@@ -688,6 +688,40 @@ add_gpg_podman_args() {
     PODMAN_RUN_ARGS+=( --volume "${extra_socket}:/home/developer/.gnupg/S.gpg-agent:ro" )
 }
 
+# Appends a read-only /dev/null mount over every regular file under REPO_WORK_DIR whose basename
+# matches a pattern in the secret-files list (secret-files.local takes precedence when present), so
+# the agent reads an empty file even through a command the block-secret-file-reads hook cannot see
+# through. Dies when the list is missing or empty: starting the container without the mask would
+# silently expose every secret in the repository.
+add_secret_mask_podman_args() {
+    local file="${SECRET_FILES_DIR}/secret-files" line f rel base pat
+    local -a patterns=() masked=()
+    [ -f "${SECRET_FILES_DIR}/secret-files.local" ] && file="${SECRET_FILES_DIR}/secret-files.local"
+    [ -r "${file}" ] || die "Secret file pattern list ${file} is missing or unreadable"
+    while IFS= read -r line || [ -n "${line}" ]; do
+        line="${line%%#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [ -n "${line}" ] && patterns+=( "${line}" )
+    done < "${file}"
+    [ "${#patterns[@]}" -gt 0 ] || die "Secret file pattern list ${file} lists no pattern"
+
+    while IFS= read -r -d '' f; do
+        base="${f##*/}"
+        for pat in "${patterns[@]}"; do
+            # shellcheck disable=SC2053  # the pattern is deliberately unquoted so it matches as a glob
+            if [[ ${base} == ${pat} ]]; then
+                rel="${f#"${REPO_WORK_DIR}/"}"
+                PODMAN_RUN_ARGS+=( --volume "/dev/null:${CONTAINER_REPO_PATH}/${rel}:ro" )
+                masked+=( "${rel}" )
+                break
+            fi
+        done
+    done < <(find "${REPO_WORK_DIR}" -name .git -prune -o -type f -print0)
+
+    [ "${#masked[@]}" -eq 0 ] || warn "Masking secret-bearing files in the agent container: ${masked[*]}"
+}
+
 # Verify all --volume source paths in PODMAN_RUN_ARGS exist with the expected
 # type before calling podman run.  Podman auto-creates any missing bind-mount
 # source as a directory; if that path is later expected to be a socket, the
@@ -1032,6 +1066,7 @@ prepare_claude_container_args() {
     fi
     verify_gpg_signing_ready
     add_gpg_podman_args
+    add_secret_mask_podman_args
     if [ -f "${HOME}/.database" ]; then
         PODMAN_RUN_ARGS+=( --volume "${HOME}/.database:/home/developer/.database:ro" )
     else

@@ -97,6 +97,17 @@ moves ahead of the host-side rules sync. To clear the warning, update the host's
 The check is skipped silently when the `.env` file or its `SHA=` line is absent, `curl` is
 unavailable, the remote is unreachable, or the remote returns something that is not a hex SHA.
 
+Secret-bearing files in the repository checkout are masked before the container starts. For
+every regular file under the repository whose name matches a pattern in
+`claude-hooks/secret-files` (`.env`, `.env.*`, `*.env`, `.database`), the launcher adds a
+read-only bind mount of `/dev/null` over its path inside the container, so the agent sees an
+empty file in its place, and prints a warning listing the files it masked. The `.git`
+directory is skipped and symlinks are not followed. Inside the container, the
+`block-secret-file-reads` hook is a second layer: it denies any `Bash`, `Read`, `Edit`, `Write`
+or `NotebookEdit` call that names a file matching the same patterns, including through a glob
+or a symlink. A tool inside the container that needs one of these files therefore sees it as
+empty.
+
 Only once every one of these passes does the entrypoint exec `claude` itself, handing it the
 prompt built by `oneshot` (see [oneshot.md](oneshot.md) and
 [workflow-board.md](workflow-board.md) for what that prompt actually contains).
