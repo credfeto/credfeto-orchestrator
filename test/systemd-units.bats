@@ -328,7 +328,7 @@ local_ownership_heal_cmd_for() {
     local tmr="${TEST_TMP}/units/credfeto-orchestrator-testuser.timer"
 
     [ -f "${svc}" ]
-    grep -q "TimeoutStartSec=6300" "${svc}"
+    grep -q "TimeoutStartSec=7800" "${svc}"
     grep -q "User=testuser" "${svc}"
     grep -q "RuntimeDirectory=credfeto-orchestrator-testuser" "${svc}"
     grep -q "RuntimeDirectoryMode=0700" "${svc}"
@@ -511,7 +511,7 @@ local_ownership_heal_cmd_for() {
     local tmr="${TEST_TMP}/units/credfeto-orchestrator-testuser-myorg.timer"
 
     [ -f "${svc}" ]
-    grep -q "TimeoutStartSec=6300" "${svc}"
+    grep -q "TimeoutStartSec=7800" "${svc}"
     grep -q "User=testuser" "${svc}"
     grep -q "RuntimeDirectory=credfeto-orchestrator-testuser-myorg" "${svc}"
     grep -q "RuntimeDirectoryMode=0700" "${svc}"
