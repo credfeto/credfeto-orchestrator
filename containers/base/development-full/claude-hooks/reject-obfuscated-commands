@@ -150,8 +150,11 @@ is_inline_code_flag() {
   return 1
 }
 
+command -v jq > /dev/null 2>&1 || block 'jq is not available to parse the tool payload - failing closed'
+command -v base64 > /dev/null 2>&1 || block 'base64 is not available to decode the command words - failing closed'
+
 input=$(cat)
-raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
+raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""') || block 'tool payload could not be parsed by jq - failing closed'
 
 [ -z "$raw_cmd" ] && exit 0
 
@@ -372,74 +375,47 @@ while IFS= read -r var; do
   done
 done <<< "$assign_targets"
 
-# Emit two lines per CallExpr anywhere in the AST (at any nesting depth:
-# $(...)/backtick substitutions, loop and if bodies, pipelines, subshells,
-# process substitutions): the words line (command-name word followed by each
-# argument word, tab-separated - a word that is anything other than a single
-# plain literal is represented as a \x01 marker; layer 0 already guarantees a
-# real \x01 byte can never appear in the input, so the marker is unambiguous,
-# and it fails the command-name allowlist regex), then the resolved line
-# (same approach as enforce-git-dash-c's own resolve_parts, trimmed to just
-# the Lit/SglQuoted/DblQuoted-of-only-those-parts concatenation plus the
-# unquoted-backslash decode - no ANSI-C-escape sentinel). The words line keeps
-# the raw backslash, so NAME_RE still rejects an escaped command name such as
-# g\it, while the resolved line sees python3 -\c as the -c bash passes. Unlike that hook's
-# own --no-verify check, the ANSI-C gap here IS load-bearing where an
-# interpreter has a broad, unscoped allow entry (e.g. the pre-existing
-# Bash(python3 *)): python3 $'\x2d\x63' '...' passes this check, since
-# shfmt stores an ANSI-C string's raw, undecoded source text in Lit.Value,
-# not the runtime value bash actually passes - tracked as #1552, not fixed
-# here. It does not chain to a working bypass for node specifically, since
-# every node permissions.allow shape requires the .github/actions/*/*.js
-# script path to be node's first positional argument, and node stops
-# parsing its own flags there.
+# Emit one compact JSON line per CallExpr anywhere in the AST (at any
+# nesting depth: $(...)/backtick substitutions, loop and if bodies,
+# pipelines, subshells, process substitutions): [words, resolved], two
+# arrays with one entry per word (command-name word followed by each
+# argument word).
 #
-# The resolved line itself exists because the words line's own "single Lit part" test
-# treats a glued flag+quoted-value word (node --eval="code", node -e"code")
-# as opaque and skips it entirely in the interpreter-flag check below, which
-# is exactly the shape needed to run inline code once node is on
-# command-allowlist. Resolving a word entirely built from literal/quoted
-# pieces - even when the value itself is dynamic-looking, since the shell
-# has already stripped the quoting before the interpreter ever sees it -
-# closes that gap; a word containing a genuine expansion ($VAR, $(...), ...)
-# still folds to the same \x01 marker as the words line's own opaque case,
-# since its real value cannot be known statically. Used only for the
-# interpreter-flag check (Layer 3/3b below), never for command-name/
-# allowlist identification, which stays on the words line - matching
-# enforce-git-dash-c's own stated rationale for the same split. Joined with
-# \x1f (unit separator), not tab, because a resolved value can genuinely be
-# an empty string and `IFS=$'\t' read -ra` collapses consecutive tabs,
-# silently dropping an empty field and desyncing the array against words;
-# \x1f is not IFS whitespace, so empty fields survive between delimiters.
-# An empty resolved value is still folded to the marker, though, because
-# `read -ra` drops a trailing empty field even with a non-whitespace IFS
-# (`cmd a ""` would otherwise leave resolved one entry shorter than words).
-# A value on either line containing a raw tab/newline/CR/\x1f byte is also
-# folded back to the marker (unsafe_for_transport): a quoted argument may
-# legitimately embed one, and so may a plain single-Lit word, since shfmt
-# keeps an unquoted backslash-escaped tab (`a\<TAB>b`, one word at runtime)
-# as a single Lit whose raw Value still contains the tab byte. Left as-is,
-# that one word would split into two words[] entries while resolved[] kept
-# one, shifting every later words[i]/resolved[i] pairing so Layer 3/3b read
-# the wrong argument and could miss a real inline-code flag. No flag this
-# check matches contains whitespace or is empty, so folding costs nothing
-# real, and the loop below also fails closed if the two lines ever split
-# into different field counts. The jq program itself is guarded the same
-# way as the ast=$(...) assignment above: if it errored, $calls would be
-# empty, the loop would process nothing and the hook would fall through to
-# exit 0.
-calls=$(printf '%s' "$ast" | jq -r "${JQ_RESOLVE_PARTS}"'
-  def unsafe_for_transport:
-    . == null or . == "" or (explode | any(. == 9 or . == 10 or . == 13 or . == 31));
+# words: a word that is a single plain literal is its raw Lit value; any
+# other word is null, decoded below to the \x01 marker (layer 0 already
+# guarantees a real \x01 byte can never appear in the input, so the marker
+# is unambiguous, and it fails the command-name allowlist regex). The raw
+# backslash is kept, so NAME_RE still rejects an escaped command name such
+# as g\it.
+#
+# resolved: the word's runtime value when it is built entirely from
+# literal/quoted pieces (resolve_parts, with the unquoted-backslash decode),
+# so python3 -\c is seen as the -c bash passes, and a glued flag+quoted-value
+# word (node --eval="code", node -e"code") - which words treats as opaque -
+# is still seen by the interpreter-flag check. A word containing a genuine
+# expansion ($VAR, $(...), ...) is null (the marker), since its real value
+# cannot be known statically. An empty value stays an empty string. Used
+# only for the interpreter-flag check (Layer 3/3b below), never for
+# command-name/allowlist identification, which stays on words.
+#
+# ANSI-C quoting is not resolved: shfmt stores an ANSI-C string's raw,
+# undecoded source text in Lit.Value, not the runtime value bash passes, so
+# python3 $'\x2d\x63' '...' passes this check where an interpreter has a
+# broad, unscoped allow entry (e.g. Bash(python3 *)). It does not chain to a
+# working bypass for node specifically, since every node permissions.allow
+# shape requires the .github/actions/*/*.js script path to be node's first
+# positional argument, and node stops parsing its own flags there.
+#
+# Each array is decoded in bash one base64-encoded entry per line
+# (decode_json_words below), so no word's content - an embedded tab,
+# newline, CR or any other byte - can be mistaken for a delimiter or shift a
+# later word to the wrong index. The jq program is guarded the same way as
+# the ast=$(...) assignment above: if it errored, $calls would be empty, the
+# loop would process nothing and the hook would fall through to exit 0.
+calls=$(printf '%s' "$ast" | jq -c "${JQ_RESOLVE_PARTS}"'
   .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
-  ([ .Args[] |
-     (if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else null end) as $w |
-     if ($w | unsafe_for_transport) then "\u0001" else $w end
-  ] | join("\t")),
-  ([ .Args[] |
-     (.Parts | resolve_parts(true)) as $r |
-     if ($r | unsafe_for_transport) then "\u0001" else $r end
-  ] | join("\u001f"))
+  [ [ .Args[] | if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else null end ],
+    [ .Args[] | .Parts | resolve_parts(true) ] ]
 ') || block 'command AST could not be analysed - failing closed'
 
 # `[` (the `test` builtin's bracket form) is a single-character command name
@@ -479,15 +455,38 @@ check_inline_flags_from() {
   done
 }
 
-while IFS= read -r call_line && IFS= read -r resolved_line; do
+# Decodes the JSON array in $1 into the global DECODED array: a JSON string
+# becomes its exact value (empty included), JSON null becomes $MARKER. Called
+# as a plain statement, never in $(...) or a pipeline, so that block's exit
+# ends the hook rather than a subshell. The '.' sentinel stops $(...) from
+# stripping a trailing newline off a decoded value.
+decode_json_words() {
+  local entries entry decoded
+  entries=$(printf '%s' "$1" | jq -r '.[] | if . == null then "N" else "L:" + @base64 end') || block 'command AST could not be analysed - failing closed'
+  DECODED=()
+  [ -z "$entries" ] && return 0
+  while IFS= read -r entry; do
+    case "$entry" in
+      N) DECODED+=("$MARKER") ;;
+      L:*)
+        decoded=$(printf '%s' "${entry#L:}" | base64 -d 2> /dev/null && printf '.') || block 'command words could not be decoded - failing closed'
+        DECODED+=("${decoded%.}")
+        ;;
+      *) block 'command words could not be decoded - failing closed' ;;
+    esac
+  done <<< "$entries"
+}
+
+while IFS= read -r call_line; do
   [ -z "$call_line" ] && continue
-  IFS=$'\t' read -ra words <<< "$call_line"
-  IFS=$'\x1f' read -ra resolved <<< "$resolved_line"
-  # Layers 3/3b pair words[i] with resolved[i] by index; if some unforeseen
-  # AST shape ever makes the two transports split into different field
-  # counts, every later pairing is wrong and an inline-code flag can be
-  # read at the wrong index, so fail closed rather than check misaligned
-  # data.
+  words_json=$(printf '%s' "$call_line" | jq -c '.[0]') || block 'command AST could not be analysed - failing closed'
+  resolved_json=$(printf '%s' "$call_line" | jq -c '.[1]') || block 'command AST could not be analysed - failing closed'
+  decode_json_words "$words_json"
+  words=("${DECODED[@]}")
+  decode_json_words "$resolved_json"
+  resolved=("${DECODED[@]}")
+  # Layers 3/3b pair words[i] with resolved[i] by index, so fail closed
+  # rather than check misaligned data if the two ever differ in length.
   if [ "${#words[@]}" -ne "${#resolved[@]}" ]; then
     block 'command arguments could not be analysed consistently - failing closed'
   fi
@@ -543,9 +542,9 @@ while IFS= read -r call_line && IFS= read -r resolved_line; do
   # had been the command name, so scan every argument word (not just
   # words[0], already covered by Layer 3 above) for a nested interpreter
   # name and check what follows it too. The interpreter name itself is
-  # identified from the words line (command identification stays there, per
-  # the resolved line's own header comment); the flag scan after it uses
-  # the resolved line, same as Layer 3 above.
+  # identified from words (command identification stays there, per the
+  # comment above the calls extraction); the flag scan after it uses
+  # resolved, same as Layer 3 above.
   for idx in "${!words[@]}"; do
     [ "$idx" -eq 0 ] && continue
     tok="${words[$idx]}"
