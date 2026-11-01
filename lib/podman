@@ -102,6 +102,15 @@ GH_ENTERPRISE_SECRET_NAME=""
 # exposed to the agent via TMPDIR/TMP/TEMP (#1351) — throwaway space, wiped every invocation,
 # distinct from the persistent sessions/plans/cache/backups state dirs.
 CLAUDE_SCRATCH_TMPDIR=""
+# Pre-check state (#1785). PRECHECK_STATUS is pass, fail, timeout or error for the most recent
+# ensure_precheck_result call, with PRECHECK_ERROR saying why for error. PRECHECK_SECTION is the
+# prompt section prepare_precheck_section built for the next session, and PRECHECK_SESSION_LOG
+# the host path of the log prepare_claude_container_args copies to PRECHECK_CONTAINER_LOG for it
+# (empty: no log to copy). oneshot resets the last two for every item.
+PRECHECK_STATUS=""
+PRECHECK_ERROR=""
+PRECHECK_SECTION=""
+PRECHECK_SESSION_LOG=""
 
 # Handles is_error=true in the Claude JSON response.
 # On blocking_limit: every run is already a fresh single-phase session, so there is nothing
@@ -906,6 +915,242 @@ invoke_claude() {
     cleanup_dangling_images
 }
 
+# Prints the prompt summary of a failing pre-commit-check log (#1785): one "  - <hook>" line per
+# failing hook, each followed by up to max_lines of its error output, indented six spaces, and a
+# note of how many lines were left out. Two shapes of failure are recognised, after colour codes
+# are stripped: a pre-commit framework status line ("<hook>.....Failed"), whose own output
+# follows it, and a hook script's "✗ <step>" die line, whose output is the lines before it since
+# the step's "→ ..." start line. A die line after framework failures in the same step only
+# repeats them, so it is not listed again, nor is pre-commit-check's own closing "pre-commit hook
+# failed". At most max_hooks hooks are listed. Long lines are cut at 240 characters. Returns 1
+# with nothing printed when no failing hook is recognised, so the caller can quote the log's
+# tail instead.
+summarise_precheck_log() {
+    local log_file="$1" max_lines="${2:-${PRECHECK_SUMMARY_LINES}}" max_hooks="${3:-${PRECHECK_SUMMARY_MAX_HOOKS}}"
+    [ -f "${log_file}" ] || return 1
+    sed -e 's/\x1b\[[0-9;]*[A-Za-z]//g' -e 's/\r$//' "${log_file}" | awk -v max="${max_lines}" -v maxhooks="${max_hooks}" '
+        function clip(s) { return (length(s) > 240) ? substr(s, 1, 240) "..." : s }
+        function end_hook() {
+            if (in_hook && shown && extra > 0) printf "      (%d more line(s) in the log)\n", extra
+            in_hook = 0; extra = 0; count = 0
+        }
+        function new_hook(name) {
+            end_hook()
+            hooks++
+            shown = (hooks <= maxhooks)
+            if (shown) printf "  - %s\n", clip(name)
+            in_hook = 1
+        }
+        function add_line(s) {
+            if (!shown) return
+            if (count < max) { printf "      %s\n", clip(s); count++ } else extra++
+        }
+        /^[[:space:]]*$/ { next }
+        /\.\.\.+(\([^)]*\))?(Passed|Failed|Skipped)$/ {
+            name = $0
+            sub(/\.\.\.+(\([^)]*\))?(Passed|Failed|Skipped)$/, "", name)
+            if ($0 ~ /Failed$/) { new_hook(name); step_had_hook = 1 } else end_hook()
+            nbuf = 0
+            next
+        }
+        /^→ / { end_hook(); nbuf = 0; step_had_hook = 0; next }
+        /^✗ / {
+            end_hook()
+            msg = $0
+            sub(/^✗ /, "", msg)
+            if (msg != "pre-commit hook failed" && !step_had_hook) {
+                new_hook(msg)
+                first = (nbuf > max) ? nbuf - max : 0
+                for (i = first; i < nbuf; i++) add_line(buf[i % max])
+                if (shown && first > 0) printf "      (%d earlier line(s) in the log)\n", first
+                in_hook = 0
+            }
+            nbuf = 0; step_had_hook = 0
+            next
+        }
+        in_hook {
+            if ($0 ~ /^- (hook id|exit code|duration):/) next
+            add_line($0)
+            next
+        }
+        { buf[nbuf % max] = $0; nbuf++ }
+        END {
+            end_hook()
+            if (hooks > maxhooks) printf "  - ... and %d more failing hook(s); see the log\n", hooks - maxhooks
+            exit (hooks > 0) ? 0 : 1
+        }
+    '
+}
+
+# Prints the last max_lines non-blank lines of a pre-check log, colour codes stripped and
+# indented six spaces: the prompt summary of a timed-out run, or of a failure
+# summarise_precheck_log does not recognise.
+precheck_log_tail() {
+    local log_file="$1" max_lines="${2:-${PRECHECK_SUMMARY_LINES}}"
+    [ -f "${log_file}" ] || return 0
+    sed -e 's/\x1b\[[0-9;]*[A-Za-z]//g' -e 's/\r$//' -e '/^[[:space:]]*$/d' "${log_file}" \
+        | tail -n "${max_lines}" | cut -c1-240 | sed 's/^/      /'
+}
+
+# Runs pre-commit-check non-agentically in the agent image (#1785) on whatever REPO_WORK_DIR has
+# checked out, writing its output to log_file, and sets PRECHECK_STATUS (and PRECHECK_ERROR).
+# The launch is the agent's own: the same ensure_agent_container_ready pre-flight and the same
+# prepare_claude_container_args mounts, environment and secrets, plus ORCHESTRATOR_PRECHECK=1,
+# which makes containers/agent/entrypoint.sh exec pre-commit-check instead of claude. No model
+# runs and no prompt is given. The container gets its own limit, PRECHECK_TIMEOUT_SECS, and has
+# exited before the agent's container starts, so the agent's AGENT_TIMEOUT_MINUTES are untouched.
+# The argument is claude --version, which is what an older image without the pre-check mode runs
+# instead: it exits at once and prints no PRECHECK_START_MARKER, and that is reported as error.
+# prepare_claude_container_args and the run happen in a subshell, so its EXIT trap removes the
+# scratch directory and secrets as soon as the check ends (but leaves the ssh-agent running), and
+# a die in there ends only the check.
+# Status: timeout (exit 124), error (no marker in the log), pass (exit 0) or fail.
+run_precommit_precheck() {
+    local item_type="$1" item_id="$2" log_file="$3"
+    local container_name="orchestrator-${OWNER}" owner_token podman_exit=0
+
+    PRECHECK_STATUS=""
+    PRECHECK_ERROR=""
+    : > "${log_file}" || {
+        PRECHECK_STATUS="error"
+        PRECHECK_ERROR="the log file could not be created"
+        return 0
+    }
+    owner_token=$(load_token_for_owner "${OWNER}")
+    ensure_agent_container_ready "${container_name}" "${item_type}" "${item_id}"
+
+    (
+        # The EXIT trap prepare_claude_container_args installs also stops the run's ssh-agent,
+        # which the agent session after this check still needs; in here it must only clean up.
+        # shellcheck disable=SC2329  # called by the EXIT trap prepare_claude_container_args installs
+        stop_ssh_agent() { return 0; }
+        prepare_claude_container_args "Pre-commit pre-check (#1785): no agent session runs in this container." \
+            "${owner_token}" "${container_name}" "${item_type}" "${item_id}"
+        PODMAN_RUN_ARGS+=(--env "ORCHESTRATOR_PRECHECK=1")
+        validate_bind_mounts
+        info "Running pre-commit-check in container ${container_name} (limit ${PRECHECK_TIMEOUT_MINUTES} minutes)..." >&2
+        run_exit=0
+        timeout --kill-after=60s "${PRECHECK_TIMEOUT_SECS}" \
+            podman "${PODMAN_RUN_ARGS[@]}" "${ORCHESTRATOR_IMAGE}" --version \
+            < /dev/null > "${log_file}" 2>&1 \
+            || run_exit=$?
+        [ "${run_exit}" -eq 124 ] && { podman rm -f "${container_name}" > /dev/null 2>&1 || true; }
+        exit "${run_exit}"
+    ) || podman_exit=$?
+
+    if [ "${podman_exit}" -eq 124 ]; then
+        PRECHECK_STATUS="timeout"
+    elif ! grep -qF "${PRECHECK_START_MARKER}" "${log_file}" 2> /dev/null; then
+        PRECHECK_STATUS="error"
+        PRECHECK_ERROR="pre-commit-check did not start in the agent image (exit ${podman_exit})"
+    elif [ "${podman_exit}" -eq 0 ]; then
+        PRECHECK_STATUS="pass"
+    else
+        PRECHECK_STATUS="fail"
+    fi
+}
+
+# Makes sure there is a pre-check result for sha under the cache key (#1785; see
+# precheck_cache_file_path in lib/state) and sets PRECHECK_STATUS / PRECHECK_ERROR. A result
+# already cached for this exact SHA is reused and pre-commit-check is not run again. Otherwise
+# REPO_WORK_DIR, which must be clean, is checked out detached at sha, run_precommit_precheck
+# runs, and the checkout is put back: changes the hooks' fixers made are reset, ignored build
+# output is cleaned, and the branch (or commit) that was checked out before is restored. pass,
+# fail and timeout are cached with the log and, for the last two, the prompt summary; error is
+# not, so the next session tries again. Returns 1 when the pre-check is off
+# (PRECHECK_TIMEOUT_MINUTES=0) or no SHA was given, and 0 otherwise: a failure or timeout never
+# stops the session, it is only reported.
+ensure_precheck_result() {
+    local key="$1" sha="$2" item_type="$3" item_id="$4"
+    local cache_file status orig_ref summary
+
+    PRECHECK_STATUS=""
+    PRECHECK_ERROR=""
+    [ "${PRECHECK_TIMEOUT_MINUTES}" -gt 0 ] || return 1
+    [ -n "${sha}" ] || return 1
+
+    cache_file=$(precheck_cache_file_path "${key}")
+    if status=$(load_precheck_result "${key}" "${sha}"); then
+        info "pre-commit-check result for ${key} at ${sha} is cached (${status}), not running it again" >&2
+        PRECHECK_STATUS="${status}"
+        return 0
+    fi
+
+    if ! git -C "${REPO_WORK_DIR}" cat-file -e "${sha}^{commit}" 2> /dev/null; then
+        PRECHECK_STATUS="error"
+        PRECHECK_ERROR="commit ${sha} is not in the orchestrator's clone"
+    elif [ -n "$(git -C "${REPO_WORK_DIR}" status --porcelain --untracked-files=no 2> /dev/null)" ]; then
+        PRECHECK_STATUS="error"
+        PRECHECK_ERROR="the orchestrator's clone has uncommitted changes"
+    else
+        orig_ref=$(git -C "${REPO_WORK_DIR}" symbolic-ref -q --short HEAD 2> /dev/null) \
+            || orig_ref=$(git -C "${REPO_WORK_DIR}" rev-parse HEAD 2> /dev/null)
+        if git -C "${REPO_WORK_DIR}" checkout -q --detach "${sha}" 2> /dev/null; then
+            mkdir -p "${SESSION_BASE_DIR}" 2> /dev/null
+            run_precommit_precheck "${item_type}" "${item_id}" "${cache_file}.log.tmp"
+            git -C "${REPO_WORK_DIR}" reset -q --hard 2> /dev/null || true
+            git -C "${REPO_WORK_DIR}" clean -q -fdX 2> /dev/null || true
+            git -C "${REPO_WORK_DIR}" checkout -q "${orig_ref}" 2> /dev/null \
+                || warn "Failed to return ${REPO_FULL} to ${orig_ref} after the pre-check"
+        else
+            PRECHECK_STATUS="error"
+            PRECHECK_ERROR="commit ${sha} could not be checked out"
+        fi
+    fi
+
+    case "${PRECHECK_STATUS}" in
+        pass | fail | timeout)
+            summary=""
+            if [ "${PRECHECK_STATUS}" = "fail" ]; then
+                summary=$(summarise_precheck_log "${cache_file}.log.tmp") || summary=$(precheck_log_tail "${cache_file}.log.tmp")
+            elif [ "${PRECHECK_STATUS}" = "timeout" ]; then
+                summary=$(precheck_log_tail "${cache_file}.log.tmp")
+            fi
+            printf '%s' "${summary}" > "${cache_file}.summary" 2> /dev/null || true
+            mv -f "${cache_file}.log.tmp" "${cache_file}.log" 2> /dev/null || true
+            save_precheck_result "${key}" "${sha}" "${PRECHECK_STATUS}"
+            ;;
+        *)
+            rm -f "${cache_file}.log.tmp" 2> /dev/null || true
+            ;;
+    esac
+
+    case "${PRECHECK_STATUS}" in
+        pass) info "pre-commit-check passed for ${key} at ${sha}" >&2 ;;
+        fail) warn "pre-commit-check failed for ${key} at ${sha}; the session prompt lists the failing hooks" ;;
+        timeout) warn "pre-commit-check timed out after ${PRECHECK_TIMEOUT_MINUTES} minutes for ${key} at ${sha}; the session carries on without a result" ;;
+        *) warn "pre-commit-check could not run for ${key} at ${sha}: ${PRECHECK_ERROR}; the session carries on without a result" ;;
+    esac
+    return 0
+}
+
+# Runs (or reuses) the pre-check for sha and builds the prompt section for the coming session
+# (#1785): kind "pr" for a PR's head (key PullRequest_<id>), "main" for the default branch's
+# tip shared by the repository's Issues (key main). Sets PRECHECK_SECTION, and
+# PRECHECK_SESSION_LOG when there is a log for the session's container to read. Both are left
+# empty when the pre-check is off.
+prepare_precheck_section() {
+    local kind="$1" key="$2" sha="$3" item_type="$4" item_id="$5"
+    local cache_file summary="" container_log=""
+
+    PRECHECK_SECTION=""
+    PRECHECK_SESSION_LOG=""
+    ensure_precheck_result "${key}" "${sha}" "${item_type}" "${item_id}" || return 0
+
+    cache_file=$(precheck_cache_file_path "${key}")
+    case "${PRECHECK_STATUS}" in
+        pass | fail | timeout)
+            if [ -f "${cache_file}.log" ]; then
+                PRECHECK_SESSION_LOG="${cache_file}.log"
+                container_log="${PRECHECK_CONTAINER_LOG}"
+            fi
+            [ "${PRECHECK_STATUS}" = "pass" ] || summary=$(cat "${cache_file}.summary" 2> /dev/null)
+            ;;
+    esac
+    # shellcheck disable=SC2034  # read by oneshot
+    PRECHECK_SECTION=$(build_precheck_section "${kind}" "${sha}" "${PRECHECK_STATUS}" "${summary}" "${PRECHECK_ERROR}" "${container_log}")
+}
+
 # Pre-flight for an agent container launch (invoke_claude): removes a leftover non-running
 # container holding container_name, dies if a running one holds it, prunes dangling images and
 # idle transcripts, and pulls ORCHESTRATOR_IMAGE (once per process). item_type and item_id only
@@ -1012,6 +1257,11 @@ prepare_claude_container_args() {
     CLAUDE_MD_TMPFILE=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp --suffix=.claude-md) || die "Failed to create temp file for CLAUDE.md"
     printf '%s' "${claude_md_content}" > "${CLAUDE_MD_TMPFILE}"
     CLAUDE_SCRATCH_TMPDIR=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp -d --suffix=.claude-scratch) || die "Failed to create scratch directory"
+    # The pre-check log for this session (#1785), where the prompt says it is.
+    if [ -n "${PRECHECK_SESSION_LOG}" ]; then
+        cp "${PRECHECK_SESSION_LOG}" "${CLAUDE_SCRATCH_TMPDIR}/${PRECHECK_CONTAINER_LOG##*/}" 2> /dev/null \
+            || warn "Failed to copy the pre-check log into the session's scratch directory"
+    fi
     PODMAN_SECRET_NAME=""
     GH_ENTERPRISE_SECRET_NAME=""
     for d in sessions session-env plans cache backups; do

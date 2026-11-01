@@ -103,6 +103,32 @@ AGENT_TIMEOUT_MINUTES="${AGENT_TIMEOUT_MINUTES:-90}"
 # shellcheck disable=SC2034  # read by lib/podman after sourcing
 AGENT_TIMEOUT_SECS=$(( AGENT_TIMEOUT_MINUTES * 60 ))
 
+# Hard limit on the non-agentic pre-commit-check run that precedes a session (#1785,
+# run_precommit_precheck in lib/podman). Separate from AGENT_TIMEOUT_MINUTES: the pre-check
+# finishes (or is killed) before the agent container starts, so it never eats into the agent's
+# budget. A timeout is recorded as "timed out" and the session carries on. 0 turns the
+# pre-check off. Override with PRECHECK_TIMEOUT_MINUTES in the environment.
+PRECHECK_TIMEOUT_MINUTES="${PRECHECK_TIMEOUT_MINUTES:-20}"
+[[ "${PRECHECK_TIMEOUT_MINUTES}" =~ ^(0|[1-9][0-9]*)$ ]] || PRECHECK_TIMEOUT_MINUTES=20
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
+PRECHECK_TIMEOUT_SECS=$((PRECHECK_TIMEOUT_MINUTES * 60))
+# How much of a failing pre-check the prompt quotes: up to PRECHECK_SUMMARY_LINES error lines
+# for each failing hook, and at most PRECHECK_SUMMARY_MAX_HOOKS hooks. The agent reads the
+# rest from the full log at PRECHECK_CONTAINER_LOG.
+PRECHECK_SUMMARY_LINES="${PRECHECK_SUMMARY_LINES:-10}"
+[[ "${PRECHECK_SUMMARY_LINES}" =~ ^[1-9][0-9]*$ ]] || PRECHECK_SUMMARY_LINES=10
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
+PRECHECK_SUMMARY_MAX_HOOKS=10
+# Where the session's container finds the full pre-check log: prepare_claude_container_args
+# copies it into the per-invocation scratch directory (CONTAINER_SCRATCH_PATH).
+# shellcheck disable=SC2034  # read by lib/podman and lib/prompts after sourcing
+PRECHECK_CONTAINER_LOG="${CONTAINER_SCRATCH_PATH}/pre-commit-check.log"
+# The line containers/agent/entrypoint.sh prints just before it execs pre-commit-check in
+# ORCHESTRATOR_PRECHECK mode. Its absence from the log means the check never started (an image
+# without that mode, or an entrypoint pre-flight that died), which is not cached.
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
+PRECHECK_START_MARKER="orchestrator-precheck: running pre-commit-check"
+
 # Set by setup_cgroup_leaf; passed as --cgroup-parent to every podman run call.
 # shellcheck disable=SC2034  # read by lib/podman after sourcing
 PODMAN_CGROUP_PARENT=""
