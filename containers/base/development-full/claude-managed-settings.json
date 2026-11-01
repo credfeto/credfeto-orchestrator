@@ -301,6 +301,8 @@
       "Bash(find */.database*)",
       "Read(~/.database)",
       "Edit(~/.database)",
+      "Read(~/.config/orchestrator/.env)",
+      "Edit(~/.config/orchestrator/.env)",
       "Read(/tmp/**)",
       "Edit(/tmp/**)",
       "Edit(~/.claude/settings*.json*)",
@@ -391,6 +393,10 @@
           },
           {
             "type": "command",
+            "command": "/etc/claude-code/hooks/block-secret-file-reads"
+          },
+          {
+            "type": "command",
             "command": "/etc/claude-code/hooks/enforce-git-identity"
           },
           {
@@ -447,6 +453,19 @@
           {
             "type": "command",
             "command": "/etc/claude-code/hooks/enforce-allowed-dirs"
+          },
+          {
+            "type": "command",
+            "command": "/etc/claude-code/hooks/block-secret-file-reads"
+          }
+        ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/etc/claude-code/hooks/block-secret-file-reads"
           }
         ]
       },
