@@ -651,7 +651,9 @@ declare -gA _WF_OPTION_IDS
     [[ "${phase_h}" == *"cfwf pr hand-off --repo ${REPO_FULL} --pr 7"* ]]
     [[ "${phase_h}" == *"marks it ready"*"enables auto-merge"* ]]
     [[ "${phase_h}" == *"keep every \"Closes #<issue>\" line"* ]]
-    [[ "${phase_h}" == *"Exit 7"*"Exit 8"* ]]
+    [[ "${phase_h}" == *"Exit 0"*"Exit 8"* ]]
+    [[ "${phase_h}" != *"Exit 7"* ]]
+    [[ "${phase_h}" == *"\"auto-merge not armed\" on a base branch that requires no check and no review"* ]]
     [[ "${phase_h}" == *"unavailable on the repository, which leaves the PR ready for a human to merge"* ]]
 }
 
@@ -663,7 +665,9 @@ declare -gA _WF_OPTION_IDS
     [[ "${step}" == *"marks it ready if it is still a draft and then enables auto-merge"* ]]
     [[ "${step}" == *"cfwf pr finalise-dependency --repo ${REPO_FULL} --pr 7"* ]]
     [[ "${step}" == *"leaves the PR ready without auto-merge"* ]]
-    [[ "${step}" == *"Exit 7"*"Exit 8"* ]]
+    [[ "${step}" == *"Exit 0"*"Exit 8"* ]]
+    [[ "${step}" != *"Exit 7"* ]]
+    [[ "${step}" == *"\"auto-merge not armed\" on a base branch that requires no check and no review"* ]]
 }
 
 @test "build_pr_claude_md for dependency PR generates compact instructions without code-work steps" {
