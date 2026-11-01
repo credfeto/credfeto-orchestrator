@@ -194,10 +194,16 @@ while IFS= read -r call_line; do
 
     if [ "$tok" = "git" ] || [[ "$tok" == */git ]]; then
       j=$((i + 1))
-      # skip "-c <key>=<value>" / "-C <dir>" global option pairs before the
+      # skip "-c <key>=<value>" / "-C <dir>" / "--config-env <key>=<env>" global
+      # option pairs and the one-word "--config-env=<key>=<env>" form before the
       # subcommand, in any order - e.g. `git -c core.pager=cat -C . commit ...`.
-      while [ "${words[$j]:-}" = "-c" ] || [ "${words[$j]:-}" = "-C" ]; do
-        j=$((j + 2))
+      # This hook must find commit on its own, whichever other hooks are installed.
+      while :; do
+        case "${words[$j]:-}" in
+          -c | -C | --config-env) j=$((j + 2)) ;;
+          --config-env=*) j=$((j + 1)) ;;
+          *) break ;;
+        esac
       done
       { [ "${words[$j]:-}" = "commit" ] || [ "${words[$j]:-}" = "$OPAQUE_MARKER" ]; } \
         && block 'git commit must run with run_in_background: true (its pre-commit hook run has no bounded duration; this also fires on an unresolved subcommand right after -c/-C options, which could resolve to commit at runtime, so this fails closed)'

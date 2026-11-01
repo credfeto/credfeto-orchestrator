@@ -277,11 +277,16 @@
 #   git           every `-C <dir>` (cumulative, each relative to the previous)
 #                 must resolve under a root; `--exec-path`, `--git-dir`,
 #                 `--work-tree`, `--namespace`, `--super-prefix` are denied
-#                 outright; `-c <key>=<value>` / `--config-env <key>=<env>`
+#                 outright; `--config-env` (either spelling) is denied
+#                 outright too, since its value names an environment
+#                 variable git reads at run time, so the value this hook
+#                 sees is never the value git applies; `-c <key>=<value>`
 #                 is allowed only for the short list of inert keys in
 #                 is_git_inert_config (colour, advice, log/status display,
-#                 pull/push/fetch/rebase behaviour, core.pager=cat) - every
-#                 other key is denied, the same "git config is read-only for
+#                 pull/push/fetch/rebase behaviour, core.pager=cat) - the
+#                 key is matched case-insensitively, as git does, but the
+#                 value is matched exactly, since git passes it on as
+#                 given; every other key is denied, the same "git config is read-only for
 #                 sessions" stance enforce-git-dash-c takes: a denylist of
 #                 dangerous keys can never be complete (core.hooksPath,
 #                 alias.*, credential.*, diff/merge drivers, filters,
@@ -530,11 +535,14 @@ GIT_RELATIVE_OK=1
 
 is_wrapper() { in_list "$1" "${WRAPPERS[@]}"; }
 
-# git -c / --config-env key=value pairs that cannot make git run anything or
-# change what a later hook verifies. Matched case-insensitively on the whole
-# key=value; anything not listed is denied (see header).
+# git -c key=value pairs that cannot make git run anything or change what a
+# later hook verifies. Only the key is case-folded, as git folds it; the
+# value is passed on unchanged, so `core.pager=CAT` names a different
+# program from `core.pager=cat`. Anything not listed is denied (see header).
 is_git_inert_config() {
-  case "${1,,}" in
+  local key="${1%%=*}" value=""
+  [[ "$1" == *=* ]] && value="=${1#*=}"
+  case "${key,,}${value}" in
     color.* | advice.* | log.* | status.* | pull.* | push.* | fetch.* | rebase.*) return 0 ;;
     init.defaultbranch | init.defaultbranch=*) return 0 ;; # not init.* - init.templateDir plants hooks
     diff.noprefix | diff.noprefix=* | diff.renames | diff.renames=*) return 0 ;;
@@ -1218,17 +1226,16 @@ check_git() {
         j=$((j + 2))
         continue
         ;;
-      -c | --config-env)
-        [ "$((j + 1))" -lt "${#words[@]}" ] || block "git ${tok} requires a key=value argument"
+      -c)
+        [ "$((j + 1))" -lt "${#words[@]}" ] || block "git -c requires a key=value argument"
         keyval="${words[$((j + 1))]}"
-        [ "$keyval" = "$MARKER" ] && block "git ${tok} key could not be verified (non-literal argument)"
-        is_git_inert_config "$keyval" || block "git ${tok} ${keyval%%=*} is not permitted - only display/behaviour keys may be overridden per call; git config is otherwise read-only here"
+        [ "$keyval" = "$MARKER" ] && block "git -c key could not be verified (non-literal argument)"
+        is_git_inert_config "$keyval" || block "git -c ${keyval%%=*} is not permitted - only display/behaviour keys may be overridden per call; git config is otherwise read-only here"
         j=$((j + 2))
         continue
         ;;
-      --config-env=*)
-        keyval="${tok#--config-env=}"
-        is_git_inert_config "$keyval" || block "git --config-env ${keyval%%=*} is not permitted - only display/behaviour keys may be overridden per call; git config is otherwise read-only here"
+      --config-env | --config-env=*)
+        block "git --config-env is not permitted - its value is read from an environment variable when git runs, so it cannot be verified here; git config is otherwise read-only here"
         ;;
       --exec-path | --exec-path=* | --git-dir | --git-dir=* | --work-tree | --work-tree=* | --namespace | --namespace=* | --super-prefix | --super-prefix=*)
         block "git ${tok%%=*} is not permitted - it redirects git to code or repository state outside the allowed directories"

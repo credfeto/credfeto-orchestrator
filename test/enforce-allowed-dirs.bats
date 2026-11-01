@@ -165,12 +165,37 @@ assert_blocked() {
     assert_blocked "git -C" 'requires a directory'
 }
 
-@test "git -c with a code-execution key is blocked, case-insensitively, in -c and --config-env forms" {
+@test "git -c with a code-execution key is blocked, case-insensitively" {
     assert_blocked "git -C ${ROOT} -c core.hooksPath=/evil status" 'not permitted'
     assert_blocked "git -C ${ROOT} -c CORE.HOOKSPATH=/evil status"
     assert_blocked "git -C ${ROOT} -c alias.st=!/evil st"
-    assert_blocked "git -C ${ROOT} --config-env core.sshCommand=EVIL status"
-    assert_blocked "git -C ${ROOT} --config-env=core.sshCommand=EVIL status"
+}
+
+@test "git -c with a quoted or split-quoted code-execution key is still blocked" {
+    assert_blocked "git -C ${ROOT} -c \"core.sshCommand=x\" status"
+    assert_blocked "git -C ${ROOT} -c core.\"sshCommand\"=x status"
+}
+
+@test "git --config-env is blocked in both spellings, before and after -C, even for an inert key" {
+    assert_blocked "git -C ${ROOT} --config-env core.sshCommand=EVIL status" 'git --config-env is not permitted'
+    assert_blocked "git -C ${ROOT} --config-env=core.sshCommand=EVIL status" 'git --config-env is not permitted'
+    assert_blocked "git --config-env color.ui=ALWAYS -C ${ROOT} status" 'git --config-env is not permitted'
+    assert_blocked "git --config-env=color.ui=ALWAYS -C ${ROOT} status" 'git --config-env is not permitted'
+    assert_blocked "git -C ${ROOT} --config-env color.ui=ALWAYS status" 'git --config-env is not permitted'
+}
+
+@test "git -c core.pager with no = in its argument is blocked" {
+    assert_blocked "git -C ${ROOT} -c core.pager log" 'git -c core.pager is not permitted'
+}
+
+@test "git -c with no argument at all is blocked" {
+    assert_blocked "git -C ${ROOT} -c" 'requires a key=value argument'
+}
+
+@test "git -c matches the key case-insensitively but the value exactly" {
+    assert_allowed "git -C ${ROOT} -c color.ui=Always status"
+    assert_allowed "git -C ${ROOT} -c CORE.PAGER=cat log"
+    assert_blocked "git -C ${ROOT} -c core.pager=CAT log"
 }
 
 @test "git -c is an allowlist: a key that would defeat another hook is blocked even though it runs nothing" {

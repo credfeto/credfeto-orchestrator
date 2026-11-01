@@ -24,7 +24,10 @@
 #     wrapper-prefixed forms like `sudo git ...` for defense-in-depth, even
 #     though wrappers are banned upstream), must be followed by `-C` —
 #     optionally preceded by `-c <key>=<value>` global option pairs, e.g.
-#     `git -c core.pager=cat -C /repo status`. Only these two positions are
+#     `git -c core.pager=cat -C /repo status`. `--config-env` (either
+#     spelling, before or after -C) is blocked outright: its value names an
+#     environment variable git reads at run time, so the config value git
+#     applies is never visible to a hook. Only these two positions are
 #     checked — a `git` token appearing elsewhere is an ordinary argument
 #     (e.g. `grep -r git .`), not a git invocation.
 #   * Subcommand allowlist (#1387): whatever git subcommand follows -C (or
@@ -575,22 +578,30 @@ while IFS= read -r words_line && IFS= read -r ends_line && IFS= read -r resolved
     tok="${words[$i]:-}"
     if [ "$tok" = "git" ] || [[ "$tok" == */git ]]; then
       j=$((i + 1))
-      # skip `-c <key>=<value>` global option pairs before -C
-      while [ "${words[$j]:-}" = "-c" ]; do
-        j=$((j + 2))
-      done
       has_C=0
-      if [ "${words[$j]:-}" = "-C" ]; then
-        has_C=1
-        # git reads an empty -C argument as the current directory, so it would satisfy the
-        # must-have--C rule without naming any directory.
-        [ -n "${resolved[$((j + 1))]:-}" ] || block 'git -C requires a non-empty directory argument'
-        j=$((j + 2))
-        # `-c` pairs may also follow -C
-        while [ "${words[$j]:-}" = "-c" ]; do
-          j=$((j + 2))
-        done
-      fi
+      # One walk over the global options, so a rule added for one of them applies
+      # whether it comes before or after -C. A second -C is left as the
+      # subcommand, which the allowlist below rejects.
+      while :; do
+        case "${words[$j]:-}" in
+          -c) j=$((j + 2)) ;;
+          -C)
+            [ "$has_C" = 1 ] && break
+            has_C=1
+            # git reads an empty -C argument as the current directory, so it would satisfy
+            # the must-have--C rule without naming any directory.
+            [ -n "${resolved[$((j + 1))]:-}" ] || block 'git -C requires a non-empty directory argument'
+            j=$((j + 2))
+            ;;
+          --config-env | --config-env=*)
+            # Its value names an environment variable git reads when it runs, so no hook can
+            # see the config value git will apply. enforce-allowed-dirs blocks it as well;
+            # this keeps it blocked if that hook is ever not installed.
+            block 'git --config-env is not permitted - its value is read from an environment variable when git runs and cannot be verified'
+            ;;
+          *) break ;;
+        esac
+      done
       sub="${words[$j]:-}"
 
       if [ -z "$sub" ]; then
