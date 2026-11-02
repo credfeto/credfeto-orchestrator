@@ -904,6 +904,16 @@ INVISIBLE_BODIES=(ideographic-space no-break-space zero-width-space byte-order-m
     [ "${output}" = "$(printf 'AI-Work\nMedium\nSecurity')" ]
 }
 
+@test "closing-issue-labels leaves out Blocked and On Hold in any case, On Hold spelt with a space or a hyphen" {
+    write_pr_view "${REPO} 10" "other-org/other-repo 11"
+    jq -n '{labels: [{name: "blocked"}, {name: "On Hold"}, {name: "Medium"}]}' > "${GH_FIXTURES}/issue-view-10.json"
+    jq -n '{labels: [{name: "BLOCKED"}, {name: "on hold"}, {name: "ON-HOLD"}]}' > "${GH_FIXTURES}/issue-view-11.json"
+
+    run "${SCRIPT}" closing-issue-labels --repo credfeto/credfeto-orchestrator --pr 1481
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Medium" ]
+}
+
 @test "closing-issue-labels reads a PR number given with leading zeros as that number, without them" {
     write_pr_view "credfeto/credfeto-orchestrator 10"
     jq -n '{labels: [{name: "Medium"}]}' > "${GH_FIXTURES}/issue-view-10.json"
@@ -6994,7 +7004,7 @@ assert_sign_off() {
 
 @test "help for a command and its subcommand prints what that subcommand's -h prints, and the command's usage for a subcommand it does not know" {
     local pair spelling expected
-    for pair in "issue create" "issue view" "issue plan-status" "issue list" "issue search" "issue label-history" "issue add-sub-issue" "issue post-plan" "issue block" "body check" "pr checks" "pr ready-at" "pr auto-merge-at" "pr diff" "pr block" "pr post-merge-runs" "comment add" "comment edit" "label create" "release view" "release list" "tag view"; do
+    for pair in "issue create" "issue view" "issue plan-status" "issue list" "issue search" "issue label-history" "issue add-sub-issue" "issue post-plan" "issue block" "body check" "pr checks" "pr ready-at" "pr auto-merge-at" "pr diff" "pr block" "pr post-merge-runs" "pr sync-labels" "comment add" "comment edit" "label create" "release view" "release list" "tag view"; do
         # shellcheck disable=SC2086  # each pair is split into its two words on purpose
         run "${SCRIPT}" ${pair} -h
         [ "${status}" -eq 0 ]
@@ -9810,7 +9820,7 @@ read_once_asking_for() {
     run --separate-stderr "${SCRIPT}" pr
     [ "${status}" -eq 2 ]
     [ -z "${output}" ]
-    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, checks-wait, view, list, comments, reply, create, ready-at, status, auto-merge-at, diff, edit, hand-off, finalise-dependency, take-back, close, reopen, block, search, post-merge-runs)"* ]]
+    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, checks-wait, view, list, comments, reply, create, ready-at, status, auto-merge-at, diff, edit, hand-off, finalise-dependency, take-back, close, reopen, block, search, post-merge-runs, sync-labels)"* ]]
     [[ "${stderr}" == *"Usage: cfwf pr checks"*"Run 'cfwf pr view --help' for pr view"* ]]
 
     run --separate-stderr "${SCRIPT}" pr frobnicate
@@ -17404,5 +17414,245 @@ post_merge_summary() {
     run "${SCRIPT}" help
     [ "${status}" -eq 0 ]
     [[ "${output}" == *$'\n'"  pr checks-wait           Wait for a PR's required checks to finish, up to a time limit (exit 0, 3, 4, 5 or 6)"$'\n'"  pr post-merge-runs       Judge the Actions runs on a merged PR's merge commit, on its base branch (exit 0, 3, 4, 5 or 6)"$'\n'* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+# --- pr sync-labels (#1603) --------------------------------------------------------
+
+SYNC_USAGE="Usage: cfwf pr sync-labels --repo <owner/repo> --pr <n> [--assign-self]"
+SYNC_PR=1481
+SYNC_PR_URL="https://github.com/${REPO}/pull/${SYNC_PR}"
+
+# Writes the pull request SYNC_PR as gh pr view answers it: its URL ($SYNC_URL, SYNC_PR_URL by
+# default) and its closing issues, each argument "owner/repo number", beside a field not asked for.
+write_sync_pr() {
+    write_pr_view "$@"
+    jq --arg url "${SYNC_URL:-${SYNC_PR_URL}}" '. + {url: $url, title: "feat: a change"}' "${GH_FIXTURES}/pr-view.json" > "${GH_FIXTURES}/pr-view.next.json"
+    mv "${GH_FIXTURES}/pr-view.next.json" "${GH_FIXTURES}/pr-view.json"
+}
+
+# Writes the labels of the closing issue $1 as gh issue view answers them: each further argument a name.
+write_sync_issue_labels() {
+    local number="$1"
+    shift
+    jq -n --args '{labels: ($ARGS.positional | map({name: .}))}' "$@" > "${GH_FIXTURES}/issue-view-${number}.json"
+}
+
+run_sync_labels() {
+    run --separate-stderr "${SCRIPT}" pr sync-labels --repo "${REPO}" --pr "${SYNC_PR}" "$@"
+}
+
+# Succeeds when no gh call removed a label or wrote anything but a pr edit of SYNC_PR.
+no_label_removed() {
+    [ "$(gh_call_count "remove")" -eq 0 ]
+    [ "$(gh_call_count "issue edit")" -eq 0 ]
+    [ "$(grep -c ' edit ' "${GH_LOG}" || true)" -eq "$(gh_call_count "pr edit ${SYNC_PR} --repo ${REPO} --add-")" ]
+}
+
+@test "pr sync-labels adds each label of the closing issues, one from an issue in another repository included, in the repository's spelling, one gh call a label" {
+    write_sync_pr "${REPO} 10" "other-org/other-repo 11"
+    write_sync_issue_labels 10 Medium AI-Work
+    write_sync_issue_labels 11 security AI-Work
+    write_repository_labels AI-Work Bug Medium Security
+    run_sync_labels
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "$(printf 'AI-Work\nMedium\nSecurity\n%s synced' "${SYNC_PR_URL}")" ]
+    grep -qxF "pr view ${SYNC_PR} --repo ${REPO} --json url,closingIssuesReferences --jq .url, (.closingIssuesReferences[] | [(.repository.owner.login + \"/\" + .repository.name), (.number | tostring)] | @tsv)" "${GH_LOG}"
+    grep -qF "issue view 10 --repo ${REPO} " "${GH_LOG}"
+    grep -qF "issue view 11 --repo other-org/other-repo " "${GH_LOG}"
+    [ "$(gh_call_count "label list --repo ${REPO} ")" -eq 1 ]
+    [ "$(gh_call_count "pr edit ${SYNC_PR} --repo ${REPO} --add-label AI-Work")" -eq 1 ]
+    [ "$(gh_call_count "pr edit ${SYNC_PR} --repo ${REPO} --add-label Medium")" -eq 1 ]
+    [ "$(gh_call_count "pr edit ${SYNC_PR} --repo ${REPO} --add-label Security")" -eq 1 ]
+    [ "$(gh_call_count "--add-label")" -eq 3 ]
+    [ "$(gh_call_count "api user")" -eq 0 ]
+    [ "$(gh_call_count "--add-assignee")" -eq 0 ]
+    no_label_removed
+}
+
+@test "pr sync-labels never adds Blocked or On Hold, in either spelling and any case" {
+    write_sync_pr "${REPO} 10" "other-org/other-repo 11"
+    write_sync_issue_labels 10 Blocked "on hold" Bug Blocked-by-upstream
+    write_sync_issue_labels 11 BLOCKED On-Hold "On Hold"
+    write_repository_labels Blocked "On Hold" On-Hold Bug Blocked-by-upstream
+    run_sync_labels
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "$(printf 'Blocked-by-upstream\nBug\n%s synced' "${SYNC_PR_URL}")" ]
+    [ "$(gh_call_count "--add-label")" -eq 2 ]
+    [ "$(gh_call_count "--add-label Blocked-by-upstream")" -eq 1 ]
+    [ "$(grep -ciE -- '--add-label (blocked|on.hold)$' "${GH_LOG}" || true)" -eq 0 ]
+    no_label_removed
+}
+
+@test "pr sync-labels skips a label the pull request's repository does not have, with a warning naming it and the repository, and adds the rest" {
+    write_sync_pr "other-org/other-repo 11"
+    write_sync_issue_labels 11 Bug Foreign
+    write_repository_labels Bug
+    run_sync_labels
+    [ "${status}" -eq 0 ]
+    [ "${stderr}" = "cfwf: warning: ${REPO} has no label Foreign; it was not added" ]
+    [ "${output}" = "$(printf 'Bug\n%s synced' "${SYNC_PR_URL}")" ]
+    [ "$(gh_call_count "--add-label")" -eq 1 ]
+    [ "$(gh_call_count "Foreign")" -eq 0 ]
+    no_label_removed
+}
+
+@test "pr sync-labels adds what it could read and exits 1 without synced when a closing issue cannot be read" {
+    write_sync_pr "${REPO} 10" "${REPO} 11"
+    write_sync_issue_labels 11 Bug
+    write_repository_labels Bug
+    write_agent_login
+    run_sync_labels --assign-self
+    [ "${status}" -eq 1 ]
+    [ "${output}" = "Bug" ]
+    [[ "${stderr}" == *"cfwf: warning: could not fetch the labels of ${REPO}#10"* ]]
+    [[ "${stderr}" == *"cfwf: the labels of a closing issue of ${REPO}#${SYNC_PR} could not be read, so only those read were added" ]]
+    [ "$(gh_call_count "pr edit ${SYNC_PR} --repo ${REPO} --add-label Bug")" -eq 1 ]
+    [ "$(gh_call_count "pr edit ${SYNC_PR} --repo ${REPO} --add-assignee ${AGENT}")" -eq 1 ]
+    no_label_removed
+}
+
+@test "pr sync-labels --assign-self adds the agent's login as an assignee after the labels, as pr edit does" {
+    write_sync_pr "${REPO} 10"
+    write_sync_issue_labels 10 Bug
+    write_repository_labels Bug
+    write_agent_login
+    run --separate-stderr "${SCRIPT}" pr sync-labels --assign-self --pr "0${SYNC_PR}" --repo "${REPO}"
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "$(printf 'Bug\n%s synced' "${SYNC_PR_URL}")" ]
+    [ "$(gh_call_count "api user")" -eq 1 ]
+    [ "$(gh_call_count "pr edit ${SYNC_PR} --repo ${REPO} --add-assignee ${AGENT}")" -eq 1 ]
+    [ "$(sed -n '$p' "${GH_LOG}")" = "pr edit ${SYNC_PR} --repo ${REPO} --add-assignee ${AGENT}" ]
+    no_label_removed
+
+    # With nothing to add, the agent is still assigned, and the repository's labels are not read.
+    rm -f "${GH_LOG}"
+    write_sync_pr
+    run_sync_labels --assign-self
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${SYNC_PR_URL} synced" ]
+    [ "$(gh_call_count "label list")" -eq 0 ]
+    [ "$(gh_call_count "--add-label")" -eq 0 ]
+    [ "$(gh_call_count "--add-assignee ${AGENT}")" -eq 1 ]
+
+    # A failed read of the login writes nothing.
+    rm -f "${GH_LOG}"
+    write_sync_pr "${REPO} 10"
+    fail_api user
+    run_sync_labels --assign-self
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "$(gh_call_count " edit ")" -eq 0 ]
+}
+
+@test "pr sync-labels exits 0 with only the synced line, writing nothing, when there is nothing to add" {
+    write_sync_pr
+    run_sync_labels
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "${SYNC_PR_URL} synced" ]
+    [ "$(gh_call_count "label list")" -eq 0 ]
+    [ "$(gh_call_count " edit ")" -eq 0 ]
+
+    # A closing issue with only Blocked and On Hold has nothing to add either.
+    rm -f "${GH_LOG}"
+    write_sync_pr "${REPO} 10"
+    write_sync_issue_labels 10 Blocked "On Hold"
+    run_sync_labels
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${SYNC_PR_URL} synced" ]
+    [ "$(gh_call_count " edit ")" -eq 0 ]
+}
+
+@test "pr sync-labels exits 1 for a failed read or write, never reporting synced" {
+    write_sync_issue_labels 10 AI-Work Bug
+    write_repository_labels AI-Work Bug
+
+    # The pull request cannot be read.
+    run_sync_labels
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == *"cfwf: could not read the closing issues of ${REPO}#${SYNC_PR}"* ]]
+
+    # It answers with the URL of another pull request.
+    SYNC_URL="https://github.com/${REPO}/pull/9" write_sync_pr "${REPO} 10"
+    run_sync_labels
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == *"cfwf: gh returned an unexpected result for ${REPO}#${SYNC_PR}"* ]]
+
+    # The repository's labels cannot be read.
+    write_sync_pr "${REPO} 10"
+    touch "${GH_FIXTURES}/label-list.fail"
+    run_sync_labels
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == *"cfwf: could not read the labels of ${REPO}"* ]]
+    rm -f "${GH_FIXTURES}/label-list.fail"
+
+    # The write fails.
+    rm -f "${GH_LOG}"
+    echo "HTTP 502: Bad Gateway" > "${GH_FIXTURES}/pr-edit.fail"
+    run_sync_labels
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: could not add the label AI-Work to ${REPO}#${SYNC_PR}: HTTP 502: Bad Gateway" ]]
+    [ "$(gh_call_count "--add-label")" -eq 1 ]
+    no_label_removed
+}
+
+@test "pr sync-labels usage errors exit 2 with its usage on stderr and nothing on stdout, never echoing a value, before any gh call" {
+    local repo="--repo ${REPO}" args
+    local -a cases=(
+        "" "${repo}" "--pr 7" "${repo} --pr x" "${repo} --pr 0" "${repo} --pr -1" "${repo} --pr 7 --pr 7"
+        "--repo x --pr 7" "${repo} ${repo} --pr 7" "${repo} --pr 7 --assign-self --assign-self"
+        "${repo} --pr 7 --assign-self yes" "${repo} --pr 7 --label Bug" "${repo} --pr 7 --remove-label Bug"
+        "${repo} --pr 7 --issue 3" "${repo} --pr 7 --json url" "${repo} --pr 7 --jq ." "${repo} --pr 7 extra" "${repo} --pr"
+    )
+    for args in "${cases[@]}"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run --separate-stderr "${SCRIPT}" pr sync-labels ${args}
+        if [ "${status}" -ne 2 ]; then
+            echo "accepted: ${args} (${status})" >&2
+            return 1
+        fi
+        [ -z "${output}" ]
+        if [[ "${stderr}" != "cfwf: "*$'\n\n'"${SYNC_USAGE}"$'\n'* ]]; then
+            echo "usage: ${args}" >&2
+            return 1
+        fi
+    done
+    local secret="ghp_${RANDOM}abcdefghijklmnopqrstuvwxyz0123456789"
+    run_sync_labels "${secret}"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" != *"${secret}"* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "pr sync-labels help, from -h, --help and help, gives the usage, the rules, the output and every exit code; help pr and the general help point to it; none calls gh" {
+    local invocation
+    for invocation in "pr sync-labels -h" "pr sync-labels --help" "help pr sync-labels"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run --separate-stderr "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [ -z "${stderr}" ]
+        [[ "${output}" == "${SYNC_USAGE}"$'\n'* ]]
+        [[ "${output}" == *"There is no --label: the labels come only from the closing issues."* ]]
+        [[ "${output}" == *"Blocked and On Hold (spelt On Hold or On-Hold, in any case) are"$'\n'"never added."* ]]
+        [[ "${output}" == *$'\n'"  cfwf: warning: <owner/repo> has no label <name>; it was not added"$'\n'* ]]
+        [[ "${output}" == *"Output: each label added, one a line, then \"<url> synced\""* ]]
+        [[ "${output}" == *"Exit codes: 0 synced (nothing to add included); 1 a runtime failure"* ]]
+        [[ "${output}" == *"so a partial sync is never reported as complete; 2 a usage error."* ]]
+        [[ "${output}" != *"usage_"* ]]
+    done
+    run "${SCRIPT}" help pr
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *$'\n'"merged pull request's merge commit, on its base branch."$'\n'"Run 'cfwf pr sync-labels --help' for pr sync-labels, which adds the labels of the issues a pull"$'\n'"request closes to it."$'\n'* ]]
+    run "${SCRIPT}" help
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *$'\n'"  pr sync-labels           Add the labels of the issues a PR closes to it, never removing one, and optionally assign the agent"$'\n'* ]]
     [ ! -f "${GH_LOG}" ]
 }
