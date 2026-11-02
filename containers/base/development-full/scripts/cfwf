@@ -185,6 +185,14 @@ readonly UTF8_LINE_PATTERN=$'([\x01-\x7f]|[\xc2-\xdf][\x80-\xbf]|\xe0[\xa0-\xbf]
 # jq's regular expressions and gh's (gojq, Go's) read alike, and holds no quote or backslash, so it
 # goes in a jq string as it is.
 readonly APPROVAL_KEYWORD_PATTERN='(^|[^A-Za-z0-9_])_*(approved|lgtm)_*([^A-Za-z0-9_]|$)'
+# The environment-block marker an agent leaves on a pull request's diagnosis comment (#1118), which
+# oneshot reads to clear Blocked once a newer agent image is built (pr_json_env_block_image_sha in
+# lib/github-status): ENV_BLOCK_MARKER_TEXT, in any case, is a marker, and ENV_BLOCK_MARKER_PATTERN
+# the only shape pr block posts one in, the template agent-roles gives, with the image's git SHA
+# (IMAGE_SHA_DEVELOPMENT_AGENT, the build's 40-digit commit). oneshot's own pattern reads every
+# marker this shape allows.
+readonly ENV_BLOCK_MARKER_TEXT="orchestrator:env-block"
+readonly ENV_BLOCK_MARKER_PATTERN="<!-- ${ENV_BLOCK_MARKER_TEXT} image-sha=[0-9a-f]{40} -->"
 # The line issue post-plan requires a plan to have, exactly and whole (require_plan_heading): the
 # heading the plan-approval check finds a plan by.
 readonly PLAN_HEADING="## Implementation Plan"
@@ -375,6 +383,7 @@ Commands:
   issue reopen             Reopen a closed issue, with an optional comment first (exit 8 when refused, 9 when not found)
   issue close              Close an issue with a reason, with an optional comment first (exit 8 when refused, 9 when not found)
   issue post-plan          Post an issue's implementation plan, add Blocked, then move the board to Planning (exit 8 when refused)
+  issue block              Post a question on an issue, then add Blocked, leaving the board as it is (exit 8 when refused)
   issue comments           Print an issue's or PR's top-level comments with their bodies, oldest first (exit 9 when not found)
   issue add-sub-issue      Link an issue to a parent issue as its sub-issue (exit 8 when refused, 9 when not found)
   label add                Add standard labels to an issue or PR, one gh call a label (exit 8 when refused, 9 when not found)
@@ -409,6 +418,7 @@ Commands:
   pr edit                  Change the agent's own PR's title, body or priority, or assign the agent (exit 8 when refused, 9 when not found)
   pr close                 Close the agent's own PR without merging it, with an optional comment first (exit 8 refused, 9 not found)
   pr reopen                Reopen the agent's own closed PR, with an optional comment first (exit 8 refused, 9 not found)
+  pr block                 Post a question on a PR, then add Blocked, leaving the board as it is (exit 8 when refused)
   pr search                Search one repository's pull requests by words in their title or body, one line each
   comment add              Post a comment on a PR or an issue and print its URL
   label create             Create one of the standard labels in a repository (exit 8 for any other name)
@@ -874,6 +884,72 @@ ${ISSUE_NOT_FOUND_EXIT} the issue does not exist, or the number is a pull reques
 USAGE
 }
 
+# The help of issue block ($1 issue) and pr block ($1 pr).
+usage_item_block() {
+    local kind="$1" noun="issue" item="an issue" flag="--issue" option="--issue    "
+    if [ "${kind}" = pr ]; then
+        noun="pull request"
+        item="a pull request"
+        flag="--pr"
+        option="--pr       "
+    fi
+    cat << USAGE
+Usage: cfwf ${kind} block --repo <owner/repo> ${flag} <n> --body-file <file|->
+
+Asks a blocking question on ${item} in one command, always in this order: posts the body as a
+comment, then adds the Blocked label, so Blocked is never set without the question or the
+diagnosis that explains it. ${item^} that already carries Blocked still gets the comment. The
+board status, the assignees and every other label are left as they are.
+
+--repo       Always required; never taken from the current directory.
+${option}  Always required: the ${noun}'s number, above 0.
+--body-file  Always required: the question or diagnosis, a regular file, or - to read it from
+             stdin. It is read once, into a private copy that is both checked and posted. There
+             is no --body.
+--json and --jq are not options.
+
+The body is checked before anything is written, and a refusal writes nothing: for leaks (see
+'cfwf help body') and for the plan-approval keywords, as for comment add, then for the
+environment-block marker (${ENV_BLOCK_MARKER_TEXT}, in any case), which only a pull request may
+carry:
+USAGE
+    if [ "${kind}" = pr ]; then
+        cat << 'USAGE'
+  each marker must be exactly <!-- orchestrator:env-block image-sha=<sha> -->, where <sha> is
+  the agent image's IMAGE_SHA_DEVELOPMENT_AGENT, 40 lower-case hexadecimal digits; any other text
+  holding the marker is refused ("malformed env-block marker")
+USAGE
+    else
+        cat << 'USAGE'
+  any marker is refused ("env-block marker on an issue"): the convention applies only to pull
+  requests (see 'cfwf help pr block')
+USAGE
+    fi
+    cat << USAGE
+A refusal exits ${POLICY_REFUSED_EXIT} with "cfwf: body refused: <rule>", with "(line <n>)" where there is one, on
+stderr, never naming the matched text.
+
+When the comment cannot be posted, nothing else is written. When adding Blocked fails after the
+comment was posted, the message names the comment URL.
+
+Output, one line a step:
+  <comment URL>
+  <url> Blocked         the ${noun}'s URL, as GitHub gives it with the comment
+
+Exit codes: 0 posted and labelled; 1 a runtime failure, such as a gh or network error, prefixed
+"cfwf:", naming the comment URL when adding Blocked fails after it; 2 a usage error;
+${POLICY_REFUSED_EXIT} refused, nothing written.
+USAGE
+}
+
+usage_issue_block() {
+    usage_item_block issue
+}
+
+usage_pr_block() {
+    usage_item_block pr
+}
+
 usage_issue_comments() {
     cat << USAGE
 Usage: cfwf issue comments --repo <owner/repo> --issue <n> [--since <time>] [--author <login>]
@@ -978,6 +1054,8 @@ usage_issue() {
     usage_issue_close
     printf '\n'
     usage_issue_post_plan
+    printf '\n'
+    usage_issue_block
     printf '\n'
     usage_issue_comments
     printf '\n'
@@ -1692,6 +1770,7 @@ Run 'cfwf pr create --help' for pr create, which creates a draft pull request on
 Run 'cfwf pr edit --help' for pr edit, which changes a pull request's title, body or priority, or assigns the agent.
 Run 'cfwf pr close --help' for pr close, which closes the agent's own pull request without merging it.
 Run 'cfwf pr reopen --help' for pr reopen, which reopens the agent's own closed pull request.
+Run 'cfwf pr block --help' for pr block, which posts a question on a pull request and adds Blocked.
 Run 'cfwf branch required-checks --help' for branch required-checks, which lists the checks a branch
 requires without judging them.
 USAGE
@@ -2749,6 +2828,7 @@ usage_for() {
         "issue reopen") usage_issue_reopen ;;
         "issue close") usage_issue_close ;;
         "issue post-plan") usage_issue_post_plan ;;
+        "issue block") usage_issue_block ;;
         "issue comments") usage_issue_comments ;;
         body | "body check") usage_body ;;
         repo) usage_repo ;;
@@ -2773,6 +2853,7 @@ usage_for() {
         "pr edit") usage_pr_edit ;;
         "pr close") usage_pr_close ;;
         "pr reopen") usage_pr_reopen ;;
+        "pr block") usage_pr_block ;;
         "pr hand-off") usage_pr_hand_off ;;
         "pr finalise-dependency") usage_pr_finalise_dependency ;;
         "pr take-back") usage_pr_take_back ;;
@@ -4440,6 +4521,67 @@ issue_post_plan() {
     POST_PLAN_DONE=""
 }
 
+# Refuses (exit 8) an environment-block marker in the body in the file $1 for the kind $2: any on an
+# issue, because the convention applies only to pull requests, and on a pull request any text
+# holding ENV_BLOCK_MARKER_TEXT, in any case, that is not part of a marker of exactly the shape
+# ENV_BLOCK_MARKER_PATTERN. The well-formed markers are blanked in a copy, so the line numbers stay
+# those of the body. SCAN_TMP is reused: the earlier checks are done with it.
+check_env_block_marker() {
+    local file="$1" kind="$2"
+    if [ "${kind}" = issue ]; then
+        refuse_first_match body "env-block marker on an issue" "${ENV_BLOCK_MARKER_TEXT}" "${file}" -i
+        return 0
+    fi
+    ensure_temp_file SCAN_TMP
+    LC_ALL=C sed -E "s/${ENV_BLOCK_MARKER_PATTERN}//g" "${file}" > "${SCAN_TMP}" || die "could not scan the body"
+    refuse_first_match body "malformed env-block marker" "${ENV_BLOCK_MARKER_TEXT}" "${SCAN_TMP}" -i
+}
+
+# issue block ($1 issue) and pr block ($1 pr): posts the question or diagnosis in BODY_FILE on the
+# item as a comment, then adds Blocked, so Blocked never appears without its explanation. Everything
+# is checked before the comment is posted: the body (the leak check, the plan-approval keywords and
+# the environment-block marker); the item is not read, so one that already carries Blocked still
+# gets the comment and the label is added again, which changes nothing. The board, the assignees and
+# the other labels are never touched. A comment that fails writes nothing else; when the label fails
+# after it, the EXIT trap names the comment URL (CREATED_URL).
+item_block() {
+    local kind="$1" number
+    shift
+    if [ "${kind}" = pr ]; then
+        parse_command_options assign_pr_edit_option "--repo --pr --body-file" "" "$@"
+        require REPO --repo
+        require PR --pr
+        number="${PR}"
+    else
+        parse_command_options assign_issue_edit_option "--repo --issue --body-file" "" "$@"
+        require REPO --repo
+        require ISSUE --issue
+        number="${ISSUE}"
+    fi
+    require BODY_FILE --body-file
+    require_gh
+    resolve_body
+    check_comment_for_approval_keywords "${BODY_FILE}"
+    check_env_block_marker "${BODY_FILE}" "${kind}"
+
+    post_comment "${kind}" "${number}"
+    printf '%s\n' "${POSTED_COMMENT_URL}"
+    CREATED_NOTE="the comment was already posted"
+    CREATED_URL="${POSTED_COMMENT_URL}"
+    gh_capture "${kind}" edit "${number}" --repo "${REPO}" --add-label Blocked < /dev/null \
+        || die "could not add the label Blocked to ${REPO}#${number}: $(gh_failure_text)"
+    CREATED_URL=""
+    printf '%s Blocked\n' "${POSTED_COMMENT_URL%%#*}"
+}
+
+issue_block() {
+    item_block issue "$@"
+}
+
+pr_block() {
+    item_block pr "$@"
+}
+
 # pr close and pr reopen: the state of the pull request as read before any write, open or closed,
 # and whether it is merged.
 PR_STATE=""
@@ -4745,8 +4887,8 @@ issue_add_sub_issue() {
 cmd_issue() {
     dispatch_subcommand issue create issue_create edit issue_edit view issue_view plan-status issue_plan_status \
         list issue_list search issue_search \
-        label-history issue_label_history reopen issue_reopen close issue_close post-plan issue_post_plan comments issue_comments \
-        add-sub-issue issue_add_sub_issue -- "$@"
+        label-history issue_label_history reopen issue_reopen close issue_close post-plan issue_post_plan block issue_block \
+        comments issue_comments add-sub-issue issue_add_sub_issue -- "$@"
 }
 
 # label add and label remove: the item as read before any write, its URL and the labels it carries,
@@ -7676,7 +7818,7 @@ pr_take_back() {
 cmd_pr() {
     dispatch_subcommand pr checks pr_checks checks-wait pr_checks_wait view pr_view list pr_list comments pr_comments reply pr_reply create pr_create \
         ready-at pr_ready_at status pr_status auto-merge-at pr_auto_merge_at diff pr_diff edit pr_edit hand-off pr_hand_off finalise-dependency pr_finalise_dependency take-back pr_take_back \
-        close pr_close reopen pr_reopen search pr_search -- "$@"
+        close pr_close reopen pr_reopen block pr_block search pr_search -- "$@"
 }
 
 # Refuses (exit 8) the body in the file $1 when one of the two plan-approval keywords is a whole
