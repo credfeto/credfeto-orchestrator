@@ -11,6 +11,8 @@ readonly TITLE_LIMIT=256
 readonly LABEL_NAME_LIMIT=50
 readonly BODY_LIMIT=65536
 readonly BODY_REFUSED_EXIT=8
+# A command, or one form of it, that only a human may run, refused in an AI agent session (#1608).
+readonly NOT_ALLOWED_FOR_AGENTS_EXIT=10
 readonly ISSUE_NOT_FOUND_EXIT=9
 # The same code as ISSUE_NOT_FOUND_EXIT, so a missing item exits alike whatever kind of item it is.
 readonly PR_NOT_FOUND_EXIT=9
@@ -437,6 +439,10 @@ to --status. It exits 0 when gh reports the write succeeded, and that is all: it
 read the value back. A write whose call succeeded is done, and GitHub can lag behind a write
 by seconds, so a read straight afterwards that disagrees is lag, not a failed write.
 Do not poll or repeat the write; if a later step reads the value, check again at that step.
+
+In an AI agent session (CLAUDECODE=1), --set --status Approved is refused with exit 10 (not
+allowed for agents) before any gh call, and nothing is written: approving a plan is a human
+action. Every other status, and --check, work the same in an agent session.
 
 --check prints the item's current status on one line, for example "Development", or (unset)
 when it has none. It exits non-zero when the item is not on the board.
@@ -3062,10 +3068,24 @@ put_item_on_board() {
         || die "could not set the ${FIELD_NAME} of ${item_url}"
 }
 
+# True in an AI agent session: Claude Code sets CLAUDECODE=1 in every shell it starts, the same
+# test install-claude-hooks uses (is_ai_agent).
+is_agent_session() {
+    [ "${CLAUDECODE:-}" = "1" ]
+}
+
 workflow_status_set() {
     require REPO --repo
     require STATUS --status
     require_target
+
+    # Approval is a human action (#1608): an agent may not move an item to Approved. Checked
+    # before any gh call, so nothing is read or written.
+    if [ "$(canonical_workflow_state "${STATUS}")" = "Approved" ] && is_agent_session; then
+        printf 'cfwf: workflow-status refused: only a human can move an item to Approved\n' >&2
+        exit "${NOT_ALLOWED_FOR_AGENTS_EXIT}"
+    fi
+
     require_gh
 
     local item_url="https://github.com/${REPO}/${TARGET_URL_KIND}/${TARGET_NUMBER}"

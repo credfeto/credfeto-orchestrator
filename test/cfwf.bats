@@ -12,6 +12,8 @@ ISSUE_URL="https://github.com/credfeto/credfeto-orchestrator/issues/1346"
 
 setup() {
     setup_isolated_env
+    # The suite may itself run inside an agent session; tests that need one set CLAUDECODE=1.
+    unset CLAUDECODE
     export GH_LOG="${TEST_TMP}/gh.log"
     export GH_FIXTURES="${TEST_TMP}/fixtures"
     mkdir -p "${GH_FIXTURES}"
@@ -270,6 +272,43 @@ gh_line_of() {
     [[ "${output}" == *"Usage: cfwf <command>"* ]]
     run "${SCRIPT}" frobnicate
     [ "${status}" -eq 2 ]
+}
+
+@test "workflow-status --set refuses Approved in an agent session (exit 10), in any case, with no gh call and nothing written" {
+    local spelling
+    for spelling in Approved approved APPROVED; do
+        rm -f "${GH_LOG}"
+        CLAUDECODE=1 run --separate-stderr "${SCRIPT}" workflow-status --set --repo "${REPO}" --issue 1346 --status "${spelling}"
+        [ "${status}" -eq 10 ] || { echo "${spelling}: ${status}" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: workflow-status refused: only a human can move an item to Approved" ]
+        [ ! -f "${GH_LOG}" ]
+    done
+}
+
+@test "workflow-status --set still sets every other status in an agent session" {
+    local status_name
+    for status_name in Development "Human Review"; do
+        rm -f "${GH_LOG}"
+        CLAUDECODE=1 run "${SCRIPT}" workflow-status --set --repo "${REPO}" --issue 1346 --status "${status_name}"
+        [ "${status}" -eq 0 ] || { echo "${status_name}: ${status} ${output}" >&2; return 1; }
+        [[ "${output}" == *"Set https://github.com/${REPO}/issues/1346 to ${status_name}"* ]]
+    done
+}
+
+@test "workflow-status --set still sets Approved outside an agent session, and with CLAUDECODE other than 1" {
+    set_args
+    run "${SCRIPT}" "${SET_ARGS[@]}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Set https://github.com/${REPO}/issues/1346 to Approved"* ]]
+    CLAUDECODE=0 run "${SCRIPT}" "${SET_ARGS[@]}"
+    [ "${status}" -eq 0 ]
+}
+
+@test "workflow-status help names the agent restriction and exit 10" {
+    run "${SCRIPT}" workflow-status --help
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"In an AI agent session (CLAUDECODE=1), --set --status Approved is refused with exit 10"* ]]
 }
 
 @test "workflow-status without --set or --check exits 2" {
