@@ -403,7 +403,7 @@
           },
           {
             "type": "command",
-            "command": "/etc/claude-code/hooks/enforce-git-dash-c"
+            "command": "/etc/claude-code/hooks/enforce-git-policy"
           },
           {
             "type": "command",

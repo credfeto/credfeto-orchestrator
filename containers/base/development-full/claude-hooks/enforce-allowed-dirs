@@ -220,7 +220,7 @@
 # anywhere inside a `.git` tree blocks (names_git_tree), and so does a
 # writer's working directory anywhere inside a `.git` directory. git's own
 # commands still write there: they are not write targets, and `git config`
-# writes are enforce-git-dash-c's to block.
+# writes are enforce-git-policy's to block.
 # The tracked sources under containers/base/development-full/ have no
 # `.claude/` path segment, so they stay editable for normal hook development:
 # they take effect only once a human reinstalls or rebuilds.
@@ -287,13 +287,13 @@
 #                 key is matched case-insensitively, as git does, but the
 #                 value is matched exactly, since git passes it on as
 #                 given; every other key is denied, the same "git config is read-only for
-#                 sessions" stance enforce-git-dash-c takes: a denylist of
+#                 sessions" stance enforce-git-policy takes: a denylist of
 #                 dangerous keys can never be complete (core.hooksPath,
 #                 alias.*, credential.*, diff/merge drivers, filters,
 #                 gpg.program, ...) and would also let `-c
 #                 commit.gpgsign=false` quietly defeat enforce-git-identity.
 #                 Only the global options before the subcommand are
-#                 inspected here; enforce-git-dash-c still owns "must have -C".
+#                 inspected here; enforce-git-policy still owns "must have -C".
 #   npm           `--prefix <dir>` / `--prefix=<dir>` must resolve under a
 #                 root; `--script-shell`, `--userconfig`, `--globalconfig`
 #                 (any form) are denied outright.
@@ -427,7 +427,7 @@ GIT_MATERIALISING_SUBCOMMANDS=(checkout switch restore clone pull merge rebase c
 # git subcommands that write paths named on the command line (clone writes a
 # whole tree at its destination; worktree has its own per-action table,
 # GIT_WORKTREE_WRITERS, since its list and prune write nothing). restore, mv
-# and rm are not on enforce-git-dash-c's subcommand allowlist today; they
+# and rm are not on enforce-git-policy's subcommand allowlist today; they
 # stay here so allowing them there cannot silently skip this check.
 GIT_PATH_WRITERS=(checkout restore mv rm clone)
 # The git subcommands that write the pathspecs they are given and can also
@@ -1198,7 +1198,7 @@ logical_cd_prefixes_are_directories() {
 
 # Called when the git subcommand (or the end of the global options) is
 # reached: a git call with no -C at all runs against the hook's cwd -
-# enforce-git-dash-c auto-corrects it to `-C "$PWD"` and allows it via
+# enforce-git-policy auto-corrects it to `-C "$PWD"` and allows it via
 # updatedInput, which this hook never sees - so the cwd itself must be under
 # a root, exactly as `-C .` would have to be.
 require_git_cwd_when_no_dash_c() {

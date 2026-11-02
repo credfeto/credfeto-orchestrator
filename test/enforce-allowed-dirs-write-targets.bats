@@ -109,7 +109,7 @@ assert_each_config_write() {
         "${HOME}/.claude/settings.json.bak" \
         "${HOME}/.claude.json" \
         "${TEST_TMP}/repo/.mcp.json" \
-        "${HOME}/.claude/hooks/enforce-git-dash-c" \
+        "${HOME}/.claude/hooks/enforce-git-policy" \
         "${HOME}/.claude/agents/credfeto-committer.md" \
         "${HOME}/.claude/skills/update-config/SKILL.md" \
         /etc/claude-code/managed-settings.json \
@@ -176,7 +176,7 @@ assert_each_config_write() {
         "sed --in-place=.bak 's/a/b/' .mcp.json" \
         "cp settings.json ${HOME}/.claude/settings.json" \
         "mv new.json .claude/settings.local.json" \
-        "ln -sf ${SRC}/evil ${HOME}/.claude/hooks/enforce-git-dash-c" \
+        "ln -sf ${SRC}/evil ${HOME}/.claude/hooks/enforce-git-policy" \
         "echo '{}' | tee .mcp.json" \
         "echo '{}' > .claude/settings.json" \
         "echo '{}' >> ${HOME}/.claude.json" \

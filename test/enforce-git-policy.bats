@@ -4,7 +4,7 @@
 load test_helper
 
 # shellcheck disable=SC2034  # read by run_hook_in_dir in test_helper.bash, not visible to shellcheck across `load`
-HOOK="${REPO_ROOT}/containers/base/development-full/claude-hooks/enforce-git-dash-c"
+HOOK="${REPO_ROOT}/containers/base/development-full/claude-hooks/enforce-git-policy"
 
 setup() {
     setup_isolated_env

@@ -230,7 +230,7 @@ COPY --chown=root:root --chmod=0444 claude-policy-limits.json /home/developer/.c
 COPY --chown=root:root --chmod=0444 claude-managed-settings.json /etc/claude-code/managed-settings.json
 COPY --chown=root:root --chmod=0444 claude-managed-mcp.json /etc/claude-code/managed-mcp.json
 COPY --chown=root:root --chmod=0755 claude-mcp/cfwf-mcp-headers /etc/claude-code/mcp/cfwf-mcp-headers
-COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-dash-c /etc/claude-code/hooks/enforce-git-dash-c
+COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-policy /etc/claude-code/hooks/enforce-git-policy
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-identity /etc/claude-code/hooks/enforce-git-identity
 COPY --chown=root:root --chmod=0755 claude-hooks/reject-obfuscated-commands /etc/claude-code/hooks/reject-obfuscated-commands
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-allowed-dirs /etc/claude-code/hooks/enforce-allowed-dirs
@@ -432,7 +432,7 @@ RUN set -e; \
         || { echo "FATAL sanity: ~/.claude/settings.json must hold preferences only - permissions, hooks, sandbox and MCP config belong in /etc/claude-code/managed-settings.json" >&2; exit 1; }; \
     ! jq -r '.hooks.PreToolUse[].hooks[].command' /etc/claude-code/managed-settings.json | grep -vxE '/etc/claude-code/hooks/[A-Za-z0-9-]+' \
         || { echo "FATAL sanity: managed-settings.json runs a hook from outside /etc/claude-code/hooks (listed above)" >&2; exit 1; }; \
-    for h in reject-obfuscated-commands enforce-allowed-dirs block-config-skills enforce-git-identity enforce-git-dash-c \
+    for h in reject-obfuscated-commands enforce-allowed-dirs block-config-skills enforce-git-identity enforce-git-policy \
              block-git-worktree block-dotnet-tool-install block-github-mcp-write-tools enforce-ssh-host-and-key enforce-curl-host \
              enforce-background-for-long-running-commands cache-gh-lookups block-secret-file-reads; do \
         [ "$(stat -c '%U:%G %a' /etc/claude-code/hooks/$h)" = "root:root 755" ] \

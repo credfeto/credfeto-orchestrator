@@ -84,7 +84,7 @@ CLAUDE_MANAGED_DIR="${CLAUDE_MANAGED_DIR:-/etc/claude-code}"
 # Every external tool the hooks in claude-hooks/ call: jq and shfmt (payload and
 # command parsing, used by nearly every hook), base64 (word transport), realpath
 # (enforce-allowed-dirs), git and gpg
-# (enforce-git-dash-c, enforce-git-identity), ssh-add (enforce-ssh-host-and-key),
+# (enforce-git-policy, enforce-git-identity), ssh-add (enforce-ssh-host-and-key),
 # and sed/grep (enforce-git-identity, reject-obfuscated-commands).
 REQUIRED_TOOLS=(jq shfmt base64 realpath git gpg ssh-add sed grep)
 

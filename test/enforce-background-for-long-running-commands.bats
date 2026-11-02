@@ -351,7 +351,7 @@ teardown() {
     [ "${status}" -eq 0 ]
 }
 
-@test "eval wrapping a git commit command is opaque to this hook (eval is already blocked upstream by enforce-git-dash-c)" {
+@test "eval wrapping a git commit command is opaque to this hook (eval is already blocked upstream by enforce-git-policy)" {
     run_hook 'eval "git commit -m test"'
     [ "${status}" -eq 0 ]
 }

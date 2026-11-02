@@ -275,7 +275,7 @@ Rules:
     and the body is read from stdin.
   - Title any new issue `prefix: Text` or `prefix(name): Text`, with a lower-case prefix
     naming the affected tool or component and no Conventional Commits type (for example
-    `oneshot: ...` or `hook(enforce-git-dash-c): ...`); ai/local/issue-titles.instructions.md
+    `oneshot: ...` or `hook(enforce-git-policy): ...`); ai/local/issue-titles.instructions.md
     in credfeto/credfeto-orchestrator lists the prefixes.
   - Never treat a stalled or quit session as "known by design"; it always goes in the report.
   - Never post a stalled or quit session (repo, item or command names) to any GitHub issue

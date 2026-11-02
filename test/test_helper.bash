@@ -249,7 +249,7 @@ make_stub_multiline() {
 # run_in_background is omitted from tool_input entirely unless explicitly passed as $2,
 # mirroring a Bash tool call that never set it - only enforce-background-for-long-running-commands
 # actually reads that field, but every hook is fed the same payload shape. Shared by run_hook
-# below and enforce-git-dash-c.bats's own local override (which also needs a dir argument).
+# below and enforce-git-policy.bats's own local override (which also needs a dir argument).
 hook_payload() {
     local command="$1" run_in_background="${2:-}"
     if [ -n "${run_in_background}" ]; then
@@ -273,7 +273,7 @@ run_hook() {
 # Same as run_hook, but with cwd set to dir first (default TEST_TMP, which
 # always sits under BATS_TEST_TMPDIR and never inside this checkout's own git
 # tree) - for hooks whose decision depends on the working directory
-# (enforce-git-dash-c's auto-correct, enforce-allowed-dirs' relative-path
+# (enforce-git-policy's auto-correct, enforce-allowed-dirs' relative-path
 # resolution). Invokes the hook via bash rather than directly so a copy placed
 # under BATS_TEST_TMPDIR (which may be a noexec mount) still runs. Note the
 # argument order differs from run_hook: (command, dir, run_in_background)
