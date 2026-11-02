@@ -393,6 +393,7 @@ Commands:
   issue post-plan          Post an issue's implementation plan, add Blocked, then move the board to Planning (exit 8 when refused)
   issue block              Post a question on an issue, then add Blocked, leaving the board as it is (exit 8 when refused)
   issue comments           Print an issue's or PR's top-level comments with their bodies, oldest first (exit 9 when not found)
+  issue comment            Post a comment on an issue and print its URL, the same as comment add --issue (exit 8 when refused)
   issue add-sub-issue      Link an issue to a parent issue as its sub-issue (exit 8 when refused, 9 when not found)
   label add                Add standard labels to an issue or PR, one gh call a label (exit 8 when refused, 9 when not found)
   label remove             Remove labels from an issue or PR: never On Hold, Blocked only when the agent added it (exit 8 refused, 9 not found)
@@ -414,6 +415,7 @@ Commands:
   pr post-merge-runs       Judge the Actions runs on a merged PR's merge commit, on its base branch (exit 0, 3, 4, 5 or 6)
   pr comments              Print a PR's comments, reviews and review threads (exit 9 when not found)
   pr reply                 Reply to an inline review comment of a PR (exit 8 when the body is refused)
+  pr comment               Post a comment on a PR and print its URL, the same as comment add --pr (exit 8 when refused)
   pr review-comment        Post a new inline review comment on a line or a range of a PR's diff (exit 8 refused, 9 not found)
   pr hand-off              Hand a PR to human review: title and description, board, ready, review record, then auto-merge (exit 8 refused)
   pr finalise-dependency   Mark a bot dependency-update PR ready and enable auto-merge, nothing else (exit 8 refused)
@@ -431,7 +433,7 @@ Commands:
   pr reopen                Reopen the agent's own closed PR, with an optional comment first (exit 8 refused, 9 not found)
   pr block                 Post a question on a PR, then add Blocked, leaving the board as it is (exit 8 when refused)
   pr search                Search one repository's pull requests by words in their title or body, one line each
-  comment add              Post a comment on a PR or an issue and print its URL
+  comment add              Post a comment on a PR or an issue and print its URL (also as pr comment and issue comment)
   comment edit             Replace the body of the agent's own comment, by id, and print its URL (exit 8 refused, 9 not found)
   label create             Create one of the standard labels in a repository (exit 8 for any other name)
   release view             Print a repository's latest release, one key and value a line (exit 9 when it has none)
@@ -1070,6 +1072,8 @@ usage_issue() {
     usage_issue_block
     printf '\n'
     usage_issue_comments
+    printf '\n'
+    usage_issue_comment
     printf '\n'
     usage_issue_add_sub_issue
 }
@@ -1765,6 +1769,8 @@ Run 'cfwf pr sync-labels --help' for pr sync-labels, which adds the labels of th
 request closes to it.
 Run 'cfwf pr comments --help' for pr comments, which prints a pull request's comments, reviews and
 review threads.
+Run 'cfwf pr comment --help' for pr comment, which posts a top-level comment on a pull request, the
+same command as 'cfwf comment add --pr'.
 Run 'cfwf pr reply --help' for pr reply, which replies to an inline review comment.
 Run 'cfwf pr review-comment --help' for pr review-comment, which posts a new inline review comment
 on a line or a range of lines of a pull request's diff.
@@ -2508,7 +2514,47 @@ is posted. 'cfwf body check' does not apply the keyword rule.
 Exit codes: 0 posted; ${BODY_REFUSED_EXIT} refused; 1 a runtime failure, including an unreadable or
 blank body, a failed post or a result that is not a comment URL (the comment may then have
 been posted); 2 a usage error.
+
+'cfwf pr comment' and 'cfwf issue comment' are the same command under the names gh uses: each
+runs comment add with --pr or --issue, with the same checks, output and exit codes.
 USAGE
+}
+
+# The usage of pr comment ($1 pr) or issue comment ($1 issue), the aliases of comment add.
+usage_item_comment() {
+    local kind="$1" noun="issue" flag="--issue" option="--issue    "
+    if [ "${kind}" = pr ]; then
+        noun="pull request"
+        flag="--pr"
+        option="--pr       "
+    fi
+    cat << USAGE
+Usage: cfwf ${kind} comment --repo <owner/repo> ${flag} <n> --body-file <file|->
+
+The same command as 'cfwf comment add --repo <owner/repo> ${flag} <n> --body-file <file|->',
+under the name gh uses: it posts a top-level comment on the ${noun}, then prints the comment URL
+and nothing else. The body is checked as comment add checks it, for leaks (see 'cfwf help body')
+and for the plan-approval keywords outside a Markdown quote, and the exit codes are the same (see
+'cfwf help comment add').
+
+--repo       Always required; never taken from the current directory.
+${option}  Always required: the ${noun}'s number, above 0.
+--body-file  Always required: the comment, a regular file, or - to read it from stdin.
+
+gh's own forms are usage errors (exit 2) that post nothing: the number is not a positional
+argument (give ${flag} <n>), and there is no --body or -b (give --body-file). Neither error shows
+the value given. --edit-last, --json and --jq are not options.
+
+Exit codes: 0 posted; ${BODY_REFUSED_EXIT} the body was refused; 1 a runtime failure; 2 a usage error.
+USAGE
+}
+
+usage_pr_comment() {
+    usage_item_comment pr
+}
+
+usage_issue_comment() {
+    usage_item_comment issue
 }
 
 usage_comment_edit() {
@@ -3009,6 +3055,7 @@ usage_for() {
         "issue post-plan") usage_issue_post_plan ;;
         "issue block") usage_issue_block ;;
         "issue comments") usage_issue_comments ;;
+        "issue comment") usage_issue_comment ;;
         body | "body check") usage_body ;;
         repo) usage_repo ;;
         "repo view") usage_repo_view ;;
@@ -3041,6 +3088,7 @@ usage_for() {
         "pr comments") usage_pr_comments ;;
         "pr reply") usage_pr_reply ;;
         "pr review-comment") usage_pr_review_comment ;;
+        "pr comment") usage_pr_comment ;;
         comment)
             usage_comment
             printf '\n'
@@ -5104,7 +5152,7 @@ cmd_issue() {
     dispatch_subcommand issue create issue_create edit issue_edit view issue_view plan-status issue_plan_status \
         list issue_list search issue_search \
         label-history issue_label_history reopen issue_reopen close issue_close post-plan issue_post_plan block issue_block \
-        comments issue_comments add-sub-issue issue_add_sub_issue -- "$@"
+        comments issue_comments add-sub-issue issue_add_sub_issue comment issue_comment -- "$@"
 }
 
 # label add and label remove: the item as read before any write, its URL and the labels it carries,
@@ -8198,7 +8246,7 @@ cmd_pr() {
     dispatch_subcommand pr checks pr_checks checks-wait pr_checks_wait view pr_view list pr_list comments pr_comments reply pr_reply create pr_create \
         ready-at pr_ready_at status pr_status auto-merge-at pr_auto_merge_at diff pr_diff edit pr_edit hand-off pr_hand_off finalise-dependency pr_finalise_dependency take-back pr_take_back \
         close pr_close reopen pr_reopen block pr_block search pr_search post-merge-runs pr_post_merge_runs sync-labels pr_sync_labels \
-        review-comment pr_review_comment -- "$@"
+        review-comment pr_review_comment comment pr_comment -- "$@"
 }
 
 # Refuses (exit 8) the body in the file $1 when one of the two plan-approval keywords is a whole
@@ -8215,6 +8263,13 @@ comment_add() {
     parse_command_options assign_issue_option "--repo --pr --issue --body-file" "" "$@"
     require REPO --repo
     require_target
+    add_comment
+}
+
+# Posts the comment of comment add once the options are parsed and REPO and the target are set:
+# the body is required, checked for leaks and for the plan-approval keywords, then posted, and its
+# URL printed. comment add, pr comment and issue comment all run it, so they cannot drift apart.
+add_comment() {
     require BODY_FILE --body-file
     require_gh
     resolve_body
@@ -8224,6 +8279,48 @@ comment_add() {
     [ -z "${PR}" ] || kind="pr"
     post_comment "${kind}" "${TARGET_NUMBER}"
     printf '%s\n' "${POSTED_COMMENT_URL}"
+}
+
+# Refuses (exit 2), before any option is parsed or gh is called, the gh-style forms of pr comment
+# and issue comment, naming the cfwf option to use instead and never the value given: a positional
+# number (gh pr comment 12) names $1 (--pr or --issue), and --body or -b names --body-file. A
+# value given to one of the options in $2 is skipped, so a body file named 12 or -b is still a
+# path; every other argument is left for parse_command_options to judge.
+reject_gh_style_comment_arguments() {
+    local target_flag="$1"
+    local -a with_value
+    read -ra with_value <<< "$2"
+    shift 2
+    while [ "$#" -gt 0 ]; do
+        if is_one_of "$1" "${with_value[@]}"; then
+            shift
+        elif [[ "$1" =~ ^[0-9]+$ ]]; then
+            usage_error "the number is given with ${target_flag} <n>, not as a positional argument (argument $((ARGUMENT_COUNT - $# + 1)))"
+        elif [ "$1" = --body ] || [ "$1" = -b ] || [[ "$1" == --body=* ]]; then
+            usage_error "there is no --body or -b: give the comment with --body-file <file|-> (argument $((ARGUMENT_COUNT - $# + 1)); its value is not shown)"
+        fi
+        [ "$#" -eq 0 ] || shift
+    done
+}
+
+# pr comment: comment add --pr under the name gh uses, with the same checks, output and exit codes.
+pr_comment() {
+    reject_gh_style_comment_arguments --pr "--repo --pr --body-file" "$@"
+    parse_command_options assign_issue_option "--repo --pr --body-file" "" "$@"
+    require REPO --repo
+    require PR --pr
+    require_target
+    add_comment
+}
+
+# issue comment: comment add --issue under the name gh uses, as pr comment is for --pr.
+issue_comment() {
+    reject_gh_style_comment_arguments --issue "--repo --issue --body-file" "$@"
+    parse_command_options assign_issue_option "--repo --issue --body-file" "" "$@"
+    require REPO --repo
+    require ISSUE --issue
+    require_target
+    add_comment
 }
 
 # The URL of the comment post_comment posted last.

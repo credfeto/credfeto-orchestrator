@@ -2065,7 +2065,7 @@ assert_nothing_created() {
 @test "issue needs a subcommand, and an unknown one is refused" {
     run "${SCRIPT}" issue
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"issue needs a subcommand (create, edit, view, plan-status, list, search, label-history, reopen, close, post-plan, block, comments, add-sub-issue)"* ]]
+    [[ "${output}" == *"issue needs a subcommand (create, edit, view, plan-status, list, search, label-history, reopen, close, post-plan, block, comments, add-sub-issue, comment)"* ]]
 
     run "${SCRIPT}" issue frobnicate
     [ "${status}" -eq 2 ]
@@ -6587,6 +6587,245 @@ run_comment_add() {
     [ -z "$(ls -A "${scratch}")" ]
 }
 
+# --- pr comment and issue comment (#1820) ----------------------------------------
+
+PR_COMMENT_USAGE="Usage: cfwf pr comment --repo <owner/repo> --pr <n> --body-file <file|->"
+ISSUE_COMMENT_USAGE="Usage: cfwf issue comment --repo <owner/repo> --issue <n> --body-file <file|->"
+
+# Runs pr comment ($1 pr) or issue comment ($1 issue) on REPO with the remaining arguments.
+run_item_comment() {
+    local kind="$1"
+    shift
+    run --separate-stderr "${SCRIPT}" "${kind}" comment --repo "${REPO}" "$@"
+}
+
+@test "pr comment and issue comment post as comment add --pr and --issue do, stdin closed, and print only the comment URL" {
+    prepare_comment
+    run_item_comment pr --pr 1623 --body-file "${TEST_TMP}/comment.md" <<< "stray stdin"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${COMMENT_PR_URL}" ]
+    [ -z "${stderr}" ]
+    issue_create_called_with "pr comment 1623 --repo ${REPO} --body-file BODY"
+    [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
+    cmp "${TEST_TMP}/comment.md" "${GH_FIXTURES}/comment-body.txt"
+    [ "$(cat "${GH_FIXTURES}/comment-stdin.txt")" = /dev/null ]
+    [ "$(gh_call_count "--body-file ${TEST_TMP}/comment.md")" -eq 0 ]
+
+    rm -f "${GH_LOG}"
+    prepare_comment "${COMMENT_ISSUE_URL}"
+    run_item_comment issue --issue 1585 --body-file "${TEST_TMP}/comment.md"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${COMMENT_ISSUE_URL}" ]
+    [ -z "${stderr}" ]
+    issue_create_called_with "issue comment 1585 --repo ${REPO} --body-file BODY"
+    [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
+    cmp "${TEST_TMP}/comment.md" "${GH_FIXTURES}/comment-body.txt"
+}
+
+@test "pr comment and issue comment read the body from stdin for --body-file -, and an empty stdin is refused without calling gh" {
+    prepare_comment
+    run_item_comment pr --pr 1623 --body-file - <<< "A PR comment from stdin"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${COMMENT_PR_URL}" ]
+    [ "$(cat "${GH_FIXTURES}/comment-body.txt")" = "A PR comment from stdin" ]
+
+    prepare_comment "${COMMENT_ISSUE_URL}"
+    run_item_comment issue --issue 1585 --body-file - <<< "An issue comment from stdin"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${COMMENT_ISSUE_URL}" ]
+    [ "$(cat "${GH_FIXTURES}/comment-body.txt")" = "An issue comment from stdin" ]
+
+    rm -f "${GH_LOG}"
+    local kind
+    for kind in pr issue; do
+        run_item_comment "${kind}" "--${kind}" 1 --body-file - < /dev/null
+        [ "${status}" -eq 1 ]
+        [ "${stderr}" = "cfwf: the body is empty" ]
+    done
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "pr comment and issue comment refuse a leaking body with exit 8, naming the rule only, and post nothing" {
+    prepare_comment
+    local secret="gh""p_LEAKMARKER0123456789"
+    write_leak_body "the value is ${secret} here"
+    run_item_comment pr --pr 1623 --body-file "${TEST_TMP}/leak.md"
+    assert_refused "${status}" "${output}" "${stderr}" token "${secret}"
+    run_item_comment issue --issue 1585 --body-file "${TEST_TMP}/leak.md"
+    assert_refused "${status}" "${output}" "${stderr}" token "${secret}"
+
+    write_leak_body "see /home/someone/notes"
+    run_item_comment issue --issue 1585 --body-file - < "${TEST_TMP}/leak.md"
+    assert_refused "${status}" "${output}" "${stderr}" "host path" "/home/someone"
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "pr comment and issue comment refuse a plan-approval keyword outside a quote with exit 8, and post one inside a quote" {
+    prepare_comment
+    local line kind
+    for line in "Approved" "lgtm" "This is APPROVED." "    > approved"; do
+        write_leak_body "${line}"
+        for kind in pr issue; do
+            run_item_comment "${kind}" "--${kind}" 1623 --body-file "${TEST_TMP}/leak.md"
+            assert_refused "${status}" "${output}" "${stderr}" "approval keyword" "${line}"
+        done
+    done
+    [ ! -f "${GH_LOG}" ]
+
+    for line in "> approved" "   > The human said: LGTM" "disapproved"; do
+        write_leak_body "${line}"
+        prepare_comment
+        run_item_comment pr --pr 1623 --body-file "${TEST_TMP}/leak.md"
+        [ "${status}" -eq 0 ]
+        [ "${output}" = "${COMMENT_PR_URL}" ]
+        cmp "${TEST_TMP}/leak.md" "${GH_FIXTURES}/comment-body.txt"
+
+        prepare_comment "${COMMENT_ISSUE_URL}"
+        run_item_comment issue --issue 1585 --body-file "${TEST_TMP}/leak.md"
+        [ "${status}" -eq 0 ]
+        [ "${output}" = "${COMMENT_ISSUE_URL}" ]
+        cmp "${TEST_TMP}/leak.md" "${GH_FIXTURES}/comment-body.txt"
+    done
+}
+
+@test "pr comment and issue comment refuse gh's positional number and --body or -b with exit 2, naming the option to use and never the value, before any gh call" {
+    prepare_comment
+    local body="${TEST_TMP}/comment.md" kind usage
+    for kind in pr issue; do
+        usage="${PR_COMMENT_USAGE}"
+        [ "${kind}" = pr ] || usage="${ISSUE_COMMENT_USAGE}"
+
+        run --separate-stderr "${SCRIPT}" "${kind}" comment 98765 --repo "${REPO}" --body-file "${body}"
+        [ "${status}" -eq 2 ]
+        [ -z "${output}" ]
+        [ "${stderr%%$'\n'*}" = "cfwf: the number is given with --${kind} <n>, not as a positional argument (argument 3)" ]
+        [[ "${stderr}" == *$'\n\n'"${usage}"$'\n'* ]]
+
+        run_item_comment "${kind}" --body-file "${body}" 98765
+        [ "${status}" -eq 2 ]
+        [ "${stderr%%$'\n'*}" = "cfwf: the number is given with --${kind} <n>, not as a positional argument (argument 7)" ]
+
+        local flag
+        for flag in --body -b; do
+            run_item_comment "${kind}" "--${kind}" 1 "${flag}" "secret words here"
+            [ "${status}" -eq 2 ]
+            [ -z "${output}" ]
+            [ "${stderr%%$'\n'*}" = "cfwf: there is no --body or -b: give the comment with --body-file <file|-> (argument 7; its value is not shown)" ]
+            [[ "${stderr}" == *$'\n\n'"${usage}"$'\n'* ]]
+            [[ "${stderr}" != *"secret words"* ]]
+        done
+        run_item_comment "${kind}" "--${kind}" 1 "--body=secret words here"
+        [ "${status}" -eq 2 ]
+        [[ "${stderr}" == "cfwf: there is no --body or -b: give the comment with --body-file"* ]]
+        [[ "${stderr}" != *"secret words"* ]]
+    done
+    [ ! -f "${GH_LOG}" ]
+
+    # A value of an option is never taken for gh's form: a body file named 12 or -b is a path.
+    cp "${body}" "${TEST_TMP}/12"
+    run_item_comment pr --pr 1623 --body-file "${TEST_TMP}/12"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${COMMENT_PR_URL}" ]
+    cd "${TEST_TMP}"
+    cp "${body}" ./-b
+    run_item_comment pr --pr 1623 --body-file -b
+    [ "${status}" -eq 0 ]
+    cmp "${body}" "${GH_FIXTURES}/comment-body.txt"
+}
+
+@test "pr comment and issue comment usage errors for a missing, repeated or other option exit 2 with their usage on stderr and never call gh" {
+    prepare_comment
+    local body="${TEST_TMP}/comment.md" kind other usage
+    for kind in pr issue; do
+        other="issue"
+        usage="${PR_COMMENT_USAGE}"
+        if [ "${kind}" = issue ]; then
+            other="pr"
+            usage="${ISSUE_COMMENT_USAGE}"
+        fi
+
+        run --separate-stderr "${SCRIPT}" "${kind}" comment "--${kind}" 1 --body-file "${body}"
+        [ "${status}" -eq 2 ]
+        [ -z "${output}" ]
+        [ "${stderr%%$'\n'*}" = "cfwf: missing required option --repo" ]
+        [[ "${stderr}" == *$'\n\n'"${usage}"$'\n'* ]]
+
+        run_item_comment "${kind}" --body-file "${body}"
+        [ "${status}" -eq 2 ]
+        [ "${stderr%%$'\n'*}" = "cfwf: missing required option --${kind}" ]
+
+        run_item_comment "${kind}" "--${kind}" 1
+        [ "${status}" -eq 2 ]
+        [ "${stderr%%$'\n'*}" = "cfwf: missing required option --body-file" ]
+
+        run_item_comment "${kind}" "--${kind}" 1 --body-file
+        [ "${status}" -eq 2 ]
+        [ "${stderr%%$'\n'*}" = "cfwf: --body-file needs a value" ]
+
+        run_item_comment "${kind}" "--${kind}" 1 "--${kind}" 2 --body-file "${body}"
+        [ "${status}" -eq 2 ]
+
+        run_item_comment "${kind}" "--${kind}" 1 --body-file "${body}" --body-file "${body}"
+        [ "${status}" -eq 2 ]
+        [[ "${stderr}" == *"--body-file can only be given once"* ]]
+
+        run_item_comment "${kind}" "--${kind}" x --body-file "${body}"
+        [ "${status}" -eq 2 ]
+        [ "${stderr%%$'\n'*}" = "cfwf: invalid value for --${kind}: it must be a number" ]
+
+        local flag
+        for flag in "--${other}" --edit-last --json --jq; do
+            run_item_comment "${kind}" "--${kind}" 1 --body-file "${body}" "${flag}" value
+            [ "${status}" -eq 2 ]
+            [ -z "${output}" ]
+            [ "${stderr%%$'\n'*}" = "cfwf: unknown option (argument 9; its value is not shown)" ]
+            [[ "${stderr}" == *$'\n\n'"${usage}"$'\n'* ]]
+        done
+    done
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "pr comment and issue comment help, from -h, --help and help, gives the usage, the alias and the exit codes; help pr, help issue, help comment add and the general help name them; none calls gh" {
+    local kind invocation usage flag
+    for kind in pr issue; do
+        usage="${PR_COMMENT_USAGE}"
+        [ "${kind}" = pr ] || usage="${ISSUE_COMMENT_USAGE}"
+        for invocation in "${kind} comment -h" "${kind} comment --help" "help ${kind} comment" "${kind} comment --repo ${REPO} --help"; do
+            # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+            run --separate-stderr "${SCRIPT}" ${invocation}
+            [ "${status}" -eq 0 ]
+            [ -z "${stderr}" ]
+            [[ "${output}" == "${usage}"$'\n'* ]]
+            [[ "${output}" == *"The same command as 'cfwf comment add --repo <owner/repo> --${kind} <n> --body-file <file|->',"* ]]
+            [[ "${output}" == *"the number is not a positional"$'\n'"argument (give --${kind} <n>), and there is no --body or -b (give --body-file)."* ]]
+            [[ "${output}" == *"Exit codes: 0 posted; 8 the body was refused; 1 a runtime failure; 2 a usage error."* ]]
+            [[ "${output}" != *"usage_"* ]]
+        done
+    done
+
+    run "${SCRIPT}" help pr
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *$'\n'"Run 'cfwf pr comment --help' for pr comment, which posts a top-level comment on a pull request, the"$'\n'"same command as 'cfwf comment add --pr'."$'\n'* ]]
+
+    run "${SCRIPT}" help issue
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *$'\n\n'"${ISSUE_COMMENT_USAGE}"$'\n'* ]]
+
+    for invocation in "help comment add" "comment add --help"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == *"'cfwf pr comment' and 'cfwf issue comment' are the same command under the names gh uses"* ]]
+    done
+
+    run "${SCRIPT}" help
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *$'\n'"  issue comment            Post a comment on an issue and print its URL, the same as comment add --issue (exit 8 when refused)"$'\n'* ]]
+    [[ "${output}" == *$'\n'"  pr comment               Post a comment on a PR and print its URL, the same as comment add --pr (exit 8 when refused)"$'\n'* ]]
+    [[ "${output}" == *$'\n'"  comment add              Post a comment on a PR or an issue and print its URL (also as pr comment and issue comment)"$'\n'* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
 # --- comment edit (#1592) -------------------------------------------------------
 
 # The agent's login, which the stub answers gh api user with, and the URLs of the issue comment 123
@@ -9822,7 +10061,7 @@ read_once_asking_for() {
     run --separate-stderr "${SCRIPT}" pr
     [ "${status}" -eq 2 ]
     [ -z "${output}" ]
-    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, checks-wait, view, list, comments, reply, create, ready-at, status, auto-merge-at, diff, edit, hand-off, finalise-dependency, take-back, close, reopen, block, search, post-merge-runs, sync-labels, review-comment)"* ]]
+    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, checks-wait, view, list, comments, reply, create, ready-at, status, auto-merge-at, diff, edit, hand-off, finalise-dependency, take-back, close, reopen, block, search, post-merge-runs, sync-labels, review-comment, comment)"* ]]
     [[ "${stderr}" == *"Usage: cfwf pr checks"*"Run 'cfwf pr view --help' for pr view"* ]]
 
     run --separate-stderr "${SCRIPT}" pr frobnicate
@@ -10523,7 +10762,7 @@ run_tag_view() {
 
     run "${SCRIPT}" help
     [ "${status}" -eq 0 ]
-    local listed=$'\n'"  comment add              Post a comment on a PR or an issue and print its URL"$'\n'
+    local listed=$'\n'"  comment add              Post a comment on a PR or an issue and print its URL (also as pr comment and issue comment)"$'\n'
     listed+="  comment edit             Replace the body of the agent's own comment, by id, and print its URL (exit 8 refused, 9 not found)"$'\n'
     listed+="  label create             Create one of the standard labels in a repository (exit 8 for any other name)"$'\n'
     listed+="  release view             Print a repository's latest release, one key and value a line (exit 9 when it has none)"$'\n'
