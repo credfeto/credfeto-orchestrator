@@ -24,7 +24,7 @@
 #   /home/developer/.claude/settings.json      - Claude Code preference settings (baked into development-full image, read-only, not mounted)
 #   /home/developer/.claude/policy-limits.json — Claude Code policy limits       (baked into development-full image, read-only, not mounted)
 #   /etc/claude-code/managed-settings.json     - Claude Code permissions, hooks and sandbox (baked into development-full image, read-only, not mounted)
-#   /etc/claude-code/hooks/                    - Claude Code hooks (enforce-git-dash-c, etc.) (baked into development-full image, read-only, not mounted)
+#   /etc/claude-code/hooks/                    - Claude Code hooks (enforce-git-policy, etc.) (baked into development-full image, read-only, not mounted)
 #   /home/developer/.claude/skills/            — Claude Code skills (symlinked from /opt/*)   (baked into development-full image, read-only, not mounted)
 #   /home/developer/.claude/agents/            - Claude Code agents (symlinked from /opt/credfeto-ai-skills)   (baked into development-full image, read-only, not mounted)
 #   /home/developer/.orchestrator         — oneshot state                (read/write, persists sessions)
