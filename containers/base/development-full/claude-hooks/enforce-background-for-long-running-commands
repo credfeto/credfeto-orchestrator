@@ -19,7 +19,7 @@
 # unbounded. Both are checked the same way, via the BARE_NAME_MESSAGES table below.
 #
 # Parses with shfmt (mvdan/sh) and walks the resulting AST, same approach as
-# the sibling enforce-git-dash-c/block-git-worktree/block-dotnet-tool-install
+# the sibling enforce-git-policy/block-git-worktree/block-dotnet-tool-install
 # (see those scripts' header comments for the full rationale). Text/regex
 # scanning would miss obfuscated forms and false-positive on unrelated text
 # (e.g. a string that merely mentions "git commit"), so this only inspects
@@ -63,7 +63,7 @@ is_wrapper() {
 }
 
 # Bash-side twin of the jq extraction's own "\u0001" literal below (same codepoint,
-# matching enforce-git-dash-c's own OPAQUE_MARKER) - one name for every check below that
+# matching enforce-git-policy's own OPAQUE_MARKER) - one name for every check below that
 # needs to compare against the opaque marker, instead of repeating $'\x01' at each site.
 OPAQUE_MARKER=$'\x01'
 
@@ -102,7 +102,7 @@ ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command co
 # One line per CallExpr: a word that is a single plain literal, or one layer of ordinary
 # quoting with no expansion inside it ("restore", 'restore'), resolves to that literal
 # text - same literal_value scope as enforce-ssh-host-and-key, plus the backslash-decode fix
-# enforce-git-dash-c's own resolve_parts already has (#1399 round 3): a bare unquoted word
+# enforce-git-policy's own resolve_parts already has (#1399 round 3): a bare unquoted word
 # keeps shfmt's raw, undecoded backslash in its Lit.Value (e.g. `bu\ild` stays "bu\ild", not
 # "build") even though bash's own unquoted rule is simply "drop the backslash, keep the next
 # character" for any character - without the gsub below, `dotnet bu\ild` resolved to neither
@@ -113,7 +113,7 @@ ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command co
 # before an arbitrary letter, so `"bu\ild"` really does stay bu\ild at runtime and must not
 # be decoded the same way. So a quoted-but-static word like `dotnet "restore"` is recognised
 # as literal "restore", not treated as opaque - but a genuinely *empty* quoted word ('' or
-# "") is deliberately NOT resolved to an empty string here (unlike enforce-git-dash-c, whose
+# "") is deliberately NOT resolved to an empty string here (unlike enforce-git-policy, whose
 # transport does not join words with a shared delimiter the way this one does): an empty
 # field in the tab-join below collapses exactly like the empty-string opaque-marker bug this
 # file already fixed once (see the tab-splitting paragraph below), so an empty literal stays
@@ -135,7 +135,7 @@ ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command co
 # misaligning the -c/-C skip loop below and letting the block on git commit go unenforced).
 # A resolved literal_value is also folded back to this marker if it contains a raw tab,
 # newline or CR byte - this file's own delimiter, or one that would desync the later
-# `while IFS= read -r call_line` split - same guard as enforce-git-dash-c's resolve_parts:
+# `while IFS= read -r call_line` split - same guard as enforce-git-policy's resolve_parts:
 # a quoted argument can legitimately embed one of these (`git -c "x.y=a<TAB>b" ...`, a
 # multi-line commit message), and letting it through as-is would fragment that one word
 # into two on the tab-join, shifting every later word's index exactly like the empty-string
