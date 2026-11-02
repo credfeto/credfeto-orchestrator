@@ -373,8 +373,8 @@ Commands:
   pr checks-wait           Wait for a PR's required checks to finish, up to a time limit (exit 0, 3, 4, 5 or 6)
   pr comments              Print a PR's comments, reviews and review threads (exit 9 when not found)
   pr reply                 Reply to an inline review comment of a PR (exit 8 when the body is refused)
-  pr hand-off              Hand a PR to human review: title and description, board, ready, review record, then auto-merge (exit 7 deferred, 8 refused)
-  pr finalise-dependency   Mark a bot dependency-update PR ready and enable auto-merge, nothing else (exit 7 deferred, 8 refused)
+  pr hand-off              Hand a PR to human review: title and description, board, ready, review record, then auto-merge (exit 8 refused)
+  pr finalise-dependency   Mark a bot dependency-update PR ready and enable auto-merge, nothing else (exit 8 refused)
   pr take-back             Take a PR back from human review: auto-merge off, draft, board Development, then a comment (exit 8 refused)
   pr view                  Print a PR's state and metadata, one key and value a line (exit 9 when not found)
   pr status                Print a PR's whole state in one call: metadata, board, checks, comments (exit 0, 3, 4, 5 or 9)
@@ -1788,13 +1788,14 @@ Everything is checked before anything is written, and a refusal writes nothing:
 A refusal exits ${POLICY_REFUSED_EXIT} with "cfwf: hand-off refused: <rule>" (or "cfwf: body refused: <rule>") on
 stderr.
 
-Auto-merge is enabled only when the head is still the one reviewed and every judged check has a
-result completed at or after the pull request was last marked ready (see 'cfwf pr ready-at'): a
-check skipped while it was a draft counts as passed before it has ever run. When the checks that
-start once it is ready have not finished, or one of them failed, auto-merge is left off and the
-command exits ${AUTO_MERGE_DEFERRED_EXIT} (deferred): run it again once they have finished. A head that changed after it
-was read stops the command before auto-merge. A repository that does not allow auto-merge leaves
-the pull request ready for a human, and says so.
+Auto-merge is always enabled once the pull request is ready, without waiting for the checks that
+start then: GitHub's auto-merge itself waits for the checks and the review the base branch
+requires, so it never merges anything red or unreviewed. A head that changed after it was read
+stops the command before auto-merge. A repository that does not allow auto-merge leaves the pull
+request ready for a human, and says so. So does a base branch that requires no check and no
+review, where auto-merge would merge it at once: read access shows a ruleset's review rule but not
+a classic branch protection's, so a protected branch, or one whose rules cannot be read, is taken
+as requiring a review and auto-merge is enabled.
 
 A whole hand-off is one call, with the description on stdin and no file to write first:
   cfwf pr hand-off --repo <owner/repo> --pr <n> --title "<type>: <description>" --description-file - <<'EOF'
@@ -1807,13 +1808,13 @@ Output, one line a step:
   <url> ready
   <review record comment URL>
   <url> auto-merge on
-or, in place of the last line, "<url> auto-merge deferred: <reason>" or "<url> auto-merge
-unavailable: <reason>".
+or, in place of the last line, "<url> auto-merge unavailable: <reason>" or "<url> auto-merge not
+armed: <reason>".
 
-Exit codes: 0 handed off (auto-merge on, or unavailable on the repository); 1 a runtime failure,
-such as a gh or network error, prefixed "cfwf:", naming the steps already done when it fails part
-way; 2 a usage error; ${AUTO_MERGE_DEFERRED_EXIT} ready and recorded, auto-merge deferred; ${POLICY_REFUSED_EXIT} refused, nothing written;
-${PR_NOT_FOUND_EXIT} the pull request does not exist (the number of an issue included).
+Exit codes: 0 handed off (auto-merge on, unavailable on the repository, or not armed on a base
+branch that requires nothing); 1 a runtime failure, such as a gh or network error, prefixed
+"cfwf:", naming the steps already done when it fails part way; 2 a usage error; ${POLICY_REFUSED_EXIT} refused,
+nothing written; ${PR_NOT_FOUND_EXIT} the pull request does not exist (the number of an issue included).
 USAGE
 }
 
@@ -1897,22 +1898,22 @@ Everything is checked before anything is written, and a refusal writes nothing:
                     judges them; failed, pending or no checks at all is refused
 A refusal exits ${POLICY_REFUSED_EXIT} with "cfwf: finalise-dependency refused: <rule>" on stderr.
 
-Auto-merge is enabled as 'cfwf pr hand-off' enables it: only when the head is still the one read
-and every judged check has a result completed at or after the pull request was last marked ready.
-Otherwise auto-merge is left off and the command exits ${AUTO_MERGE_DEFERRED_EXIT} (deferred): run it again once the
-checks have finished. A repository that does not allow auto-merge leaves the pull request ready
-for a human, and says so.
+Auto-merge is enabled as 'cfwf pr hand-off' enables it: always, once the pull request is ready,
+since GitHub's auto-merge waits for the required checks and review itself; a head that changed
+after it was read stops the command first. A repository that does not allow auto-merge, or a base
+branch that requires no check and no review, leaves the pull request ready for a human, and says
+so.
 
 Output, one line a step:
   <url> ready
   <url> auto-merge on
-or, in place of the last line, "<url> auto-merge deferred: <reason>" or "<url> auto-merge
-unavailable: <reason>".
+or, in place of the last line, "<url> auto-merge unavailable: <reason>" or "<url> auto-merge not
+armed: <reason>".
 
-Exit codes: 0 finalised (auto-merge on, or unavailable on the repository); 1 a runtime failure,
-such as a gh or network error, prefixed "cfwf:"; 2 a usage error; ${AUTO_MERGE_DEFERRED_EXIT} ready, auto-merge
-deferred; ${POLICY_REFUSED_EXIT} refused, nothing written; ${PR_NOT_FOUND_EXIT} the pull request does not exist (the
-number of an issue included).
+Exit codes: 0 finalised (auto-merge on, unavailable on the repository, or not armed on a base
+branch that requires nothing); 1 a runtime failure, such as a gh or network error, prefixed
+"cfwf:"; 2 a usage error; ${POLICY_REFUSED_EXIT} refused, nothing written; ${PR_NOT_FOUND_EXIT} the pull request does not exist
+(the number of an issue included).
 USAGE
 }
 
@@ -6911,9 +6912,9 @@ issue_edit() {
 }
 
 # pr hand-off: the pull request as read before any write (its URL, state, whether it is a draft, its
-# head and whether it carries Blocked or On Hold), the head the review record names, the steps done
-# so far (named by the EXIT trap when a run fails part way) and the time the pull request was last
-# marked ready.
+# head and whether it carries Blocked or On Hold), the head the review record names and the steps
+# done so far (named by the EXIT trap when a run fails part way). READY_AT and READY_SOURCE are
+# when the pull request was last marked ready, for pr ready-at and pr status.
 HAND_OFF_URL=""
 HAND_OFF_STATE=""
 HAND_OFF_DRAFT=""
@@ -6923,16 +6924,16 @@ HAND_OFF_ON_HOLD=""
 HAND_OFF_AUTO_MERGE_ALLOWED=""
 HAND_OFF_DONE=""
 HAND_OFF_RECORD_TMP=""
-# What a refusal, a deferral and the EXIT trap name: hand-off, or finalise-dependency, which shares
+# What a refusal and the EXIT trap name: hand-off, or finalise-dependency, which shares
 # hand-off's checks, ready and auto-merge steps.
 HAND_OFF_SUBJECT=hand-off""
 READY_AT=""
 READY_SOURCE=""
 # What a hand-off posts first in its review record, followed by the head it reviewed.
 readonly HAND_OFF_RECORD_PREFIX="### AI Review Loop: reviewed"
-# The exit code of a hand-off that marked the pull request ready and recorded it, but left
-# auto-merge off because the required checks have no result from after it was marked ready yet.
-readonly AUTO_MERGE_DEFERRED_EXIT=7
+# What read_base_merge_gate finds the base branch requires before a merge: none (no check and no
+# review), gated (a check or a review) or unknown (it could not tell).
+BASE_MERGE_GATE=""
 
 assign_pr_hand_off_option() {
     local flag="$1" value="${2:-}"
@@ -7076,39 +7077,59 @@ post_hand_off_record() {
     hand_off_done "review record"
 }
 
-# Exits AUTO_MERGE_DEFERRED_EXIT, with auto-merge left off, for the reason $1.
-defer_auto_merge() {
-    printf '%s auto-merge deferred: %s\n' "${HAND_OFF_URL}" "$1"
-    printf 'cfwf: auto-merge was not enabled on %s#%s: %s; run pr %s again once the checks have finished\n' "${REPO}" "${PR}" "$1" "${HAND_OFF_SUBJECT}" >&2
-    HAND_OFF_DONE=""
-    exit "${AUTO_MERGE_DEFERRED_EXIT}"
+# Sets BASE_MERGE_GATE for RULES_BRANCH of REPO (resolve_checks_head sets it), from the two reads
+# branch required-checks makes, so read access is enough (#1798). The branch itself gives its
+# classic protection's required checks and whether it is protected at all; whether that protection
+# requires a review is readable only with admin rights, so a protected branch with no required check
+# there is unknown. The rules that apply to the branch give each ruleset's required checks and its
+# pull_request rule: a review is required when that asks for at least one approval or a code
+# owner's review. A plan without rulesets (RULESETS_NOT_IN_PLAN) has none. gated: a check or a
+# review is required. none: an unprotected branch no gating rule applies to. unknown: anything else,
+# a failed or unexpected read included. Only none leaves auto-merge off, so a gate that cannot be
+# read is armed, and GitHub's auto-merge then waits for whatever the branch does require.
+read_base_merge_gate() {
+    local protected classic path
+    BASE_MERGE_GATE=unknown
+    path="$(branch_path "${RULES_BRANCH}")"
+    gh_capture api "repos/${REPO}/branches/${path}" \
+        --jq '[(.protected | tostring), ((.protection.required_status_checks // {}) | if (.enforcement_level // "off") == "off" then 0 else ((.contexts // []) + (.checks // []) | length) end | tostring)] | join(" ")' \
+        || return 0
+    read -r protected classic <<< "${GH_OUTPUT}"
+    [[ "${protected}" =~ ^(true|false)$ ]] && [[ "${classic}" =~ ^[0-9]+$ ]] || return 0
+    if [ "${classic}" -gt 0 ]; then
+        BASE_MERGE_GATE=gated
+        return 0
+    fi
+    if ! gh_capture api "repos/${REPO}/rules/branches/${path}?per_page=${API_PAGE_SIZE}" --paginate \
+        --jq '.[]? | select((.type == "required_status_checks" and ((.parameters.required_status_checks // []) | length) > 0)
+            or (.type == "pull_request" and (((.parameters.required_approving_review_count // 0) > 0) or .parameters.require_code_owner_review == true)))
+            | "gate"'; then
+        [[ "${GH_ERROR}" == *"${RULESETS_NOT_IN_PLAN}"*"(HTTP 403)"* ]] || return 0
+        GH_OUTPUT=""
+    fi
+    if [ -n "${GH_OUTPUT}" ]; then
+        BASE_MERGE_GATE=gated
+    elif [ "${protected}" = false ]; then
+        BASE_MERGE_GATE=none
+    fi
 }
 
-# Enables merge-commit auto-merge on PR (#1591), only when the head is still the one reviewed
-# (HAND_OFF_SHA) and every judged check has passed with a result completed at or after the pull
-# request was last marked ready, since a check skipped while it was a draft counts as passed
-# before it has run. Otherwise it defers (AUTO_MERGE_DEFERRED_EXIT). It never merges at once and
-# never uses --admin, and the head is pinned on the merge request itself as well.
+# Enables merge-commit auto-merge on PR (#1591) once it is ready, at once (#1798): GitHub's
+# auto-merge waits for the checks and the review the base branch requires, so arming it before the
+# checks that start once the pull request is ready have run never merges anything red or
+# unreviewed. The head must still be the one reviewed (HAND_OFF_SHA), and it is pinned on the merge
+# request itself as well. A base branch that requires no check and no review (BASE_MERGE_GATE
+# none) would merge at once, so there auto-merge is left off and the pull request is left ready for
+# a human. It never uses --admin.
 enable_pull_request_auto_merge() {
-    local line name verdict completed_at
-    read_last_ready_at
-    checks_wait_read
-    case "${CHECKS_WAIT_STATUS}" in
-        0) ;;
-        "${CHECKS_FAILED_EXIT}") defer_auto_merge "a required check failed after the pull request was marked ready" ;;
-        "${CHECKS_PENDING_EXIT}" | "${NO_CHECKS_EXIT}") defer_auto_merge "the required checks have not finished since the pull request was marked ready" ;;
-        *) exit 1 ;;
-    esac
-    [ "$(checks_summary_head "${CHECKS_WAIT_OUTPUT}")" = "${HAND_OFF_SHA}" ] \
+    resolve_checks_head
+    [ "${HEAD_SHA}" = "${HAND_OFF_SHA}" ] \
         || die "the head of ${REPO}#${PR} changed after it was reviewed, so auto-merge was not enabled"
-    while IFS=$'\t' read -r name verdict completed_at _; do
-        [ -n "${verdict}" ] || continue
-        # A result that finished before the pull request was last marked ready (ISO 8601 times in
-        # UTC compare as text) predates the checks that run once it is ready.
-        if [ -z "${completed_at}" ] || [[ "${completed_at}" < "${READY_AT}" ]]; then
-            defer_auto_merge "the required checks have not finished since the pull request was marked ready"
-        fi
-    done <<< "$(grep -F $'\t' <<< "${CHECKS_WAIT_OUTPUT}" || true)"
+    read_base_merge_gate
+    if [ "${BASE_MERGE_GATE}" = none ]; then
+        printf '%s auto-merge not armed: the base branch requires no check and no review, so auto-merge would merge it at once; it is left ready for a human\n' "${HAND_OFF_URL}"
+        return 0
+    fi
     gh_capture pr merge "${PR}" --repo "${REPO}" --auto --merge --match-head-commit "${HAND_OFF_SHA}" \
         || die "could not enable auto-merge on ${REPO}#${PR}: $(gh_failure_text)"
     printf '%s auto-merge on\n' "${HAND_OFF_URL}"

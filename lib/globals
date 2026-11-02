@@ -674,6 +674,10 @@ declare -gA _WF_ITEM_STATUS_FETCHED
 # values present / absent / unknown. Filled lazily, only for items the board listing missed.
 declare -gA _WF_ITEM_BOARD_PRESENCE
 
+# Per-repo allow_auto_merge cache — populated by repo_allows_auto_merge (lib/github-status, #1798).
+# Keys are "owner/repo"; value is "true" or "false" as the repository settings read.
+declare -gA _REPO_AUTO_MERGE_ALLOWED
+
 # Ordered Workflow Status option names, earliest first. Defines the ordinal used by
 # sync_pr_workflow_status_from_linked_issues (lib/workflow-board) to compare a PR's card
 # against its linked issue's without hardcoding numeric ranks at each call site, and to

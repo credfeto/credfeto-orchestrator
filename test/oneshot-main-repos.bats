@@ -424,6 +424,151 @@ main_dependency_flag() {
     grep -q '^notified 5: .*"title":"T"' "${discord_log}"
 }
 
+@test "main arms a missing auto-merge on a direct PR at Human Review when the repo allows auto-merge, instead of calling it settled (#1798)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"1111111111111111111111111111111111111111","comments":[],"reviews":[],"statusCheckRollup":[],"autoMergeRequest":null,"reviewDecision":"APPROVED"}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json() { printf 'fp-same\n'; }
+    load_pr_fingerprint() { printf 'fp-same\n'; }
+    pr_review_pipeline_finished_without_auto_merge() { return 0; }
+    repo_allows_auto_merge() { [ "$1" = "org/repo" ]; }
+    arm_missing_auto_merge() {
+        printf '%s %s\n' "$1" "$2" >> "${TEST_TMP}/arm_log"
+        return 0
+    }
+    invoke_claude() {
+        printf 'called\n' >> "${TEST_TMP}/claude_log"
+        printf '12345678-1234-1234-1234-123456789abc\n'
+    }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${TEST_TMP}/arm_log")" = "5 org/repo" ]
+    [[ "${output}" == *"PR #5 in org/repo: auto-merge armed after missing auto-merge"* ]]
+    [[ "${output}" != *"settled"* ]]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+}
+
+@test "main keeps the #1479 settled fallback, with no arm, for a direct PR on a repo that does not allow auto-merge (#1798)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"1111111111111111111111111111111111111111","comments":[],"reviews":[],"statusCheckRollup":[],"autoMergeRequest":null,"reviewDecision":"REVIEW_REQUIRED"}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json() { printf 'fp-same\n'; }
+    load_pr_fingerprint() { printf 'fp-same\n'; }
+    pr_review_pipeline_finished_without_auto_merge() { return 0; }
+    repo_allows_auto_merge() { return 1; }
+    arm_missing_auto_merge() {
+        printf 'armed\n' >> "${TEST_TMP}/arm_log"
+        return 0
+    }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/arm_log" ]
+    [[ "${output}" == *"PR #5 in org/repo: settled (ready to merge, nothing failed/pending) — no agent needed"* ]]
+}
+
+@test "main defers a direct PR whose checks are pending without arming a missing auto-merge (#1798)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"1111111111111111111111111111111111111111","comments":[],"reviews":[],"statusCheckRollup":[{"isRequired":true,"status":"IN_PROGRESS"}],"autoMergeRequest":null,"reviewDecision":"REVIEW_REQUIRED"}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    pr_review_pipeline_finished_without_auto_merge() { return 0; }
+    repo_allows_auto_merge() { return 0; }
+    arm_missing_auto_merge() {
+        printf 'armed\n' >> "${TEST_TMP}/arm_log"
+        return 0
+    }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #5 in org/repo: CI checks pending — deferring"* ]]
+    [ ! -f "${TEST_TMP}/arm_log" ]
+}
+
+@test "main leaves a direct PR whose auto-merge is already armed settled, with no arm (#1798)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"1111111111111111111111111111111111111111","comments":[],"reviews":[],"statusCheckRollup":[],"autoMergeRequest":{"enabledAt":"now"},"reviewDecision":"REVIEW_REQUIRED"}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json() { printf 'fp-same\n'; }
+    load_pr_fingerprint() { printf 'fp-same\n'; }
+    repo_allows_auto_merge() { return 0; }
+    arm_missing_auto_merge() {
+        printf 'armed\n' >> "${TEST_TMP}/arm_log"
+        return 0
+    }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/arm_log" ]
+    [[ "${output}" == *"PR #5 in org/repo: settled (ready to merge, nothing failed/pending) — no agent needed"* ]]
+}
+
+@test "main does not call a direct PR settled when arming its missing auto-merge fails, so the agent finalises it (#1798)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"1111111111111111111111111111111111111111","comments":[],"reviews":[],"statusCheckRollup":[],"autoMergeRequest":null,"reviewDecision":"REVIEW_REQUIRED"}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    pr_review_pipeline_finished_without_auto_merge() { return 0; }
+    repo_allows_auto_merge() { return 0; }
+    arm_missing_auto_merge() { return 1; }
+    invoke_claude() {
+        printf 'called\n' >> "${TEST_TMP}/claude_log"
+        printf '12345678-1234-1234-1234-123456789abc\n'
+    }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #5 in org/repo: could not arm the missing auto-merge — not settled"* ]]
+    [[ "${output}" != *"settled (ready to merge"* ]]
+    [ -f "${TEST_TMP}/claude_log" ]
+}
+
+@test "main arms a missing auto-merge on a pivot PR at Human Review when the repo allows auto-merge (#1798)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"PR title","body":"","isDraft":false,"labels":[],"headRefOid":"1111111111111111111111111111111111111111","comments":[],"reviews":[],"statusCheckRollup":[],"autoMergeRequest":null,"reviewDecision":"REVIEW_REQUIRED"}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json() { printf 'fp-same\n'; }
+    load_pr_fingerprint() { printf 'fp-same\n'; }
+    fingerprint_issue_json() { printf 'issue-fp-same\n'; }
+    load_issue_fingerprint() { printf 'issue-fp-same\n'; }
+    pr_review_pipeline_finished_without_auto_merge() { return 0; }
+    repo_allows_auto_merge() { return 0; }
+    arm_missing_auto_merge() {
+        printf '%s %s\n' "$1" "$2" >> "${TEST_TMP}/arm_log"
+        return 0
+    }
+    invoke_claude() {
+        printf 'called\n' >> "${TEST_TMP}/claude_log"
+        printf '12345678-1234-1234-1234-123456789abc\n'
+    }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${TEST_TMP}/arm_log")" = "99 org/repo" ]
+    [[ "${output}" == *"PR #99 in org/repo: auto-merge armed after missing auto-merge"* ]]
+    [[ "${output}" != *"settled"* ]]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+}
+
 @test "main does not treat a direct PR as settled when autoMergeRequest is null and the board fallback doesn't match either (#1479)" {
     setup_main_mocks
     fetch_all_priorities() {
