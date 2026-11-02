@@ -76,7 +76,7 @@ teardown() {
     allow_sudo
     main
 
-    [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/hooks/enforce-git-dash-c")" = "755" ]
+    [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/hooks/enforce-git-policy")" = "755" ]
     [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/hooks/enforce-allowed-dirs")" = "755" ]
     [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/hooks/command-allowlist")" = "444" ]
     [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/hooks/allowed-dirs")" = "444" ]
@@ -134,7 +134,7 @@ teardown() {
     main
 
     grep -qxF "install -o root -g root -d -m 0755 ${CLAUDE_MANAGED_DIR} ${CLAUDE_MANAGED_DIR}/hooks ${CLAUDE_MANAGED_DIR}/mcp" "${SUDO_LOG}"
-    grep -qxF "install -o root -g root -m 0755 ${SOURCE_HOOKS_DIR}/enforce-git-dash-c ${CLAUDE_MANAGED_DIR}/hooks/enforce-git-dash-c" "${SUDO_LOG}"
+    grep -qxF "install -o root -g root -m 0755 ${SOURCE_HOOKS_DIR}/enforce-git-policy ${CLAUDE_MANAGED_DIR}/hooks/enforce-git-policy" "${SUDO_LOG}"
     grep -qxF "install -o root -g root -m 0444 ${SOURCE_HOOKS_DIR}/command-allowlist ${CLAUDE_MANAGED_DIR}/hooks/command-allowlist" "${SUDO_LOG}"
     grep -qxF "install -o root -g root -m 0444 ${SOURCE_MANAGED_SETTINGS} ${CLAUDE_MANAGED_DIR}/managed-settings.json" "${SUDO_LOG}"
     run grep -vc '^install -o root -g root ' "${SUDO_LOG}"
@@ -146,7 +146,7 @@ teardown() {
     run main
     [ "${status}" -eq 0 ]
     [ ! -e "${CLAUDE_MANAGED_DIR}/managed-settings.json" ]
-    [ ! -e "${CLAUDE_MANAGED_DIR}/hooks/enforce-git-dash-c" ]
+    [ ! -e "${CLAUDE_MANAGED_DIR}/hooks/enforce-git-policy" ]
 }
 
 @test "when sudo is declined, main asks once, prints every root install command and still installs the user settings" {
@@ -155,7 +155,7 @@ teardown() {
     [ "$(wc -l < "${SUDO_LOG}")" -eq 1 ]
     [[ "${output}" == *'no guardrails are active until you run:'* ]]
     [[ "${output}" == *"sudo install -o root -g root -m 0444 ${SOURCE_MANAGED_SETTINGS} ${CLAUDE_MANAGED_DIR}/managed-settings.json"* ]]
-    [[ "${output}" == *"sudo install -o root -g root -m 0755 ${SOURCE_HOOKS_DIR}/enforce-git-dash-c ${CLAUDE_MANAGED_DIR}/hooks/enforce-git-dash-c"* ]]
+    [[ "${output}" == *"sudo install -o root -g root -m 0755 ${SOURCE_HOOKS_DIR}/enforce-git-policy ${CLAUDE_MANAGED_DIR}/hooks/enforce-git-policy"* ]]
     diff "${SOURCE_USER_SETTINGS}" "${HOME}/.claude/settings.json"
 }
 
@@ -171,12 +171,12 @@ teardown() {
 @test "when sudo is declined, an existing settings.json and the old hook symlinks are left as they were" {
     mkdir -p "${HOME}/.claude/hooks"
     printf '{"permissions":{"deny":["Bash(rm *)"]}}\n' > "${HOME}/.claude/settings.json"
-    ln -s "${SOURCE_HOOKS_DIR}/enforce-git-dash-c" "${HOME}/.claude/hooks/enforce-git-dash-c"
+    ln -s "${SOURCE_HOOKS_DIR}/enforce-git-policy" "${HOME}/.claude/hooks/enforce-git-policy"
     run main
     [ "${status}" -eq 0 ]
     [ "$(cat "${HOME}/.claude/settings.json")" = '{"permissions":{"deny":["Bash(rm *)"]}}' ]
     [ ! -e "${HOME}/.claude/settings.json.bak" ]
-    [ -L "${HOME}/.claude/hooks/enforce-git-dash-c" ]
+    [ -L "${HOME}/.claude/hooks/enforce-git-policy" ]
     [[ "${output}" == *"Left ${HOME}/.claude/settings.json and ${HOME}/.claude/hooks as they were"* ]]
 }
 
@@ -484,7 +484,7 @@ installed_mcp_names() {
 @test "stale ~/.claude/hooks symlinks into the checkout are removed, anything else there is kept" {
     allow_sudo
     mkdir -p "${HOME}/.claude/hooks" "${TEST_TMP}/elsewhere"
-    ln -s "${SOURCE_HOOKS_DIR}/enforce-git-dash-c" "${HOME}/.claude/hooks/enforce-git-dash-c"
+    ln -s "${SOURCE_HOOKS_DIR}/enforce-git-policy" "${HOME}/.claude/hooks/enforce-git-policy"
     ln -s "${SOURCE_HOOKS_DIR}/allowed-dirs" "${HOME}/.claude/hooks/allowed-dirs"
     printf '%s\n' "${HOME}/work" > "${HOME}/.claude/hooks/allowed-dirs.local"
     printf 'x' > "${TEST_TMP}/elsewhere/mine"
@@ -492,11 +492,11 @@ installed_mcp_names() {
 
     run main
     [ "${status}" -eq 0 ]
-    [ ! -e "${HOME}/.claude/hooks/enforce-git-dash-c" ]
+    [ ! -e "${HOME}/.claude/hooks/enforce-git-policy" ]
     [ ! -L "${HOME}/.claude/hooks/allowed-dirs" ]
     [ -f "${HOME}/.claude/hooks/allowed-dirs.local" ]
     [ -L "${HOME}/.claude/hooks/mine" ]
-    [[ "${output}" == *"Removed stale symlink ${HOME}/.claude/hooks/enforce-git-dash-c"* ]]
+    [[ "${output}" == *"Removed stale symlink ${HOME}/.claude/hooks/enforce-git-policy"* ]]
 }
 
 # --- allowed-dirs.local --------------------------------------------------------
@@ -588,7 +588,7 @@ installed_mcp_names() {
 
     run jq empty "${HOME}/.claude/settings.json"
     [ "${status}" -eq 0 ]
-    diff "${SOURCE_HOOKS_DIR}/enforce-git-dash-c" "${CLAUDE_MANAGED_DIR}/hooks/enforce-git-dash-c"
+    diff "${SOURCE_HOOKS_DIR}/enforce-git-policy" "${CLAUDE_MANAGED_DIR}/hooks/enforce-git-policy"
 }
 
 # --- the shipped managed settings ------------------------------------------------

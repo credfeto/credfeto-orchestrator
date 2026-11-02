@@ -657,7 +657,7 @@ assert_blocked() {
     assert_blocked "find ${ROOT} -files0-from ${OUTSIDE}/list"
 }
 
-@test "a git call with no -C is checked against the hook's cwd, since enforce-git-dash-c auto-corrects it to -C \$PWD" {
+@test "a git call with no -C is checked against the hook's cwd, since enforce-git-policy auto-corrects it to -C \$PWD" {
     assert_allowed "git status"
     assert_blocked "git status" 'implicit -C' "${OUTSIDE}"
     assert_blocked "git -c color.ui=false log" '' "${OUTSIDE}"

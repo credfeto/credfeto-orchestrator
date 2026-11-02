@@ -3,7 +3,7 @@
 # `fetch`) unless git identity and GPG signing are correctly configured.
 # The die() helper is intentionally minimal (not the shell-scripts.examples.md
 # die()/info() convention) — this script only ever needs a single stderr
-# message plus a non-zero exit, matching its sibling enforce-git-dash-c.
+# message plus a non-zero exit, matching its sibling enforce-git-policy.
 # Exit 2 = blocked, 0 = allowed.
 
 die() {

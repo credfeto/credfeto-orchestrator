@@ -212,7 +212,7 @@ run_hook_enter_worktree() {
     [ "${status}" -eq 0 ]
 }
 
-@test "eval wrapping a worktree add command is opaque to this hook (eval is already blocked upstream by enforce-git-dash-c)" {
+@test "eval wrapping a worktree add command is opaque to this hook (eval is already blocked upstream by enforce-git-policy)" {
     run_hook 'eval "git worktree add ../foo"'
     [ "${status}" -eq 0 ]
 }
