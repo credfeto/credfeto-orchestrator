@@ -1004,7 +1004,11 @@ precheck_log_tail() {
 # prepare_claude_container_args and the run happen in a subshell, so its EXIT trap removes the
 # scratch directory and secrets as soon as the check ends (but leaves the ssh-agent running), and
 # a die in there ends only the check.
-# Status: timeout (exit 124), error (no marker in the log), pass (exit 0) or fail.
+# After any non-zero exit the pre-check container is removed if it still exists (best effort, with
+# a warning when that fails), so the agent launch that follows never meets it (#1821): a run
+# that outlives its limit and the 60-second grace is SIGKILLed, and podman leaves it running.
+# Status: timeout (exit 124, or 137 when timeout had to SIGKILL it), error (no marker in the
+# log), pass (exit 0) or fail.
 run_precommit_precheck() {
     local item_type="$1" item_id="$2" log_file="$3"
     local container_name="orchestrator-${OWNER}" owner_token podman_exit=0
@@ -1034,11 +1038,15 @@ run_precommit_precheck() {
             podman "${PODMAN_RUN_ARGS[@]}" "${ORCHESTRATOR_IMAGE}" --version \
             < /dev/null > "${log_file}" 2>&1 \
             || run_exit=$?
-        [ "${run_exit}" -eq 124 ] && { podman rm -f "${container_name}" > /dev/null 2>&1 || true; }
         exit "${run_exit}"
     ) || podman_exit=$?
 
-    if [ "${podman_exit}" -eq 124 ]; then
+    if [ "${podman_exit}" -ne 0 ] && podman container exists "${container_name}" > /dev/null 2>&1; then
+        podman rm -f "${container_name}" > /dev/null 2>&1 \
+            || warn "Failed to remove the pre-check container ${container_name} (pre-check exit ${podman_exit}); the agent launch may find it still there"
+    fi
+
+    if [ "${podman_exit}" -eq 124 ] || [ "${podman_exit}" -eq 137 ]; then
         PRECHECK_STATUS="timeout"
     elif ! grep -qF "${PRECHECK_START_MARKER}" "${log_file}" 2> /dev/null; then
         PRECHECK_STATUS="error"
