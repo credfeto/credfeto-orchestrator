@@ -506,6 +506,58 @@ load oneshot_helper
     [[ "${output}" == *"search. ${sentence} If that form is also denied"* ]]
 }
 
+# --- build_pr_claude_md dependency-PR FIRST COMMAND step (#1800) -------------------------------
+
+@test "build_pr_claude_md's dependency-PR prompt starts with cfwf pr status for the real repo and PR, with a board (#1800)" {
+    REPO_FULL="credfeto/example-repo"
+    _WF_PROJECT_ID="PVT_pr_proj"
+    run build_pr_claude_md 1234 "/resolved/.ai-instructions" "CLEAN" "depends/x" "" "" "true"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"dependency update PR"* ]]
+    [[ "${output}" == *$'\n'"1. FIRST COMMAND (MANDATORY): read this PR's whole state."$'\n'"   - Start the session with exactly this command, as its own Bash call: cfwf pr status --repo credfeto/example-repo --pr 1234"$'\n'* ]]
+    [[ "${output}" == *$'\n'"     It prints the PR metadata, the Workflow board status"* ]]
+    [[ "${output}" == *"Its exit code follows cfwf pr checks: 0 every required check passed, 3 at least one failed, 4 at least one pending, 5 no checks yet."* ]]
+    [[ "${output}" == *"   - Run one cfwf command per Bash call, with no \`;\`, \`&&\`, \`|\`, \`echo \$?\` or redirection around it, and read the exit code from the tool result. A compound command containing cfwf is refused in unattended runs and ends the session."* ]]
+    [[ "${output}" == *"   Its exit code is the CI verdict step 4 uses; do NOT run a separate cfwf pr checks call."$'\n'"2. Assign yourself: cfwf pr edit --repo credfeto/example-repo --pr 1234 --assign-self"* ]]
+    [[ "${output}" == *"4. Decide from the exit code of step 1's cfwf pr status (0 every required check passed; 3 at least one failed; 4 none failed and at least one is pending; 5 no checks yet, treat as pending)"* ]]
+    [[ "${output}" == *"auto-merge is already enabled (the auto-merge line of step 1's cfwf pr status reads on)"* ]]
+    # The state comes from cfwf pr status alone: no separate checks call is prescribed.
+    [[ "${output}" != *"cfwf pr checks --repo credfeto/example-repo"* ]]
+}
+
+@test "build_pr_claude_md's dependency-PR prompt starts with cfwf pr status for the real repo and PR, without a board (#1800)" {
+    REPO_FULL="credfeto/example-repo"
+    _WF_PROJECT_ID=""
+    run build_pr_claude_md 1234 "/resolved/.ai-instructions" "CLEAN" "depends/x" "" "" "true"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"Workflow board: this repository has a Workflow board"* ]]
+    [[ "${output}" == *$'\n'"1. FIRST COMMAND (MANDATORY): read this PR's whole state."$'\n'"   - Start the session with exactly this command, as its own Bash call: cfwf pr status --repo credfeto/example-repo --pr 1234"$'\n'* ]]
+    [[ "${output}" == *"   - Run one cfwf command per Bash call"* ]]
+    [[ "${output}" != *"cfwf pr checks --repo credfeto/example-repo"* ]]
+    # Step 1 comes before every other step.
+    local before_first="${output%%1. FIRST COMMAND (MANDATORY)*}"
+    local before_assign="${output%%2. Assign yourself*}"
+    [ "${#before_first}" -lt "${#before_assign}" ]
+}
+
+@test "_build_pr_first_command_rule is the one FIRST COMMAND text in both PR prompts (#1800)" {
+    REPO_FULL="credfeto/example-repo"
+    local flag rule line
+    for flag in "" "PVT_pr_proj"; do
+        _WF_PROJECT_ID="${flag}"
+        rule=$(_build_pr_first_command_rule 1234)
+        [[ "${rule}" == "- Start the session with exactly this command, as its own Bash call: cfwf pr status --repo credfeto/example-repo --pr 1234"$'\n'* ]]
+        run build_pr_claude_md 1234 "/resolved/.ai-instructions" "CLEAN" "feat/x" "" "" "false"
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == *"FIRST COMMAND (MANDATORY):"$'\n'"${rule}"$'\n'* ]]
+        run build_pr_claude_md 1234 "/resolved/.ai-instructions" "CLEAN" "depends/x" "" "" "true"
+        [ "${status}" -eq 0 ]
+        while IFS= read -r line; do
+            [[ "${output}" == *$'\n'"   ${line}"$'\n'* ]]
+        done <<< "${rule}"
+    done
+}
+
 # --- unaddressed trusted comment text for the PR prompt --------------------------------------------
 
 @test "pr_json_unaddressed_trusted_comments_text quotes only trusted, non-orchestrator comments newer than the marker" {
