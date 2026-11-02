@@ -26,6 +26,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - shell-tests no longer depends on GNU coreutils' install error wording, so it passes on ubuntu-26.04 runners with uutils coreutils (#1879)
 ### Changed
 - The default `CLAUDE_CODE_AUTO_COMPACT_WINDOW` is now 160000 (was 100000). A session starts with about 60k tokens of fixed context, so at 100k it had about 7k tokens of working room before auto-compaction, and sessions compacted within a few turns and could end with "Autocompact is thrashing". The environment override is unchanged (#1866)
+- TBD - to be finalized after review
 ### Deprecated
 ### Removed
 ### Deployment Changes
