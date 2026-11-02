@@ -69,8 +69,8 @@
 # allowed set, so no per-mechanism exclusion list is needed or maintained.
 #
 # Parses the command with shfmt (mvdan/sh) and walks the resulting AST, same
-# approach as the sibling enforce-git-dash-c/block-git-worktree hooks (see
-# enforce-git-dash-c's header for the full rationale) - text/regex scanning
+# approach as the sibling enforce-git-policy/block-git-worktree hooks (see
+# enforce-git-policy's header for the full rationale) - text/regex scanning
 # for a hostname would miss obfuscated forms and false-positive on unrelated
 # text, so this only inspects actual ssh call expressions. Word extraction
 # uses a two-stage, delimiter-collision-free transport (base64-encode each
