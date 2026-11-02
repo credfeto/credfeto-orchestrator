@@ -26,7 +26,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - shell-tests no longer depends on GNU coreutils' install error wording, so it passes on ubuntu-26.04 runners with uutils coreutils (#1879)
 ### Changed
 - The default `CLAUDE_CODE_AUTO_COMPACT_WINDOW` is now 160000 (was 100000). A session starts with about 60k tokens of fixed context, so at 100k it had about 7k tokens of working room before auto-compaction, and sessions compacted within a few turns and could end with "Autocompact is thrashing". The environment override is unchanged (#1866)
-- TBD - to be finalized after review
+- The enforce-git-dash-c hook and its bats test are renamed to enforce-git-policy, with all references updated, so the name reflects everything the hook enforces (#1678)
 ### Deprecated
 ### Removed
 ### Deployment Changes
@@ -66,7 +66,6 @@ Releases that have at least been deployed to staging, BUT NOT necessarily releas
 - Container image vulnerability scans (trivy-scan) now list each finding (CVE, severity, package, installed and fixed version) in the build log and as annotations, write a findings table to the job summary, and post one comment per image on the PR, instead of only failing with "exit code 1"; the CRITICAL gate and the code scanning upload are unchanged (#1729)
 - `cfwf pr hand-off --repo <owner/repo> --pr <n> --body-file <file|->` hands a pull request off to human review in one call, in a fixed order: Human Review on the board, ready for review, a review record naming the head it read (`### AI Review Loop: reviewed <sha>`), then merge-commit auto-merge pinned to that head (never `--admin`). It refuses (exit 8, nothing written) a pull request that is not open, is Blocked or On Hold, or whose required checks are not green, and defers auto-merge (exit 7) until every check has a result from after the pull request was marked ready. Marking ready and enabling auto-merge are internal helpers, not agent commands (#1601, #1590, #1591)
 - `cfwf pr take-back --repo <owner/repo> --pr <n> --body-file <file|->` takes a pull request back from human review before new work is added to it, in a fixed order: auto-merge off (only when it is on; a failure stops before anything else), back to a draft, Development on the board, then a comment from the body file saying why. Each step is idempotent, a pull request that is not open is refused (exit 8, nothing written), and a failure part way names the steps already done (#1602)
-- TBD - to be finalized after review
 - cfwf advisory view: look up a global security advisory by its GHSA id, printing its severity, summary, published and withdrawn times and each affected package with its vulnerable range and first patched version (#1746)
 - cfwf issue reopen, pr close and pr reopen to change an issue's or the agent's own pull request's state without merging, with an optional checked comment first (#1762)
 - cfwf issue comments to read an issue's or pull request's top-level comments with their bodies, filtered by --since and --author, capped and count-checked (#1764)
