@@ -16,7 +16,7 @@
 # different route.
 #
 # Parses with shfmt (mvdan/sh) and walks the resulting AST, same approach as
-# the sibling block-git-worktree/enforce-git-dash-c (see those scripts'
+# the sibling block-git-worktree/enforce-git-policy (see those scripts'
 # header comments for the full rationale) — text/regex scanning for `tool
 # install`/`tool-manifest` would miss obfuscated forms and false-positive on
 # unrelated text, so this only inspects the subcommand position of an actual
