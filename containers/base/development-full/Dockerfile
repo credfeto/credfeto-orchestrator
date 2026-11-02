@@ -448,6 +448,12 @@ RUN set -e; \
         || { echo "FATAL sanity: cfwf-mcp-headers missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
     jq -e '.permissions.allow | index("mcp__cfwf__*")' /etc/claude-code/managed-settings.json >/dev/null \
         || { echo "FATAL sanity: managed-settings.json does not allow the cfwf MCP tools (mcp__cfwf__*)" >&2; exit 1; }; \
+    jq -e '(.permissions.deny | index("Bash(gh)") and index("Bash(gh *)")) and (.permissions.allow | index("Bash(cfwf *)")) and ([.permissions.allow[] | select(test("^Bash\\(([^ )]*/)?gh([ )*]|$)"))] | length == 0)' /etc/claude-code/managed-settings.json >/dev/null \
+        || { echo "FATAL sanity: managed-settings.json must deny raw gh (Bash(gh) and Bash(gh *)), allow no gh entry, and keep Bash(cfwf *) (#1805)" >&2; exit 1; }; \
+    cut -f1 /etc/claude-code/hooks/command-blocklist | grep -qxF gh \
+        || { echo "FATAL sanity: the hooks must block raw gh: it belongs on command-blocklist (#1805)" >&2; exit 1; }; \
+    ! grep -qE '^[[:space:]]*gh[[:space:]]' /etc/claude-code/hooks/command-allowlist \
+        || { echo "FATAL sanity: the hooks must block raw gh: it must not be on command-allowlist (#1805)" >&2; exit 1; }; \
     [ ! -e /etc/claude-code/hooks/allowed-dirs.local ] \
         || { echo "FATAL sanity: an allowed-dirs.local override must never be baked into the image" >&2; exit 1; }; \
     [ ! -e /etc/claude-code/hooks/secret-files.local ] \
