@@ -6994,7 +6994,7 @@ assert_sign_off() {
 
 @test "help for a command and its subcommand prints what that subcommand's -h prints, and the command's usage for a subcommand it does not know" {
     local pair spelling expected
-    for pair in "issue create" "issue view" "issue plan-status" "issue list" "issue search" "issue label-history" "issue add-sub-issue" "issue post-plan" "issue block" "body check" "pr checks" "pr ready-at" "pr auto-merge-at" "pr diff" "pr block" "comment add" "comment edit" "label create" "release view" "release list" "tag view"; do
+    for pair in "issue create" "issue view" "issue plan-status" "issue list" "issue search" "issue label-history" "issue add-sub-issue" "issue post-plan" "issue block" "body check" "pr checks" "pr ready-at" "pr auto-merge-at" "pr diff" "pr block" "pr post-merge-runs" "comment add" "comment edit" "label create" "release view" "release list" "tag view"; do
         # shellcheck disable=SC2086  # each pair is split into its two words on purpose
         run "${SCRIPT}" ${pair} -h
         [ "${status}" -eq 0 ]
@@ -9810,7 +9810,7 @@ read_once_asking_for() {
     run --separate-stderr "${SCRIPT}" pr
     [ "${status}" -eq 2 ]
     [ -z "${output}" ]
-    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, checks-wait, view, list, comments, reply, create, ready-at, status, auto-merge-at, diff, edit, hand-off, finalise-dependency, take-back, close, reopen, block, search)"* ]]
+    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, checks-wait, view, list, comments, reply, create, ready-at, status, auto-merge-at, diff, edit, hand-off, finalise-dependency, take-back, close, reopen, block, search, post-merge-runs)"* ]]
     [[ "${stderr}" == *"Usage: cfwf pr checks"*"Run 'cfwf pr view --help' for pr view"* ]]
 
     run --separate-stderr "${SCRIPT}" pr frobnicate
@@ -17169,4 +17169,240 @@ run_repo_file() {
     [ "${status}" -eq 0 ]
     grep -qxF -- '--version' "${GH_LOG}"
     grep -q '^api user' "${GH_LOG}"
+}
+
+# --- pr post-merge-runs (#1605) ---------------------------------------------------
+
+POST_MERGE_USAGE="Usage: cfwf pr post-merge-runs --repo <owner/repo> --pr <n>"
+POST_MERGE_PR=7
+POST_MERGE_SHA="${RUN_SHA}"
+
+# Writes the pull request POST_MERGE_PR as gh pr view answers it: the state $1 (MERGED), the merge
+# commit $2 (POST_MERGE_SHA, "" for none) and the base branch main, beside fields not asked for.
+write_post_merge_pr() {
+    jq -n --arg state "${1:-MERGED}" --arg sha "${2-${POST_MERGE_SHA}}" \
+        '{state: $state, mergeCommit: (if $sha == "" then null else {oid: $sha} end), baseRefName: "main",
+          headRefOid: "0000000000000000000000000000000000000000", title: "feat: a change"}' > "${GH_FIXTURES}/pr-view.json"
+}
+
+# Writes the run list answer for the merge commit on main: each argument is "id|workflow|status|conclusion|event",
+# created one minute apart in the order given, so the last is the newest.
+write_post_merge_runs() {
+    local row id workflow status conclusion event minute=0
+    local -a rows=()
+    for row in "$@"; do
+        IFS='|' read -r id workflow status conclusion event <<< "${row}"
+        rows+=("${id}|${workflow}|${status}|${conclusion}|${POST_MERGE_SHA}|main|${event}|2026-11-02T10:$(printf '%02d' "${minute}"):00Z")
+        minute=$((minute + 1))
+    done
+    write_run_list "${rows[@]}"
+}
+
+run_post_merge_runs() {
+    run --separate-stderr "${SCRIPT}" pr post-merge-runs --repo "${REPO}" --pr "${POST_MERGE_PR}" "$@"
+}
+
+# One expected run line: the fields given, joined with tabs.
+post_merge_line() {
+    local IFS=$'\t'
+    printf '%s' "$*"
+}
+
+post_merge_summary() {
+    printf 'summary\tpassed=%s failed=%s pending=%s merge=%s' "$1" "$2" "$3" "${POST_MERGE_SHA}"
+}
+
+@test "pr post-merge-runs passes (exit 0) when each workflow's run on the merge commit passed, a workflow_dispatch run included, in two reads with no event filter" {
+    write_post_merge_pr
+    write_post_merge_runs "21|build|completed|success|push" "22|lint|completed|skipped|push" \
+        "23|deploy|completed|success|workflow_dispatch" "24|docs|completed|neutral|push"
+    run_post_merge_runs
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    local expected
+    expected="$(post_merge_line 24 docs completed neutral push)"$'\n'
+    expected+="$(post_merge_line 23 deploy completed success workflow_dispatch)"$'\n'
+    expected+="$(post_merge_line 22 lint completed skipped push)"$'\n'
+    expected+="$(post_merge_line 21 build completed success push)"$'\n'
+    expected+="$(post_merge_summary 4 0 0)"
+    [ "${output}" = "${expected}" ]
+    [ "$(wc -l < "${GH_LOG}")" -eq 2 ]
+    [ "$(gh_line_of "pr view ${POST_MERGE_PR} --repo ${REPO} --json state,mergeCommit,baseRefName --jq ")" -eq 1 ]
+    [ "$(gh_line_of "run list --repo ${REPO} --branch=main --commit=${POST_MERGE_SHA} --all --limit 201 --json databaseId,workflowName,status,conclusion,headSha,headBranch,event,createdAt --jq ")" -eq 2 ]
+    [ "$(sed 's/--json [^ ]*//' "${GH_LOG}" | grep -cE -- "--event|event=")" -eq 0 ]
+}
+
+@test "pr post-merge-runs fails (exit 3) for a failure, and for a cancelled, timed out, action-required, stale or startup-failure run, as pr checks does" {
+    local conclusion
+    write_post_merge_pr
+    for conclusion in failure cancelled timed_out action_required stale startup_failure; do
+        write_post_merge_runs "21|build|completed|success|push" "22|test|completed|${conclusion}|workflow_dispatch" "23|lint|in_progress||push"
+        run_post_merge_runs
+        if [ "${status}" -ne 3 ]; then
+            echo "${conclusion}: ${status}" >&2
+            return 1
+        fi
+        [[ "${output}" == *$'\n'"$(post_merge_line 22 test completed "${conclusion}" workflow_dispatch)"$'\n'* ]]
+        [[ "${output}" == *$'\n'"$(post_merge_summary 1 1 1)" ]]
+    done
+}
+
+@test "pr post-merge-runs is pending (exit 4) when none failed and a run has no conclusion yet, printing - for it" {
+    write_post_merge_pr
+    write_post_merge_runs "21|build|completed|success|push" "22|deploy|queued||workflow_dispatch"
+    run_post_merge_runs
+    [ "${status}" -eq 4 ]
+    [ "${output}" = "$(post_merge_line 22 deploy queued - workflow_dispatch)"$'\n'"$(post_merge_line 21 build completed success push)"$'\n'"$(post_merge_summary 1 0 1)" ]
+}
+
+@test "pr post-merge-runs exits 5 with only the summary when the merge commit has no runs yet" {
+    write_post_merge_pr
+    write_post_merge_runs
+    run_post_merge_runs
+    [ "${status}" -eq 5 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "$(post_merge_summary 0 0 0)" ]
+}
+
+@test "pr post-merge-runs marks an older run cancelled by a newer run of its workflow superseded and does not count it" {
+    write_post_merge_pr
+    write_post_merge_runs "21|build|completed|cancelled|push" "22|lint|completed|success|push" "23|build|completed|success|workflow_dispatch"
+    run_post_merge_runs
+    [ "${status}" -eq 0 ]
+    local expected
+    expected="$(post_merge_line 23 build completed success workflow_dispatch)"$'\n'
+    expected+="$(post_merge_line 22 lint completed success push)"$'\n'
+    expected+="$(post_merge_line 21 build superseded cancelled push)"$'\n'
+    expected+="$(post_merge_summary 2 0 0)"
+    [ "${output}" = "${expected}" ]
+
+    # A newer run still running keeps the workflow pending, never failed by the run it replaced.
+    write_post_merge_runs "21|build|completed|cancelled|push" "23|build|in_progress||push"
+    run_post_merge_runs
+    [ "${status}" -eq 4 ]
+    [ "${output}" = "$(post_merge_line 23 build in_progress - push)"$'\n'"$(post_merge_line 21 build superseded cancelled push)"$'\n'"$(post_merge_summary 0 0 1)" ]
+
+    # A newer skipped run does not hide an older failure: the failure is judged, the skipped run is not counted.
+    write_post_merge_runs "21|build|completed|failure|push" "23|build|completed|skipped|push"
+    run_post_merge_runs
+    [ "${status}" -eq 3 ]
+    [ "${output}" = "$(post_merge_line 23 build superseded skipped push)"$'\n'"$(post_merge_line 21 build completed failure push)"$'\n'"$(post_merge_summary 0 1 0)" ]
+}
+
+@test "pr post-merge-runs refuses (exit 6) a pull request that is not merged, without listing runs, and exits 9 for a number that is no pull request" {
+    local state
+    for state in OPEN CLOSED; do
+        rm -f "${GH_LOG}"
+        write_post_merge_pr "${state}" ""
+        run_post_merge_runs
+        if [ "${status}" -ne 6 ]; then
+            echo "${state}: ${status}" >&2
+            return 1
+        fi
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: ${REPO}#${POST_MERGE_PR} is not merged" ]
+        [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
+    done
+
+    rm -f "${GH_LOG}"
+    printf 'GraphQL: Could not resolve to a PullRequest with the number of %s. (repository.pullRequest)\n' "${POST_MERGE_PR}" > "${GH_FIXTURES}/pr-view.fail"
+    run_post_merge_runs
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the pull request ${REPO}#${POST_MERGE_PR} was not found" ]
+    [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
+}
+
+@test "pr post-merge-runs exits 1 with nothing printed, never a verdict, when a read fails or answers what it does not expect" {
+    printf 'HTTP 502: Bad Gateway\n' > "${GH_FIXTURES}/pr-view.fail"
+    run_post_merge_runs
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read ${REPO}#${POST_MERGE_PR}: HTTP 502: Bad Gateway" ]
+    rm -f "${GH_FIXTURES}/pr-view.fail"
+
+    write_post_merge_pr MERGED ""
+    run_post_merge_runs
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: gh returned an unexpected result for ${REPO}#${POST_MERGE_PR}" ]
+
+    write_post_merge_pr
+    printf 'HTTP 502: Bad Gateway\n' > "${GH_FIXTURES}/run-list.fail"
+    run_post_merge_runs
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not list the runs of ${REPO}: HTTP 502: Bad Gateway" ]
+    rm -f "${GH_FIXTURES}/run-list.fail"
+
+    write_run_list "21|build|completed|failure|${MOVED_SHA}|main|push|2026-11-02T10:00:00Z"
+    run_post_merge_runs
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: gh returned an unexpected result for the runs of ${REPO}" ]
+
+    write_run_list "21|build|completed|failure|${POST_MERGE_SHA}|feat/x|push|2026-11-02T10:00:00Z"
+    run_post_merge_runs
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+
+    printf '201\n' > "${GH_FIXTURES}/run-list.out"
+    run_post_merge_runs
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the merge commit ${POST_MERGE_SHA} of ${REPO}#${POST_MERGE_PR} has more than 200 runs, so none is judged" ]
+}
+
+@test "pr post-merge-runs usage errors exit 2 with its usage on stderr and nothing on stdout, never echoing a value, before any gh call" {
+    local repo="--repo ${REPO}" args
+    local -a cases=(
+        "" "${repo}" "--pr 7" "${repo} --pr x" "${repo} --pr 0" "${repo} --pr -1" "${repo} --pr 7 --pr 7"
+        "--repo x --pr 7" "${repo} ${repo} --pr 7" "${repo} --pr 7 --sha ${RUN_SHA}" "${repo} --pr 7 --branch main"
+        "${repo} --pr 7 --event push" "${repo} --pr 7 --json state" "${repo} --pr 7 --jq ." "${repo} --pr 7 --field state"
+        "${repo} --pr 7 --limit 5" "${repo} --pr 7 extra" "${repo} --pr"
+    )
+    for args in "${cases[@]}"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run --separate-stderr "${SCRIPT}" pr post-merge-runs ${args}
+        if [ "${status}" -ne 2 ]; then
+            echo "accepted: ${args} (${status})" >&2
+            return 1
+        fi
+        [ -z "${output}" ]
+        if [[ "${stderr}" != "cfwf: "*$'\n\n'"${POST_MERGE_USAGE}"$'\n'* ]]; then
+            echo "usage: ${args}" >&2
+            return 1
+        fi
+    done
+    local secret="ghp_${RANDOM}abcdefghijklmnopqrstuvwxyz0123456789"
+    run_post_merge_runs "${secret}"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" != *"${secret}"* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "pr post-merge-runs help, from -h, --help and help, gives the usage, the rules, the output and every exit code; help pr and the general help point to it; none calls gh" {
+    local invocation
+    for invocation in "pr post-merge-runs -h" "pr post-merge-runs --help" "help pr post-merge-runs"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run --separate-stderr "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [ -z "${stderr}" ]
+        [[ "${output}" == "${POST_MERGE_USAGE}"$'\n'* ]]
+        [[ "${output}" == *"with no event filter, so a run started by a workflow_dispatch after"* ]]
+        [[ "${output}" == *"At most 200 runs are judged"* ]]
+        [[ "${output}" == *"  fail     failure, cancelled, timed_out, action_required, startup_failure, stale or any other"* ]]
+        [[ "${output}" == *"printed with the status superseded and its"$'\n'"own conclusion, and is not counted."* ]]
+        [[ "${output}" == *"  <run_id>  <workflow>  <status>  <conclusion>  <event>"$'\n'"  summary  passed=<a> failed=<b> pending=<c> merge=<sha>"* ]]
+        [[ "${output}" == *"Exit codes: 0 every workflow's run passed; 3 at least one failed; 4 none failed and at least one is"$'\n'"pending; 5 the merge commit has no runs yet"* ]]
+        [[ "${output}" == *$'\n'"6 the pull request is not merged, with \"cfwf: <owner/repo>#<n> is not merged\"; 9 the pull"$'\n'* ]]
+        [[ "${output}" != *"usage_"* ]]
+    done
+    run "${SCRIPT}" help pr
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *$'\n'"Run 'cfwf pr post-merge-runs --help' for pr post-merge-runs, which judges the Actions runs on a"$'\n'"merged pull request's merge commit, on its base branch."$'\n'* ]]
+    run "${SCRIPT}" help
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *$'\n'"  pr checks-wait           Wait for a PR's required checks to finish, up to a time limit (exit 0, 3, 4, 5 or 6)"$'\n'"  pr post-merge-runs       Judge the Actions runs on a merged PR's merge commit, on its base branch (exit 0, 3, 4, 5 or 6)"$'\n'* ]]
+    [ ! -f "${GH_LOG}" ]
 }
