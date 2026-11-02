@@ -211,7 +211,7 @@ claude_result_indicates_background_stall() {
 }
 
 # Parses and surfaces any permission_denials recorded in the Claude JSON result (#1328).
-# Confirmed live: a PreToolUse hook block (e.g. enforce-git-dash-c rejecting a bare
+# Confirmed live: a PreToolUse hook block (e.g. enforce-git-policy rejecting a bare
 # git fetch) populates this field independently of Claude Code's own permission system.
 # Since #1331, the container also runs under --permission-mode dontAsk (previously
 # --dangerously-skip-permissions, which bypassed that separate system entirely and so
