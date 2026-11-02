@@ -24,6 +24,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - oneshot: the AI Coverage phase (PHASE G) and the COVERAGE.md conflict step of the rebase notice now have Code Tester measure coverage with the build MCP coverage tool. The main session, which has no build or coverage tools, used to run raw test commands itself, which gave figures that didn't match the baseline (#1868).
 ### Changed
 - The default `CLAUDE_CODE_AUTO_COMPACT_WINDOW` is now 160000 (was 100000). A session starts with about 60k tokens of fixed context, so at 100k it had about 7k tokens of working room before auto-compaction, and sessions compacted within a few turns and could end with "Autocompact is thrashing". The environment override is unchanged (#1866)
+- TBD - to be finalized after review
 ### Deprecated
 ### Removed
 ### Deployment Changes
