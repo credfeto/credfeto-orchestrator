@@ -10,6 +10,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 
 ## [Unreleased]
 ### Security
+- `cfwf workflow-status --set --status Approved` is refused in an AI agent session (CLAUDECODE=1) with exit 10, before any gh call: only a human moves an item to Approved (#1608)
 - Redact every token form cfwf refuses (sk-proj-, discordapp.com webhooks, Bearer, AWS key IDs, Slack, sk-ant) in notify-unit-failure and lib/discord using a shared pattern list - #1616
 - The enforce-allowed-dirs hook now checks that the script given to node resolves under .github/actions and denies node options that load code from outside the script (such as --require, --import, --loader and --inspect), and the Bash(node *..*) deny rule is removed from claude-managed-settings.json now that the hook covers node paths - #1540
 - Hooks: block git --config-env outright and make core.pager value check case-sensitive (#1529)
