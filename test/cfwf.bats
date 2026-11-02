@@ -8127,7 +8127,7 @@ rate_limit_lines() {
     run --separate-stderr "${SCRIPT}" repo
     [ "${status}" -eq 2 ]
     [ -z "${output}" ]
-    [[ "${stderr}" == "cfwf: repo needs a subcommand (view, collaborators, advisories, list, search)"$'\n'* ]]
+    [[ "${stderr}" == "cfwf: repo needs a subcommand (view, collaborators, advisories, list, search, file)"$'\n'* ]]
 
     run --separate-stderr "${SCRIPT}" auth
     [ "${status}" -eq 2 ]
@@ -15977,4 +15977,240 @@ assert_status_read_only() {
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
     [ "${stderr}" = "cfwf: the head of ${REPO}#42 changed while it was read, so nothing is printed: run it again" ]
+}
+
+# --- repo file (#1721) -----------------------------------------------------------
+
+REPO_FILE_USAGE="Usage: cfwf repo file --repo <owner/repo> --path <path> [--ref <branch|tag|sha>]"
+
+# Writes the answer to the contents read of the path $1 (as it goes in the API path): a file of type
+# $3 (file by default) whose bytes are the file $2, base64 encoded and broken into lines as GitHub
+# breaks them. An optional jq filter $4 changes it.
+write_repo_file() {
+    jq -n --arg content "$(base64 -w 60 < "$2")" --argjson size "$(wc -c < "$2")" --arg kind "${3:-file}" \
+        '{type: $kind, encoding: "base64", size: $size, name: "decoy-name", path: "decoy/path", sha: "0123", content: ($content + "\n")}' \
+        | jq "${4:-.}" | write_api "repos/${REPO}/contents/$1"
+}
+
+# Writes a directory listing for the path $1: each further argument is one entry, "<type> <name>".
+write_repo_directory() {
+    local path="$1" entry
+    shift
+    for entry in "$@"; do
+        jq -n --arg kind "${entry%% *}" --arg name "${entry#* }" '{type: $kind, name: $name, path: ("decoy/" + $name), size: 1}'
+    done | jq -s '.' | write_api "repos/${REPO}/contents/${path}"
+}
+
+# Runs repo file on REPO with the given options, its stdout kept byte for byte in TEST_TMP/out.
+run_repo_file() {
+    # The inner script is single-quoted on purpose: the bash it runs expands it.
+    # shellcheck disable=SC2016
+    run --separate-stderr bash -c '"$0" repo file --repo "$1" "${@:3}" > "$2"' "${SCRIPT}" "${REPO}" "${TEST_TMP}/out" "$@"
+}
+
+@test "repo file help is the same from -h, --help and help repo file, states the output, the refusals and the exit codes, is in help repo and the general help, and calls no gh" {
+    local spelling expected
+    run "${SCRIPT}" repo file -h
+    [ "${status}" -eq 0 ]
+    expected="${output}"
+    [[ "${expected}" == "${REPO_FILE_USAGE}"$'\n'* ]]
+    [[ "${expected}" == *"byte for byte"* ]]
+    [[ "${expected}" == *"<type>  <name>"* ]]
+    [[ "${expected}" == *"a file over"*"1048576 bytes (1 MiB)"* ]]
+    [[ "${expected}" == *"a directory of 1000 entries or more"* ]]
+    [[ "${expected}" == *"--json, --jq, --raw and --web are not options"* ]]
+    [[ "${expected}" == *"Exit codes: 0 printed; 8 refused; 9 the repository, the --path or the --ref was not found"* ]]
+    for spelling in "repo file --help" "help repo file" "-h repo file" "--help repo file"; do
+        # shellcheck disable=SC2086  # each spelling is split into its words on purpose
+        run "${SCRIPT}" ${spelling}
+        [ "${status}" -eq 0 ]
+        [ "${output}" = "${expected}" ] || { echo "${spelling} differs" >&2; return 1; }
+    done
+    run "${SCRIPT}" help repo
+    [[ "${output}" == *"Usage: cfwf repo search "*$'\n\n'"${REPO_FILE_USAGE}"$'\n'* ]]
+    run "${SCRIPT}" help
+    [[ "${output}" == *$'\n'"  repo search              Search an owner's repositories by words in their name or description, one line each"$'\n'"  repo file                Print a file's contents, or list a directory, at a branch, tag or commit (exit 8 refused, 9 not found)"$'\n'* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "repo file prints a text file on the default branch byte for byte, trailing newlines, a carriage return and UTF-8 kept, from one read of its percent-encoded path with no ref" {
+    printf 'first line\r\n\tsecond, caf\xc3\xa9 & 100%%\n\n\n' > "${TEST_TMP}/expected"
+    write_repo_file "docs/read%20me%26notes.md" "${TEST_TMP}/expected"
+    run_repo_file --path "docs/read me&notes.md"
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    cmp "${TEST_TMP}/out" "${TEST_TMP}/expected"
+    [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
+    [ "$(gh_call_count "api repos/${REPO}/contents/docs/read%20me%26notes.md --jq ")" -eq 1 ]
+    [ "$(gh_call_count "?ref=")" -eq 0 ]
+
+    # A file with no newline at its end gets none, and an empty file prints nothing.
+    printf 'no newline' > "${TEST_TMP}/expected"
+    write_repo_file "LICENSE" "${TEST_TMP}/expected"
+    run_repo_file --path LICENSE
+    [ "${status}" -eq 0 ]
+    cmp "${TEST_TMP}/out" "${TEST_TMP}/expected"
+    : > "${TEST_TMP}/expected"
+    write_repo_file "empty" "${TEST_TMP}/expected"
+    run_repo_file --path empty
+    [ "${status}" -eq 0 ]
+    [ ! -s "${TEST_TMP}/out" ]
+}
+
+@test "repo file reads a file at a branch, a tag or a commit, the ref percent-encoded in the query with each slash kept" {
+    local ref
+    printf 'at a ref\n' > "${TEST_TMP}/expected"
+    write_repo_file "src/main.c" "${TEST_TMP}/expected"
+    run_repo_file --path src/main.c --ref "feature/a+b"
+    [ "${status}" -eq 0 ]
+    cmp "${TEST_TMP}/out" "${TEST_TMP}/expected"
+    [ "$(gh_call_count "api repos/${REPO}/contents/src/main.c?ref=feature/a%2Bb --jq ")" -eq 1 ]
+    for ref in v4.2.2 0123456789abcdef0123456789abcdef01234567 HEAD; do
+        run_repo_file --path src/main.c --ref "${ref}"
+        [ "${status}" -eq 0 ] || { echo "${ref}: ${status}" >&2; return 1; }
+        cmp "${TEST_TMP}/out" "${TEST_TMP}/expected"
+        [ "$(gh_call_count "api repos/${REPO}/contents/src/main.c?ref=${ref} --jq ")" -eq 1 ]
+    done
+}
+
+@test "repo file lists a directory, one <type><TAB><name> line an entry sorted by name in the C locale, a forged name kept on one line" {
+    write_repo_directory "src" "file zeta.c" "dir Alpha" "symlink link" "submodule vendor" $'file bad\nforged\tfile'
+    run_repo_file --path src
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "$(cat "${TEST_TMP}/out")" = $'dir\tAlpha\nfile\tbad forged file\nsymlink\tlink\nsubmodule\tvendor\nfile\tzeta.c' ]
+    [ "$(wc -l < "${TEST_TMP}/out")" -eq 5 ]
+}
+
+@test "repo file refuses (exit 8, nothing printed) a binary file, an oversized one, one GitHub sends no content for, a long directory, a submodule and a symlink" {
+    printf 'PNG\000\001\002' > "${TEST_TMP}/binary"
+    write_repo_file "logo.png" "${TEST_TMP}/binary"
+    run_repo_file --path logo.png
+    [ "${status}" -eq 8 ]
+    [ ! -s "${TEST_TMP}/out" ]
+    [ "${stderr}" = "cfwf: the --path of ${REPO} holds a NUL byte (binary), so nothing is printed" ]
+
+    printf 'small\n' > "${TEST_TMP}/small"
+    write_repo_file "big.log" "${TEST_TMP}/small" file '.size = 1048577'
+    run_repo_file --path big.log
+    [ "${status}" -eq 8 ]
+    [ ! -s "${TEST_TMP}/out" ]
+    [ "${stderr}" = "cfwf: the --path of ${REPO} is 1048577 bytes, over the limit of 1048576, so nothing is printed" ]
+
+    write_repo_file "big.log" "${TEST_TMP}/small" file '.encoding = "none" | .content = "" | .size = 1000001'
+    run_repo_file --path big.log
+    [ "${status}" -eq 8 ]
+    [ "${stderr}" = "cfwf: the --path of ${REPO} is too large for GitHub to send its content, so nothing is printed" ]
+
+    jq -n '[range(1000) | {type: "file", name: ("f" + tostring)}]' | write_api "repos/${REPO}/contents/many"
+    run_repo_file --path many
+    [ "${status}" -eq 8 ]
+    [ ! -s "${TEST_TMP}/out" ]
+    [ "${stderr}" = "cfwf: the --path of ${REPO} is a directory of 1000 entries or more, which GitHub may have cut, so nothing is printed" ]
+
+    local kind
+    for kind in submodule symlink; do
+        write_repo_file "vendor" "${TEST_TMP}/small" "${kind}"
+        run_repo_file --path vendor
+        [ "${status}" -eq 8 ] || { echo "${kind}: ${status}" >&2; return 1; }
+        [ ! -s "${TEST_TMP}/out" ]
+        [ "${stderr}" = "cfwf: the --path of ${REPO} is a ${kind}, not a file or a directory, so nothing is printed" ]
+    done
+}
+
+@test "repo file exits 9 for a path or a ref that is not there, and for a repository that is not there, never naming the path or the ref" {
+    write_this_repository
+    run_repo_file --path no/such-file.md
+    [ "${status}" -eq 9 ]
+    [ ! -s "${TEST_TMP}/out" ]
+    [ "${stderr}" = "cfwf: the --path was not found in ${REPO} on its default branch" ]
+    [ "$(gh_line_of "api repos/${REPO} --jq .id")" -eq 2 ]
+
+    run_repo_file --path no/such-file.md --ref main
+    [ "${status}" -eq 9 ]
+    [ "${stderr}" = "cfwf: the --path was not found in ${REPO} at the --ref" ]
+
+    printf 'kept\n' > "${TEST_TMP}/small"
+    write_repo_file "README.md" "${TEST_TMP}/small"
+    fail_api "repos/${REPO}/contents/README.md" "gh: No commit found for the ref no-such-branch (HTTP 404)"
+    run_repo_file --path README.md --ref no-such-branch
+    [ "${status}" -eq 9 ]
+    [ ! -s "${TEST_TMP}/out" ]
+    [ "${stderr}" = "cfwf: the --ref was not found in ${REPO}" ]
+    [[ "${stderr}" != *no-such-branch* ]]
+
+    rm "$(api_fixture "repos/${REPO}").json"
+    run_repo_file --path README.md --ref no-such-branch
+    [ "${status}" -eq 9 ]
+    [ "${stderr}" = "cfwf: the repository ${REPO} was not found, or the caller cannot see it" ]
+}
+
+@test "repo file reports a failed read, or an answer that is not a file or a directory, as a runtime failure (exit 1), printing nothing" {
+    printf 'content\n' > "${TEST_TMP}/small"
+    fail_api "repos/${REPO}/contents/README.md" "gh: Bad Gateway (HTTP 502)"$'\n'"a second line"
+    run_repo_file --path README.md
+    [ "${status}" -eq 1 ]
+    [ ! -s "${TEST_TMP}/out" ]
+    [ "${stderr}" = "cfwf: could not read the --path of ${REPO}: gh: Bad Gateway (HTTP 502)" ]
+    rm "$(api_fixture "repos/${REPO}/contents/README.md").fail"
+
+    local filter
+    for filter in '.size = 99' '.content = "!!!not base64!!!"' '.encoding = "utf-8"' '.type = "dir"' 'del(.type)' '.size = "12"'; do
+        write_repo_file "README.md" "${TEST_TMP}/small" file "${filter}"
+        run_repo_file --path README.md
+        [ "${status}" -eq 1 ] || { echo "${filter}: ${status}" >&2; return 1; }
+        [ ! -s "${TEST_TMP}/out" ]
+        [ "${stderr}" = "cfwf: gh returned an unexpected result for the --path of ${REPO}" ]
+    done
+    jq -n '[{type: "blob", name: "x"}]' | write_api "repos/${REPO}/contents/src"
+    run_repo_file --path src
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: gh returned an unexpected result for the --path of ${REPO}" ]
+}
+
+@test "repo file usage errors exit 2 before any gh call, each with its own usage, never echoing a value" {
+    local long args
+    long=$(run_of a 4097)
+    local -a cases=(
+        "repo file"
+        "repo file --path README.md"
+        "repo file --repo ${REPO}"
+        "repo file --repo ${REPO} --path"
+        "repo file --repo ${REPO} --path README.md --ref"
+        "repo file --repo ${REPO} --path /etc/passwd"
+        "repo file --repo ${REPO} --path docs/"
+        "repo file --repo ${REPO} --path docs//x"
+        "repo file --repo ${REPO} --path ./x"
+        "repo file --repo ${REPO} --path docs/../../x"
+        "repo file --repo ${REPO} --path .."
+        "repo file --repo ${REPO} --path ${long}"
+        "repo file --repo ${REPO} --path a --path b"
+        "repo file --repo ${REPO} --path a --ref main --ref dev"
+        "repo file --repo ${REPO} --path a --ref a..b"
+        "repo file --repo ${REPO} --path a --ref refs/heads/x.lock"
+        "repo file --repo ${REPO} --path a --ref x?y"
+        "repo file --repo ${REPO} --path a --json content"
+        "repo file --repo ${REPO} --path a --jq .content"
+        "repo file --repo ${REPO} --path a --raw"
+        "repo file --repo ../x --path a"
+        "repo file --repo ${REPO} --path a stray"
+    )
+    for args in "${cases[@]}"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run --separate-stderr "${SCRIPT}" ${args}
+        [ "${status}" -eq 2 ] || { echo "accepted: ${args} (${status})" >&2; return 1; }
+        [ -z "${output}" ]
+        [[ "${stderr}" == "cfwf: "*$'\n\n'"${REPO_FILE_USAGE}"$'\n'* ]] || { echo "usage: ${args}" >&2; return 1; }
+    done
+    run --separate-stderr "${SCRIPT}" repo file --repo "${REPO}" --path ""
+    [ "${status}" -eq 2 ]
+    run --separate-stderr "${SCRIPT}" repo file --repo "${REPO}" --path $'a\nb'
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: invalid value for --path: it must not contain a control character"$'\n'* ]]
+    run --separate-stderr "${SCRIPT}" repo file --repo "${REPO}" --path a --ref $'main\xc2\x85'
+    [ "${status}" -eq 2 ]
+    run --separate-stderr "${SCRIPT}" repo file --repo "${REPO}" --path "secret-token-path" --ref "bad ref"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" != *"bad ref"* && "${stderr}" != *secret-token-path* ]]
+    [ ! -f "${GH_LOG}" ]
 }

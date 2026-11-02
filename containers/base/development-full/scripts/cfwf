@@ -83,6 +83,17 @@ readonly PR_FILES_LIMIT=3000
 # The largest diff pr diff prints, in bytes (1 MiB). A bigger one would not fit an agent's context,
 # and GitHub states no limit of its own, so it is refused whole rather than flooding the caller.
 readonly DIFF_BYTE_LIMIT=1048576
+# repo file: the largest file it prints, in bytes (1 MiB, as DIFF_BYTE_LIMIT), and the most entries
+# GitHub's contents API lists for a directory ("If the requested directory's contents exceed 1,000
+# entries, the API returns at most 1,000 files"), so a listing that long may be cut and is refused.
+readonly REPO_FILE_BYTE_LIMIT=1048576
+readonly REPO_FILE_ENTRY_LIMIT=1000
+# repo file: the longest --path, in characters.
+readonly REPO_FILE_PATH_LIMIT=4096
+# repo file: a file it will not print (binary, too large, or not a file) is refused as a body is:
+# the call must change. A repository, path or ref that is not there is not found, like any item.
+readonly REPO_FILE_REFUSED_EXIT="${BODY_REFUSED_EXIT}"
+readonly REPO_FILE_NOT_FOUND_EXIT=9
 # The body leak rules, as extended regular expressions matched byte by byte in the C locale.
 # NAME=value, where NAME is upper case and TOKEN, SECRET, KEY or PASSWORD is the whole of it or
 # follows an underscore (so MONKEY=banana passes), and the value, after an optional opening quote,
@@ -298,6 +309,8 @@ DESCRIPTION_FILE=""
 DESCRIPTION_PATH_TMP=""
 SCAN_TMP=""
 VALUE_TMP=""
+# repo file: the private file a file's decoded content is checked in before it is printed.
+REPO_FILE_TMP=""
 declare -gA REPOSITORY_VISIBILITY=()
 declare -gA PRIVATE_OWNERS=()
 PRIVATE_OWNERS_LOADED=""
@@ -321,11 +334,11 @@ cleanup() {
     if [ "${exit_status}" -ne 0 ] && [ -n "${TAKE_BACK_DONE:-}" ]; then
         printf 'cfwf: take-back steps done before the failure: %s\n' "${TAKE_BACK_DONE}" >&2
     fi
-    rm -f "${GH_ERR_FILE}" "${BODY_PATH_TMP}" "${DESCRIPTION_PATH_TMP}" "${SCAN_TMP}" "${VALUE_TMP}" "${HAND_OFF_RECORD_TMP:-}" "${LOG_TMP}" "${LOG_OUT_TMP}"
+    rm -f "${GH_ERR_FILE}" "${BODY_PATH_TMP}" "${DESCRIPTION_PATH_TMP}" "${SCAN_TMP}" "${VALUE_TMP}" "${HAND_OFF_RECORD_TMP:-}" "${LOG_TMP}" "${LOG_OUT_TMP}" "${REPO_FILE_TMP}"
 }
 
 # Creates a temporary file on first use and stores its path in the global variable named by $1
-# (GH_ERR_FILE, BODY_PATH_TMP, SCAN_TMP, VALUE_TMP, LOG_TMP or LOG_OUT_TMP), leaving one that is already set alone, so
+# (GH_ERR_FILE, BODY_PATH_TMP, SCAN_TMP, VALUE_TMP, LOG_TMP, LOG_OUT_TMP or REPO_FILE_TMP), leaving one that is already set alone, so
 # each is made at most once per run and the EXIT trap (cleanup) removes it. GH_ERR_FILE is the one
 # file gh's stderr is captured in: each caller reads it straight after its own gh call, so one file
 # serves them all.
@@ -364,6 +377,7 @@ Commands:
   repo advisories          List a repository's security advisories: GHSA id, severity, state and summary
   repo list                List an owner's repositories, sorted by name, archived ones left out unless asked for
   repo search              Search an owner's repositories by words in their name or description, one line each
+  repo file                Print a file's contents, or list a directory, at a branch, tag or commit (exit 8 refused, 9 not found)
   advisory view            Print a global security advisory and its affected packages by GHSA id (exit 9 when not found)
   auth status              Print the authenticated login, the host and the gh version, never a token
   branch required-checks   Print the checks a branch requires, from its protection and rulesets (exit 9 when not found)
@@ -1273,6 +1287,8 @@ usage_repo() {
     usage_repo_list
     printf '\n'
     usage_repo_search
+    printf '\n'
+    usage_repo_file
 }
 
 usage_repo_list() {
@@ -1331,6 +1347,41 @@ the exit code is still 0. No match prints nothing and exits 0.
 Exit codes: 0 searched, no match included; ${BODY_REFUSED_EXIT} the --text holds a token or a host path; ${OWNER_NOT_FOUND_EXIT} the
 owner was not found or cannot be searched; 1 a runtime failure, prefixed "cfwf:"; 2 a usage error,
 which names the rule --text broke but never its value.
+USAGE
+}
+
+usage_repo_file() {
+    cat << USAGE
+Usage: cfwf repo file --repo <owner/repo> --path <path> [--ref <branch|tag|sha>]
+
+Prints the contents of one file in a repository, or lists one directory, at a branch, a tag or a
+commit, from one read of GitHub's contents API. It only reads, and never looks at a working tree,
+so it is safe while another agent uses one (mid-rebase, say).
+
+--repo  Always required; never taken from the current directory.
+--path  Always required: the path from the repository's root, such as src/app/main.c. No leading
+        or trailing /, no empty, . or .. part, no control character, at most ${REPO_FILE_PATH_LIMIT} characters.
+--ref   A branch, a tag or a commit SHA: a name git allows for a branch or a tag. Without it the
+        repository's default branch is read.
+--json, --jq, --raw and --web are not options: the output has one fixed format.
+
+A file prints its contents exactly, byte for byte, and nothing else: no header, and no newline
+added or taken away. A symlink to a file in the repository prints that file, as GitHub follows it.
+
+A directory prints one line for each entry, sorted by name in the C locale, with no header:
+  <type>  <name>
+tab separated, type being file, dir, symlink or submodule. Each control character in a name (a tab
+or a newline included) is printed as a space, so a line is always one entry.
+
+Refused, printing nothing (exit ${REPO_FILE_REFUSED_EXIT}): a file holding a NUL byte (binary); a file over
+${REPO_FILE_BYTE_LIMIT} bytes (1 MiB), or one GitHub sends no content for; a directory of ${REPO_FILE_ENTRY_LIMIT} entries or more,
+which GitHub may have cut; a submodule, or a symlink GitHub does not follow. The file is never
+printed in part. The contents are the repository's, not filtered in any way, so read them as
+untrusted text.
+
+Exit codes: 0 printed; ${REPO_FILE_REFUSED_EXIT} refused; ${REPO_FILE_NOT_FOUND_EXIT} the repository, the --path or the --ref was not found, or
+the caller cannot see the repository (the message never names the path or the ref); 1 a runtime
+failure, such as a gh or network error, prefixed "cfwf:"; 2 a usage error.
 USAGE
 }
 
@@ -2648,6 +2699,7 @@ usage_for() {
         "repo advisories") usage_repo_advisories ;;
         "repo list") usage_repo_list ;;
         "repo search") usage_repo_search ;;
+        "repo file") usage_repo_file ;;
         advisory | "advisory view") usage_advisory_view ;;
         auth | "auth status") usage_auth ;;
         pr | "pr checks") usage_pr ;;
@@ -4891,7 +4943,7 @@ repo_advisories() {
 
 cmd_repo() {
     dispatch_subcommand repo view repo_view collaborators repo_collaborators advisories repo_advisories \
-        list repo_list search repo_search -- "$@"
+        list repo_list search repo_search file repo_file -- "$@"
 }
 
 # The exit code of repo list and repo search when the owner is not there.
@@ -5083,6 +5135,136 @@ workflow_list() {
         lines+=("${path}"$'\t'"${state}"$'\t'"${name:--}")
     done
     printf '%s\n' "${lines[@]}" | LC_ALL=C sort
+}
+
+REPO_FILE_PATH=""
+REPO_FILE_REF=""
+
+# Assigns the options of repo file: --repo, --path and --ref, each once. --path and --ref go in the
+# API path and query through branch_path, which percent-encodes every byte but a letter, a digit,
+# ., _, ~, - and /, so a . or .. part (refused here for --path, and by git for --ref) is the only
+# thing that could change the endpoint.
+assign_repo_file_option() {
+    local flag="$1" value="$2"
+    case "${flag}" in
+        --repo) assign_repository_option "${flag}" "${value}" ;;
+        --path)
+            assign_once REPO_FILE_PATH "${flag}"
+            [[ "/${value}/" != *"//"* && "/${value}/" != *"/./"* && "/${value}/" != *"/../"* ]] \
+                || usage_error "invalid value for ${flag}: it must be a path from the repository's root, with no leading or trailing /, and no empty, . or .. part"
+            if ! matches_pattern "${value}" '^[^[:cntrl:]]+$' || holds_control_character "${value}"; then
+                usage_error "invalid value for ${flag}: it must not contain a control character"
+            fi
+            [ "${#value}" -le "${REPO_FILE_PATH_LIMIT}" ] \
+                || usage_error "invalid value for ${flag}: it must be at most ${REPO_FILE_PATH_LIMIT} characters"
+            REPO_FILE_PATH="${value}"
+            ;;
+        --ref)
+            assign_once REPO_FILE_REF "${flag}"
+            if ! { valid_branch_name "${value}" || valid_tag_name "${value}"; } || holds_control_character "${value}"; then
+                usage_error "invalid value for ${flag}: it must be a branch name, a tag name or a commit SHA git allows, with no control character"
+            fi
+            REPO_FILE_REF="${value}"
+            ;;
+    esac
+}
+
+# The jq program of repo file. A directory, which the contents API gives as an array, is the line
+# directory, the number of entries, then a row for each, <type><TAB><name> made printable (an empty
+# one is refused by REPO_FILE_ENTRY_PATTERN), sorted by name (jq
+# compares strings by code point, which for UTF-8 is byte order, the C locale's). Anything else is
+# one row of its type, size and encoding (ROW_SEPARATOR between them, ending with end), then its
+# base64 content, which GitHub breaks into lines.
+# FIELDS_ROW_DEF is defined further down this file, so repo_file puts it in front of the program
+# when it runs.
+REPO_FILE_PROGRAM=' if type == "array" then "directory", (length | tostring),'
+REPO_FILE_PROGRAM+=' (sort_by(.name) | .[] | [.type, .name] | map(. // "" | tostring | printable) | join("\t"))'
+REPO_FILE_PROGRAM+=' else ([.type, .size, .encoding, "end"] | fields_row), (.content // "") end'
+readonly REPO_FILE_PROGRAM
+# A row of a directory listing: a type GitHub gives an entry, a tab and a name that is not empty.
+readonly REPO_FILE_ENTRY_PATTERN=$'^(file|dir|symlink|submodule)\t[^\t]+$'
+
+# Refuses the --path of REPO (exit REPO_FILE_REFUSED_EXIT) for the reason $1, printing nothing.
+repo_file_refused() {
+    printf 'cfwf: the --path of %s %s, so nothing is printed\n' "${REPO}" "$1" >&2
+    exit "${REPO_FILE_REFUSED_EXIT}"
+}
+
+# Ends a run whose read of the --path was answered 404 (or 422, no commit for the ref), which is how
+# GitHub answers a path or a ref that is not there, and a repository that is not there or that the
+# caller cannot see. The repository is read to tell them apart; each exits
+# REPO_FILE_NOT_FOUND_EXIT, and the message never names the path or the ref.
+repo_file_not_found() {
+    local error="${GH_ERROR}" where="on its default branch"
+    [ -z "${REPO_FILE_REF}" ] || where="at the --ref"
+    if ! api_read "could not read ${REPO}" "repos/${REPO}" .id; then
+        printf 'cfwf: the repository %s was not found, or the caller cannot see it\n' "${REPO}" >&2
+    elif [[ -n "${REPO_FILE_REF}" && "${error}" == *"No commit found"* ]]; then
+        printf 'cfwf: the --ref was not found in %s\n' "${REPO}" >&2
+    else
+        printf 'cfwf: the --path was not found in %s %s\n' "${REPO}" "${where}" >&2
+    fi
+    exit "${REPO_FILE_NOT_FOUND_EXIT}"
+}
+
+# Prints the directory listing in GH_OUTPUT, after its first line: the count, then the rows, every
+# one checked before any is printed.
+print_repo_directory() {
+    local count
+    GH_OUTPUT="${GH_OUTPUT#*$'\n'}"
+    count="${GH_OUTPUT%%$'\n'*}"
+    [[ "${count}" =~ ^[0-9]{1,9}$ ]] || die "gh returned an unexpected result for the --path of ${REPO}"
+    [ "${count}" -lt "${REPO_FILE_ENTRY_LIMIT}" ] \
+        || repo_file_refused "is a directory of ${REPO_FILE_ENTRY_LIMIT} entries or more, which GitHub may have cut"
+    take_checked_rows "${REPO_FILE_ENTRY_LIMIT}" "${REPO_FILE_ENTRY_PATTERN}" \
+        "gh returned an unexpected result for the --path of ${REPO}" "gh returned an unexpected result for the --path of ${REPO}"
+    print_counted_rows
+}
+
+# Prints the file in GH_OUTPUT: its first row says its type, size and encoding, and the rest is its
+# base64 content. The content is decoded into a private file, which must hold exactly size bytes and
+# no NUL, and only then printed, whole and as it is: bash cannot hold a NUL or a trailing newline,
+# so the bytes never pass through a variable.
+print_repo_file() {
+    local first kind size encoding end content="" unexpected="gh returned an unexpected result for the --path of ${REPO}"
+    first="${GH_OUTPUT%%$'\n'*}"
+    [[ "${GH_OUTPUT}" != *$'\n'* ]] || content="${GH_OUTPUT#*$'\n'}"
+    IFS="${ROW_SEPARATOR}" read -r kind size encoding end <<< "${first}"
+    [ "${end}" = end ] || die "${unexpected}"
+    case "${kind}" in
+        file) ;;
+        symlink | submodule) repo_file_refused "is a ${kind}, not a file or a directory" ;;
+        *) die "${unexpected}" ;;
+    esac
+    [[ "${size}" =~ ^[0-9]{1,15}$ ]] || die "${unexpected}"
+    [ "${size}" -le "${REPO_FILE_BYTE_LIMIT}" ] \
+        || repo_file_refused "is ${size} bytes, over the limit of ${REPO_FILE_BYTE_LIMIT}"
+    # GitHub sends no content for a file over 1 MB, with the encoding none.
+    [ "${encoding}" != none ] || repo_file_refused "is too large for GitHub to send its content"
+    [ "${encoding}" = base64 ] || die "${unexpected}"
+    ensure_temp_file REPO_FILE_TMP
+    printf '%s' "${content}" | base64 -d > "${REPO_FILE_TMP}" 2> /dev/null || die "${unexpected}"
+    [ "$(wc -c < "${REPO_FILE_TMP}")" -eq "${size}" ] || die "${unexpected}"
+    [ "$(tr -d '\000' < "${REPO_FILE_TMP}" | wc -c)" -eq "${size}" ] || repo_file_refused "holds a NUL byte (binary)"
+    cat "${REPO_FILE_TMP}"
+}
+
+# Prints the file, or lists the directory, at REPO_FILE_PATH of REPO, at REPO_FILE_REF or, with none,
+# the default branch, from one read of the contents API.
+repo_file() {
+    local endpoint
+    parse_command_options assign_repo_file_option "--repo --path --ref" "" "$@"
+    require REPO --repo
+    require REPO_FILE_PATH --path
+    require_gh
+    endpoint="repos/${REPO}/contents/$(branch_path "${REPO_FILE_PATH}")"
+    [ -z "${REPO_FILE_REF}" ] || endpoint+="?ref=$(branch_path "${REPO_FILE_REF}")"
+    api_read "could not read the --path of ${REPO}" "${endpoint}" "${FIELDS_ROW_DEF}${REPO_FILE_PROGRAM}" || repo_file_not_found
+    if [ "${GH_OUTPUT%%$'\n'*}" = directory ]; then
+        print_repo_directory
+    else
+        print_repo_file
+    fi
 }
 
 cmd_code() {
