@@ -20,6 +20,9 @@ readonly PR_NOT_FOUND_EXIT=9
 readonly COMMENT_NOT_FOUND_EXIT=9
 # How GitHub answers a read of a pull request number it does not have, the number of an issue included.
 readonly PR_NOT_FOUND_TEXT='Could not resolve to a PullRequest with the number'
+# pr post-merge-runs: a pull request that is not merged has no merge commit to judge. A code of its
+# own, used for nothing else, so it is never taken for a verdict or a missing pull request.
+readonly PR_NOT_MERGED_EXIT=6
 readonly RELEASE_NOT_FOUND_EXIT=9
 readonly TAG_NOT_FOUND_EXIT=9
 readonly ADVISORY_NOT_FOUND_EXIT=9
@@ -41,6 +44,9 @@ readonly RUN_ATTEMPT_LIMIT=3
 # run list: how many runs it lists by default and at most.
 readonly RUN_LIST_LIMIT_DEFAULT=20
 readonly RUN_LIST_LIMIT_MAX=50
+# pr post-merge-runs: the most runs on a merge commit it judges; more is a runtime failure, never a
+# verdict on part of them.
+readonly POST_MERGE_RUN_LIMIT=200
 # run log: how many of the last lines of each failed step it keeps by default and at most, how many
 # bytes of one log line it keeps (a longer one is cut at a character boundary and marked [cut]),
 # and the most bytes it prints in all (256 KiB). Output over that is refused whole, as a diff over
@@ -405,6 +411,7 @@ Commands:
   workflow list            List a repository's Actions workflows: path, state and name, sorted by path
   pr checks                Judge the checks on a PR's, a branch's or a commit's head (exit 0, 3, 4 or 5)
   pr checks-wait           Wait for a PR's required checks to finish, up to a time limit (exit 0, 3, 4, 5 or 6)
+  pr post-merge-runs       Judge the Actions runs on a merged PR's merge commit, on its base branch (exit 0, 3, 4, 5 or 6)
   pr comments              Print a PR's comments, reviews and review threads (exit 9 when not found)
   pr reply                 Reply to an inline review comment of a PR (exit 8 when the body is refused)
   pr hand-off              Hand a PR to human review: title and description, board, ready, review record, then auto-merge (exit 8 refused)
@@ -1750,6 +1757,8 @@ prefixed "cfwf:" and never reported as a failed check; 2 a usage error.
 
 Run 'cfwf pr checks-wait --help' for pr checks-wait, which waits, in one call, for a pull request's
 required checks to finish, up to a time limit.
+Run 'cfwf pr post-merge-runs --help' for pr post-merge-runs, which judges the Actions runs on a
+merged pull request's merge commit, on its base branch.
 Run 'cfwf pr comments --help' for pr comments, which prints a pull request's comments, reviews and
 review threads.
 Run 'cfwf pr reply --help' for pr reply, which replies to an inline review comment.
@@ -2655,6 +2664,52 @@ It only reads: it never re-runs, cancels or changes anything.
 USAGE
 }
 
+usage_pr_post_merge_runs() {
+    cat << USAGE
+Usage: cfwf pr post-merge-runs --repo <owner/repo> --pr <n>
+
+Judges the GitHub Actions runs on a merged pull request's merge commit, on its base branch: did
+the base branch's builds pass after the merge? It only reads, and never waits or polls. Runs can
+take a while to appear after a merge, so run it again later.
+
+--repo  Always required; never taken from the current directory.
+--pr    The pull request's number, above 0.
+--json, --jq, --template, --branch, --sha and --event are not options: the output has one fixed
+format.
+
+The pull request is read once, for its state, merge commit and base branch; one that is not
+merged is refused. Then the runs on that commit and that branch are listed in one read, as
+'cfwf run list' lists them, with no event filter, so a run started by a workflow_dispatch after
+the merge is judged beside the runs started by the push. At most ${POST_MERGE_RUN_LIMIT} runs are judged; more is a
+runtime failure, never a verdict on part of them.
+
+Each workflow, by its name, is judged by its newest run on the commit, as 'cfwf pr checks' judges a
+check:
+  pass     success, skipped or neutral
+  fail     failure, cancelled, timed_out, action_required, startup_failure, stale or any other
+           conclusion
+  pending  no conclusion yet
+A run that has a conclusion counts as finished, whatever its status says. A skipped run never
+replaces an older run of its workflow that ran and decided, only a skipped or a cancelled one.
+Every run its workflow is not judged by, such as an older run cancelled by a newer run of the same
+workflow (a later merge's concurrency group, say), is printed with the status superseded and its
+own conclusion, and is not counted.
+
+Output, tab separated, newest run first, then a summary:
+  <run_id>  <workflow>  <status>  <conclusion>  <event>
+  summary  passed=<a> failed=<b> pending=<c> merge=<sha>
+Each run line has exactly five fields, none empty: the conclusion is - for a run that has none
+yet. The summary is the last line, and it counts workflows, not runs. Nothing is printed unless
+every read succeeded.
+
+Exit codes: 0 every workflow's run passed; ${CHECKS_FAILED_EXIT} at least one failed; ${CHECKS_PENDING_EXIT} none failed and at least one is
+pending; ${NO_CHECKS_EXIT} the merge commit has no runs yet (expected straight after the merge, so not a pass);
+${PR_NOT_MERGED_EXIT} the pull request is not merged, with "cfwf: <owner/repo>#<n> is not merged"; ${PR_NOT_FOUND_EXIT} the pull
+request does not exist (the number of an issue included); 1 a runtime failure, such as a gh or
+network error, prefixed "cfwf:" and never reported as a verdict; 2 a usage error.
+USAGE
+}
+
 usage_task_wait() {
     cat << USAGE
 Usage: cfwf task wait --output <file> [--timeout <seconds>]
@@ -2880,6 +2935,7 @@ usage_for() {
         auth | "auth status") usage_auth ;;
         pr | "pr checks") usage_pr ;;
         "pr checks-wait") usage_pr_checks_wait ;;
+        "pr post-merge-runs") usage_pr_post_merge_runs ;;
         "pr view") usage_pr_view ;;
         "pr ready-at") usage_pr_ready_at ;;
         "pr status") usage_pr_status ;;
@@ -7862,7 +7918,7 @@ pr_take_back() {
 cmd_pr() {
     dispatch_subcommand pr checks pr_checks checks-wait pr_checks_wait view pr_view list pr_list comments pr_comments reply pr_reply create pr_create \
         ready-at pr_ready_at status pr_status auto-merge-at pr_auto_merge_at diff pr_diff edit pr_edit hand-off pr_hand_off finalise-dependency pr_finalise_dependency take-back pr_take_back \
-        close pr_close reopen pr_reopen block pr_block search pr_search -- "$@"
+        close pr_close reopen pr_reopen block pr_block search pr_search post-merge-runs pr_post_merge_runs -- "$@"
 }
 
 # Refuses (exit 8) the body in the file $1 when one of the two plan-approval keywords is a whole
@@ -8988,47 +9044,127 @@ readonly RUN_LIST_ROW_PATTERN=$'^[0-9]+\t[^\t]+\t[a-z_]+\t[a-z_-]+\t[0-9a-f]{40}
 # How gh answers --workflow with a name the repository has no workflow of.
 readonly WORKFLOW_NOT_FOUND_TEXT='could not find any workflows named'
 
-# Lists the runs of REPO for one branch or one commit, newest first, in one read, at most RUN_LIMIT.
-# There is never an event filter, so a run started by a dispatch after a merge is listed beside one
-# started by the push. Nothing is printed until every row has been checked: its shape, and that its
-# head commit or head branch is exactly the one asked for, whatever gh matched.
-run_list() {
-    local row id rest branch sha unexpected
-    local -a listing lines=()
-    parse_command_options assign_run_option "--repo --branch --sha --workflow --limit" "" "$@"
-    require REPO --repo
-    [ -n "${RUN_BRANCH}" ] || [ -n "${RUN_SHA}" ] || usage_error "one of --branch or --sha is required"
-    [ -z "${RUN_BRANCH}" ] || [ -z "${RUN_SHA}" ] || usage_error "--branch and --sha cannot be given together"
-    [ -n "${RUN_LIMIT}" ] || RUN_LIMIT="${RUN_LIST_LIMIT_DEFAULT}"
-    require_gh
-    unexpected="gh returned an unexpected result for the runs of ${REPO}"
-    listing=(run list --repo "${REPO}")
-    if [ -n "${RUN_BRANCH}" ]; then
-        listing+=("--branch=${RUN_BRANCH}")
-    else
-        listing+=("--commit=${RUN_SHA}")
-    fi
+# Sets COUNTED_ROWS to the runs of REPO, newest first, from one read that asks gh for at most $2: the
+# runs on the branch RUN_BRANCH and on the commit RUN_SHA (whichever is set, or both), of the
+# workflow RUN_WORKFLOW when it is set. More than $1 dies with $3. There is never an event filter,
+# so a run started by a dispatch after a merge is listed beside one started by the push. Every row
+# is checked before any is used: its shape, and that its head branch and head commit are exactly
+# the ones asked for, whatever gh matched. Each row keeps the head branch as its last field.
+read_runs() {
+    local limit="$1" asked="$2" too_many="$3" row branch sha
+    local unexpected="gh returned an unexpected result for the runs of ${REPO}"
+    local -a listing=(run list --repo "${REPO}")
+    [ -z "${RUN_BRANCH}" ] || listing+=("--branch=${RUN_BRANCH}")
+    [ -z "${RUN_SHA}" ] || listing+=("--commit=${RUN_SHA}")
     [ -z "${RUN_WORKFLOW}" ] || listing+=("--workflow=${RUN_WORKFLOW}")
-    listing+=(--all --limit "${RUN_LIMIT}" --json "databaseId,workflowName,status,conclusion,headSha,headBranch,event,createdAt"
+    listing+=(--all --limit "${asked}" --json "databaseId,workflowName,status,conclusion,headSha,headBranch,event,createdAt"
         --jq "${RUN_LIST_PROGRAM}")
     if ! gh_capture "${listing[@]}"; then
         [[ "${GH_ERROR}" != *"${WORKFLOW_NOT_FOUND_TEXT}"* ]] \
             || not_found_in_repository "${WORKFLOW_NOT_FOUND_EXIT}" "the --workflow was not found in ${REPO}"
         die "could not list the runs of ${REPO}: $(gh_failure_text)"
     fi
-    take_checked_rows "${RUN_LIMIT}" "${RUN_LIST_ROW_PATTERN}" "${unexpected}" "${unexpected}"
+    take_checked_rows "${limit}" "${RUN_LIST_ROW_PATTERN}" "${unexpected}" "${too_many}"
     for row in "${COUNTED_ROWS[@]}"; do
         branch="${row##*$'\t'}"
-        rest="${row%$'\t'*}"
-        IFS=$'\t' read -r id _ _ _ sha _ <<< "${rest}"
-        if [ -n "${RUN_BRANCH}" ]; then
-            [ "${branch}" = "${RUN_BRANCH}" ] || die "${unexpected}"
-        else
-            [ "${sha}" = "${RUN_SHA}" ] || die "${unexpected}"
-        fi
-        lines+=("${rest}")
+        IFS=$'\t' read -r _ _ _ _ sha _ <<< "${row}"
+        [ -z "${RUN_BRANCH}" ] || [ "${branch}" = "${RUN_BRANCH}" ] || die "${unexpected}"
+        [ -z "${RUN_SHA}" ] || [ "${sha}" = "${RUN_SHA}" ] || die "${unexpected}"
+    done
+}
+
+# Lists the runs of REPO for one branch or one commit, newest first, in one read, at most RUN_LIMIT
+# (read_runs). Nothing is printed until every row has been checked; the head branch is not printed.
+run_list() {
+    local row
+    local -a lines=()
+    parse_command_options assign_run_option "--repo --branch --sha --workflow --limit" "" "$@"
+    require REPO --repo
+    [ -n "${RUN_BRANCH}" ] || [ -n "${RUN_SHA}" ] || usage_error "one of --branch or --sha is required"
+    [ -z "${RUN_BRANCH}" ] || [ -z "${RUN_SHA}" ] || usage_error "--branch and --sha cannot be given together"
+    [ -n "${RUN_LIMIT}" ] || RUN_LIMIT="${RUN_LIST_LIMIT_DEFAULT}"
+    require_gh
+    read_runs "${RUN_LIMIT}" "${RUN_LIMIT}" "gh returned an unexpected result for the runs of ${REPO}"
+    for row in "${COUNTED_ROWS[@]}"; do
+        lines+=("${row%$'\t'*}")
     done
     [ "${#lines[@]}" -eq 0 ] || printf '%s\n' "${lines[@]}"
+}
+
+# pr post-merge-runs: the merge commit and the base branch of the pull request, as read.
+MERGE_SHA=""
+MERGE_BASE=""
+
+# Reads PR of REPO once, in the one gh call of read_pull_request (so a number that is not a pull
+# request exits PR_NOT_FOUND_EXIT), for its state, merge commit and base branch, and exits
+# PR_NOT_MERGED_EXIT unless it is merged. Sets MERGE_SHA and MERGE_BASE, which must be a commit SHA
+# and a branch name git allows.
+read_merged_pull_request() {
+    local state end unexpected="gh returned an unexpected result for ${REPO}#${PR}"
+    VIEW_JSON_FIELDS="state,mergeCommit,baseRefName"
+    read_pull_request "${FIELDS_ROW_DEF} [.state, .mergeCommit.oid, .baseRefName, \"end\"] | fields_row"
+    IFS="${ROW_SEPARATOR}" read -r state MERGE_SHA MERGE_BASE end <<< "${GH_OUTPUT}"
+    if [ "${end}" != end ] || ! is_one_of "${state}" OPEN CLOSED MERGED; then
+        die "${unexpected}"
+    fi
+    if [ "${state}" != MERGED ]; then
+        printf 'cfwf: %s#%s is not merged\n' "${REPO}" "${PR}" >&2
+        exit "${PR_NOT_MERGED_EXIT}"
+    fi
+    if [[ ! "${MERGE_SHA}" =~ ^[0-9a-f]{40}$ ]] || ! valid_branch_name "${MERGE_BASE}"; then
+        die "${unexpected}"
+    fi
+}
+
+# Judges the Actions runs on the merge commit of a merged pull request, on its base branch (#1605),
+# from two reads: the pull request (read_merged_pull_request), then its runs (read_runs, as run
+# list reads them, with no event filter). Each workflow, by name, is judged by its newest run with
+# the rules of pr checks: record_check_rows and judge_check are given one check-run row a run, its
+# workflow's name as the name, so a re-run in a new run, or a run cancelled by a newer one, is
+# replaced as a check run is. A run that is not the one its workflow is judged by is printed with
+# the status superseded and not counted. Nothing is printed until both reads have been checked.
+pr_post_merge_runs() {
+    local row id workflow status conclusion event name run_check_rows="" passed=0 failed=0 pending=0
+    local -a lines=()
+    local -A judged=()
+    parse_command_options assign_view_option "--repo --pr" "" "$@"
+    require REPO --repo
+    require PR --pr
+    require_gh
+    read_merged_pull_request
+    HEAD_SHA="${MERGE_SHA}"
+    RUN_BRANCH="${MERGE_BASE}"
+    RUN_SHA="${MERGE_SHA}"
+    read_runs "${POST_MERGE_RUN_LIMIT}" "$((POST_MERGE_RUN_LIMIT + 1))" \
+        "the merge commit ${MERGE_SHA} of ${REPO}#${PR} has more than ${POST_MERGE_RUN_LIMIT} runs, so none is judged"
+    for row in "${COUNTED_ROWS[@]}"; do
+        IFS=$'\t' read -r id workflow _ conclusion _ <<< "${row}"
+        [ "${conclusion}" != - ] || conclusion=""
+        run_check_rows+="${workflow}${ROW_SEPARATOR}${workflow}${ROW_SEPARATOR}${conclusion}${ROW_SEPARATOR}${id}${ROW_SEPARATOR}${ROW_SEPARATOR}${ROW_SEPARATOR}run"$'\n'
+    done
+    record_check_rows check_run_verdict "${run_check_rows}"
+    for name in "${!NAME_GROUPS[@]}"; do
+        judge_check "${name}" ""
+        judged["${RESULT_ID}"]=1
+        case "${VERDICT}" in
+            pass) passed=$((passed + 1)) ;;
+            fail) failed=$((failed + 1)) ;;
+            *) pending=$((pending + 1)) ;;
+        esac
+    done
+    for row in "${COUNTED_ROWS[@]}"; do
+        IFS=$'\t' read -r id workflow status conclusion _ event _ <<< "${row}"
+        [ -n "${judged["${id}"]:-}" ] || status=superseded
+        lines+=("${id}"$'\t'"${workflow}"$'\t'"${status}"$'\t'"${conclusion}"$'\t'"${event}")
+    done
+
+    [ "${#lines[@]}" -eq 0 ] || printf '%s\n' "${lines[@]}"
+    printf 'summary\tpassed=%s failed=%s pending=%s merge=%s\n' "${passed}" "${failed}" "${pending}" "${MERGE_SHA}"
+
+    [ "${#lines[@]}" -gt 0 ] || exit "${NO_CHECKS_EXIT}"
+    [ "${failed}" -eq 0 ] || exit "${CHECKS_FAILED_EXIT}"
+    [ "${pending}" -eq 0 ] || exit "${CHECKS_PENDING_EXIT}"
+    exit 0
 }
 
 # Prints $1, or - when it is empty, so no value of a key and value line is ever empty.
