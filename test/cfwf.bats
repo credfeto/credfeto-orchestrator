@@ -2051,7 +2051,7 @@ assert_nothing_created() {
 @test "issue needs a subcommand, and an unknown one is refused" {
     run "${SCRIPT}" issue
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"issue needs a subcommand (create, edit, view, plan-status, list, search, label-history, reopen, close, post-plan, comments, add-sub-issue)"* ]]
+    [[ "${output}" == *"issue needs a subcommand (create, edit, view, plan-status, list, search, label-history, reopen, close, post-plan, block, comments, add-sub-issue)"* ]]
 
     run "${SCRIPT}" issue frobnicate
     [ "${status}" -eq 2 ]
@@ -4361,7 +4361,7 @@ assert_set_to_development() {
         # shellcheck disable=SC2086  # each invocation is split into its words on purpose
         run "${SCRIPT}" ${invocation}
         [ "${status}" -eq 0 ]
-        [[ "${output}" == "Usage: cfwf pr checks"*$'\n'"Run 'cfwf pr create --help' for pr create, which creates a draft pull request on the Workflow board."$'\n'"Run 'cfwf pr edit --help' for pr edit, which changes a pull request's title, body or priority, or assigns the agent."$'\n'"Run 'cfwf pr close --help' for pr close, which closes the agent's own pull request without merging it."$'\n'"Run 'cfwf pr reopen --help' for pr reopen, which reopens the agent's own closed pull request."$'\n'"Run 'cfwf branch required-checks --help' for branch required-checks, which lists the checks a branch"$'\n'"requires without judging them." ]]
+        [[ "${output}" == "Usage: cfwf pr checks"*$'\n'"Run 'cfwf pr create --help' for pr create, which creates a draft pull request on the Workflow board."$'\n'"Run 'cfwf pr edit --help' for pr edit, which changes a pull request's title, body or priority, or assigns the agent."$'\n'"Run 'cfwf pr close --help' for pr close, which closes the agent's own pull request without merging it."$'\n'"Run 'cfwf pr reopen --help' for pr reopen, which reopens the agent's own closed pull request."$'\n'"Run 'cfwf pr block --help' for pr block, which posts a question on a pull request and adds Blocked."$'\n'"Run 'cfwf branch required-checks --help' for branch required-checks, which lists the checks a branch"$'\n'"requires without judging them." ]]
     done
 
     run "${SCRIPT}" help
@@ -6730,7 +6730,7 @@ assert_sign_off() {
 
 @test "help for a command and its subcommand prints what that subcommand's -h prints, and the command's usage for a subcommand it does not know" {
     local pair spelling expected
-    for pair in "issue create" "issue view" "issue plan-status" "issue list" "issue search" "issue label-history" "issue add-sub-issue" "issue post-plan" "body check" "pr checks" "pr ready-at" "pr auto-merge-at" "pr diff" "comment add" "label create" "release view" "release list" "tag view"; do
+    for pair in "issue create" "issue view" "issue plan-status" "issue list" "issue search" "issue label-history" "issue add-sub-issue" "issue post-plan" "issue block" "body check" "pr checks" "pr ready-at" "pr auto-merge-at" "pr diff" "pr block" "comment add" "label create" "release view" "release list" "tag view"; do
         # shellcheck disable=SC2086  # each pair is split into its two words on purpose
         run "${SCRIPT}" ${pair} -h
         [ "${status}" -eq 0 ]
@@ -9546,7 +9546,7 @@ read_once_asking_for() {
     run --separate-stderr "${SCRIPT}" pr
     [ "${status}" -eq 2 ]
     [ -z "${output}" ]
-    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, checks-wait, view, list, comments, reply, create, ready-at, status, auto-merge-at, diff, edit, hand-off, finalise-dependency, take-back, close, reopen, search)"* ]]
+    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, checks-wait, view, list, comments, reply, create, ready-at, status, auto-merge-at, diff, edit, hand-off, finalise-dependency, take-back, close, reopen, block, search)"* ]]
     [[ "${stderr}" == *"Usage: cfwf pr checks"*"Run 'cfwf pr view --help' for pr view"* ]]
 
     run --separate-stderr "${SCRIPT}" pr frobnicate
@@ -15775,6 +15775,289 @@ ${POST_PLAN_ISSUE_URL} Blocked" ]
     [[ "${output}" == *"Usage: cfwf issue close "*"Usage: cfwf issue post-plan "*"Usage: cfwf issue comments "* ]]
     run "${SCRIPT}" help
     [[ "${output}" == *$'\n'"  issue close              Close an issue with a reason, with an optional comment first (exit 8 when refused, 9 when not found)"$'\n'"  issue post-plan          Post an issue's implementation plan, add Blocked, then move the board to Planning (exit 8 when refused)"$'\n'* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+# --- issue block and pr block (#1599) ----------------------------------------------
+
+BLOCK_ISSUE=1599
+BLOCK_PR=1623
+BLOCK_SHA="0123456789abcdef0123456789abcdef01234567"
+
+# The item URL of the kind $1 (issue or pr) and its comment URL.
+block_item_url() {
+    if [ "$1" = pr ]; then
+        printf 'https://github.com/%s/pull/%s\n' "${REPO}" "${BLOCK_PR}"
+    else
+        printf 'https://github.com/%s/issues/%s\n' "${REPO}" "${BLOCK_ISSUE}"
+    fi
+}
+
+block_comment_url() {
+    printf '%s#issuecomment-99\n' "$(block_item_url "$1")"
+}
+
+block_flag() {
+    if [ "$1" = pr ]; then
+        printf -- '--pr %s\n' "${BLOCK_PR}"
+    else
+        printf -- '--issue %s\n' "${BLOCK_ISSUE}"
+    fi
+}
+
+# Runs <kind> block ($1) on its item with the body file $2 (block.md by default).
+run_block() {
+    local kind="$1" body="${2:-${TEST_TMP}/block.md}"
+    # shellcheck disable=SC2046  # the flag and its number are two words on purpose
+    run --separate-stderr "${SCRIPT}" "${kind}" block --repo "${REPO}" $(block_flag "${kind}") --body-file "${body}"
+}
+
+# A body that passes every check, and the comment URL the post of the kind $1 answers with.
+prepare_block() {
+    block_comment_url "$1" > "${GH_FIXTURES}/comment.out"
+    printf 'Which of the two behaviours is wanted?\n\nThe spec says both.\n' > "${TEST_TMP}/block.md"
+}
+
+# Nothing was written: no comment, no edit, no board change.
+assert_nothing_blocked() {
+    [ "$(gh_call_count " comment")" -eq 0 ]
+    [ "$(gh_call_count " edit")" -eq 0 ]
+    [ "$(gh_call_count "project ")" -eq 0 ]
+}
+
+@test "issue block and pr block post the comment, then add Blocked, printing the comment URL and the item URL, and touch nothing else" {
+    local kind number
+    for kind in issue pr; do
+        number="${BLOCK_ISSUE}"
+        [ "${kind}" = issue ] || number="${BLOCK_PR}"
+        prepare_block "${kind}"
+        : > "${GH_LOG}"
+        run_block "${kind}"
+        [ "${status}" -eq 0 ]
+        [ -z "${stderr}" ]
+        [ "${output}" = "$(block_comment_url "${kind}")
+$(block_item_url "${kind}") Blocked" ]
+        cmp "${TEST_TMP}/block.md" "${GH_FIXTURES}/comment-body.txt"
+        [ "$(wc -l < "${GH_LOG}")" -eq 2 ]
+        issue_create_called_with "${kind} comment ${number} --repo ${REPO} --body-file BODY"
+        sed -n 2p "${GH_LOG}" | grep -qxF "${kind} edit ${number} --repo ${REPO} --add-label Blocked"
+        [ "$(gh_line_of "${kind} comment")" -lt "$(gh_line_of "${kind} edit")" ]
+        [ "$(gh_call_count "project ")" -eq 0 ]
+        [ "$(gh_call_count "api graphql")" -eq 0 ]
+        [ "$(gh_call_count "--remove-label")" -eq 0 ]
+        [ "$(gh_call_count "assignee")" -eq 0 ]
+    done
+}
+
+@test "pr block reads the body from stdin" {
+    prepare_block pr
+    run --separate-stderr "${SCRIPT}" pr block --repo "${REPO}" --pr "${BLOCK_PR}" --body-file - < "${TEST_TMP}/block.md"
+    [ "${status}" -eq 0 ]
+    cmp "${TEST_TMP}/block.md" "${GH_FIXTURES}/comment-body.txt"
+}
+
+@test "issue block and pr block still post the comment on an item that already carries Blocked, without reading it" {
+    local kind
+    write_issue "${BLOCK_ISSUE}" "fix: something" OPEN "The body." Blocked
+    for kind in issue pr; do
+        prepare_block "${kind}"
+        : > "${GH_LOG}"
+        run_block "${kind}"
+        [ "${status}" -eq 0 ]
+        [ "$(gh_call_count "${kind} comment")" -eq 1 ]
+        [ "$(gh_call_count "${kind} edit")" -eq 1 ]
+        [ "$(gh_call_count " view")" -eq 0 ]
+    done
+}
+
+@test "issue block and pr block refuse (exit 8) a body that fails the leak check, writing nothing" {
+    local kind
+    for kind in issue pr; do
+        prepare_block "${kind}"
+        printf 'Why?\n\ntoken ghp_%s\n' "$(printf 'a%.0s' {1..36})" > "${TEST_TMP}/block.md"
+        : > "${GH_LOG}"
+        run_block "${kind}"
+        [ "${status}" -eq 8 ]
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: body refused: token (line 3)" ]
+        assert_nothing_blocked
+    done
+}
+
+@test "issue block and pr block refuse (exit 8) a plan-approval keyword outside a quote, writing nothing, and post one inside a quote" {
+    local kind keyword
+    for kind in issue pr; do
+        prepare_block "${kind}"
+        for keyword in $(sign_off_keywords); do
+            printf 'Blocked on this.\n\nIt is %s.\n' "${keyword}" > "${TEST_TMP}/block.md"
+            : > "${GH_LOG}"
+            run_block "${kind}"
+            [ "${status}" -eq 8 ]
+            [ -z "${output}" ]
+            [ "${stderr}" = "cfwf: body refused: approval keyword (line 3)" ]
+            assert_nothing_blocked
+        done
+        printf 'You said:\n\n> %s\n\nbut which one?\n' "$(sign_off_keywords | head -1)" > "${TEST_TMP}/block.md"
+        run_block "${kind}"
+        [ "${status}" -eq 0 ]
+    done
+}
+
+@test "pr block posts a well-formed environment-block marker, on its own line or after text" {
+    local body
+    prepare_block pr
+    for body in "Missing pgrep in the image.\n\n<!-- orchestrator:env-block image-sha=${BLOCK_SHA} -->\n" \
+        "Missing pgrep in the image. <!-- orchestrator:env-block image-sha=${BLOCK_SHA} -->\n"; do
+        # shellcheck disable=SC2059  # the body is the format on purpose, for its \n
+        printf "${body}" > "${TEST_TMP}/block.md"
+        : > "${GH_LOG}"
+        run_block pr
+        [ "${status}" -eq 0 ]
+        [ -z "${stderr}" ]
+        cmp "${TEST_TMP}/block.md" "${GH_FIXTURES}/comment-body.txt"
+        [ "$(gh_call_count "pr edit ${BLOCK_PR} --repo ${REPO} --add-label Blocked")" -eq 1 ]
+    done
+}
+
+@test "pr block refuses (exit 8) a malformed environment-block marker, naming its line and writing nothing" {
+    local marker
+    prepare_block pr
+    for marker in "<!-- orchestrator:env-block image-sha=abc1234 -->" \
+        "<!-- orchestrator:env-block image-sha=${BLOCK_SHA^^} -->" \
+        "<!-- orchestrator:env-block image-sha= -->" \
+        "<!-- orchestrator:env-block image-sha=unknown -->" \
+        "<!-- orchestrator:env-block image-sha=${BLOCK_SHA}0 -->" \
+        "<!-- orchestrator:env-block image-sha=${BLOCK_SHA}" \
+        "<!--orchestrator:env-block image-sha=${BLOCK_SHA}-->" \
+        "<!--  orchestrator:env-block  image-sha=${BLOCK_SHA} -->" \
+        "<!-- ORCHESTRATOR:ENV-BLOCK image-sha=${BLOCK_SHA} -->" \
+        "<!-- orchestrator:env-block sha=${BLOCK_SHA} -->" \
+        "orchestrator:env-block" \
+        "<!-- orchestrator:env-block image-sha=${BLOCK_SHA} --> orchestrator:env-block"; do
+        printf 'Missing pgrep in the image.\n\n%s\n' "${marker}" > "${TEST_TMP}/block.md"
+        : > "${GH_LOG}"
+        run_block pr
+        [ "${status}" -eq 8 ]
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: body refused: malformed env-block marker (line 3)" ]
+        assert_nothing_blocked
+    done
+}
+
+@test "issue block refuses (exit 8) any environment-block marker, a well-formed one included, writing nothing" {
+    local marker
+    prepare_block issue
+    for marker in "<!-- orchestrator:env-block image-sha=${BLOCK_SHA} -->" "<!-- orchestrator:env-block image-sha=abc1234 -->" \
+        "Orchestrator:Env-Block"; do
+        printf 'Missing pgrep in the image.\n\n%s\n' "${marker}" > "${TEST_TMP}/block.md"
+        : > "${GH_LOG}"
+        run_block issue
+        [ "${status}" -eq 8 ]
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: body refused: env-block marker on an issue (line 3)" ]
+        assert_nothing_blocked
+    done
+}
+
+@test "issue block and pr block write nothing else when the comment cannot be posted" {
+    local kind
+    for kind in issue pr; do
+        prepare_block "${kind}"
+        touch "${GH_FIXTURES}/comment.fail"
+        : > "${GH_LOG}"
+        run_block "${kind}"
+        [ "${status}" -eq 1 ]
+        [ -z "${output}" ]
+        [[ "${stderr}" == *"cfwf: could not post the comment on ${REPO}#"* ]]
+        [[ "${stderr}" != *"already posted"* ]]
+        [ "$(gh_call_count "${kind} edit")" -eq 0 ]
+        rm "${GH_FIXTURES}/comment.fail"
+    done
+}
+
+@test "issue block and pr block fail (exit 1) naming the comment URL when adding Blocked fails after the comment" {
+    local kind number
+    for kind in issue pr; do
+        number="${BLOCK_ISSUE}"
+        [ "${kind}" = issue ] || number="${BLOCK_PR}"
+        prepare_block "${kind}"
+        echo "HTTP 502: Bad Gateway" > "${GH_FIXTURES}/${kind}-edit.fail"
+        run_block "${kind}"
+        [ "${status}" -eq 1 ]
+        [ "${output}" = "$(block_comment_url "${kind}")" ]
+        [[ "${stderr}" == "cfwf: could not add the label Blocked to ${REPO}#${number}: HTTP 502: Bad Gateway"$'\n'* ]]
+        [[ "${stderr}" == *$'\n'"cfwf: the comment was already posted: $(block_comment_url "${kind}")" ]]
+        [ "$(gh_call_count "project ")" -eq 0 ]
+    done
+}
+
+# The usage errors of <kind> block: $1 is its number flag, $2 the other kind's, $3 the body file.
+block_usage_cases() {
+    local flag="$1" other="$2" body="$3"
+    printf '%s\n' "--repo ${REPO} ${flag} 1" "--repo ${REPO} --body-file ${body}" "${flag} 1 --body-file ${body}" \
+        "--repo ${REPO} ${flag} 0 --body-file ${body}" "--repo ${REPO} ${flag} 1a --body-file ${body}" \
+        "--repo nope ${flag} 1 --body-file ${body}" "--repo ${REPO} ${flag} 1 ${flag} 2 --body-file ${body}" \
+        "--repo ${REPO} ${flag} 1 --body-file ${body} --body-file ${body}" "--repo ${REPO} ${flag} 1 --body-file ${body} --body text" \
+        "--repo ${REPO} ${other} 1 --body-file ${body}" "--repo ${REPO} ${flag} 1 --body-file" \
+        "--repo ${REPO} ${flag} 1 --body-file ${body} --label x"
+}
+
+@test "issue block and pr block usage errors exit 2 with their usage on stderr, before any gh call" {
+    local kind flag other args
+    prepare_block issue
+    for kind in issue pr; do
+        flag="--issue"
+        other="--pr"
+        if [ "${kind}" = pr ]; then
+            flag="--pr"
+            other="--issue"
+        fi
+        while IFS= read -r args; do
+            # shellcheck disable=SC2086  # each case is split into its words on purpose
+            run --separate-stderr "${SCRIPT}" "${kind}" block ${args}
+            [ "${status}" -eq 2 ]
+            [ -z "${output}" ]
+            [[ "${stderr}" == *"Usage: cfwf ${kind} block --repo <owner/repo> ${flag} <n> --body-file <file|->"* ]]
+            [ ! -f "${GH_LOG}" ]
+        done < <(block_usage_cases "${flag}" "${other}" "${TEST_TMP}/block.md")
+    done
+}
+
+@test "issue block and pr block help, from -h, --help and help, gives the usage, the order, the marker rule and the exit codes, and none calls gh" {
+    local kind invocation flag
+    for kind in issue pr; do
+        flag="--issue"
+        [ "${kind}" = issue ] || flag="--pr"
+        for invocation in "${kind} block -h" "${kind} block --help" "help ${kind} block"; do
+            # shellcheck disable=SC2086  # each invocation is several words on purpose
+            run --separate-stderr "${SCRIPT}" ${invocation}
+            [ "${status}" -eq 0 ]
+            [ -z "${stderr}" ]
+            [[ "${output}" == "Usage: cfwf ${kind} block --repo <owner/repo> ${flag} <n> --body-file <file|->"* ]]
+            [[ "${output}" == *"posts the body as"*"comment, then adds the Blocked label"* ]]
+            [[ "${output}" == *"already carries Blocked still gets the comment"* ]]
+            [[ "${output}" == *"board status, the assignees and every other label are left as they are"* ]]
+            [[ "${output}" == *'"cfwf: body refused: <rule>"'* ]]
+            [[ "${output}" == *"the message names the comment URL"* ]]
+            [[ "${output}" == *"<url> Blocked"* ]]
+            [[ "${output}" == *"8 refused, nothing written"* ]]
+            [[ "${output}" != *"usage_"* ]]
+            if [ "${kind}" = pr ]; then
+                [[ "${output}" == *"exactly <!-- orchestrator:env-block image-sha=<sha> -->"*'("malformed env-block marker")'* ]]
+            else
+                [[ "${output}" == *'any marker is refused ("env-block marker on an issue")'* ]]
+            fi
+        done
+    done
+    run "${SCRIPT}" help issue
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Usage: cfwf issue post-plan "*"Usage: cfwf issue block "*"Usage: cfwf issue comments "* ]]
+    run "${SCRIPT}" help pr
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *$'\n'"Run 'cfwf pr block --help' for pr block, which posts a question on a pull request and adds Blocked."$'\n'* ]]
+    run "${SCRIPT}" help
+    [[ "${output}" == *$'\n'"  issue post-plan          Post an issue's implementation plan, add Blocked, then move the board to Planning (exit 8 when refused)"$'\n'"  issue block              Post a question on an issue, then add Blocked, leaving the board as it is (exit 8 when refused)"$'\n'* ]]
+    [[ "${output}" == *$'\n'"  pr reopen                Reopen the agent's own closed PR, with an optional comment first (exit 8 refused, 9 not found)"$'\n'"  pr block                 Post a question on a PR, then add Blocked, leaving the board as it is (exit 8 when refused)"$'\n'* ]]
     [ ! -f "${GH_LOG}" ]
 }
 
