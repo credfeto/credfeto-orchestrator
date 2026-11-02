@@ -8,7 +8,7 @@ Back to the [development guide](../README.md).
 
 ## Purpose
 
-It lets the full pre-commit hook chain be exercised on demand against the current checkout, without making a real commit, and refuses to do so on a stale branch (a pass on an out-of-date tree proves little). `ai/global/git.instructions.md` uses it as the baseline gate before starting work, and as the final step of a rebase.
+It lets the full pre-commit hook chain be exercised on demand against the current checkout, without making a real commit, and refuses to do so on a stale branch (a pass on an out-of-date tree proves little). `ai/global/git.instructions.md` uses it as the baseline gate before starting work, and as the final step of a rebase. `oneshot` also runs it itself, without an agent, before a session (#1785): on a pull request's head, and on `main`'s tip for an issue session about to branch from it, inside the agent image (`ORCHESTRATOR_PRECHECK=1` makes `containers/agent/entrypoint.sh` exec it instead of `claude`), cached by SHA, and gives the agent the result in its prompt; see `run_precommit_precheck` in [lib.md](../lib.md) and step 9 of [oneshot.md](oneshot.md).
 
 ## Running it
 

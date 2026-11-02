@@ -190,6 +190,33 @@ STUBEOF
     grep -qx -- '--print' "${TEST_TMP}/claude_args"
 }
 
+@test "entrypoint runs pre-commit-check in the repo, not claude, when ORCHESTRATOR_PRECHECK=1 (#1785)" {
+    setup_entrypoint_stubs
+    local repo="${TEST_TMP}/precheck-repo"
+    mkdir -p "${repo}"
+    cat > "${STUB_BIN}/pre-commit-check" << 'STUBEOF'
+#!/usr/bin/env bash
+pwd > "${TEST_TMP}/precheck_cwd"
+printf '%s' "$#" > "${TEST_TMP}/precheck_argc"
+exit 1
+STUBEOF
+    chmod +x "${STUB_BIN}/pre-commit-check"
+    cat > "${STUB_BIN}/claude" << 'STUBEOF'
+#!/usr/bin/env bash
+touch "${TEST_TMP}/claude_ran"
+STUBEOF
+    chmod +x "${STUB_BIN}/claude"
+
+    run env ORCHESTRATOR_PRECHECK=1 WORKSPACE_REPO_DIR="${repo}" CLAUDE_CODE_OAUTH_TOKEN=token \
+        GIT_USER_NAME="Alice" GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}" --version
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"orchestrator-precheck: running pre-commit-check"* ]]
+    [ "$(cat "${TEST_TMP}/precheck_cwd")" = "${repo}" ]
+    [ "$(cat "${TEST_TMP}/precheck_argc")" = "0" ]
+    [ ! -e "${TEST_TMP}/claude_ran" ]
+}
+
 @test "entrypoint exports TMPDIR, TMP, TEMP, XDG_RUNTIME_DIR, and CLAUDE_CODE_TMPDIR to /workspace/tmp before invoking claude (#1351)" {
     setup_entrypoint_stubs
     cat > "${STUB_BIN}/claude" << 'STUBEOF'

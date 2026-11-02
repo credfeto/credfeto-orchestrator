@@ -680,6 +680,44 @@ clear_last_diagnostic() {
     rm -f "$(last_diagnostic_marker_file_path "${item_type}" "${item_id}")" 2>/dev/null || true
 }
 
+# Result cache for the non-agentic pre-commit-check run before a session (#1785,
+# run_precommit_precheck in lib/podman). key is "PullRequest_<id>" for a PR head, or "main" for
+# the default branch's tip, which every Issue in the repository shares. <path> holds the checked
+# SHA on its first line and the status (pass, fail or timeout) on its second; <path>.log is the
+# full output and <path>.summary the prompt summary of a failing or timed-out run. One record per
+# key: a new SHA replaces the old one.
+precheck_cache_file_path() {
+    local key="$1"
+    printf '%s/%s.precheck' "${SESSION_BASE_DIR}" "${key}"
+}
+
+# Prints the cached status for key when it was recorded for exactly this sha; returns 1 (nothing
+# printed) when there is no record, the record is for another SHA, or it is unreadable.
+load_precheck_result() {
+    local key="$1" sha="$2" file cached_sha cached_status
+    file=$(precheck_cache_file_path "${key}")
+    [ -f "${file}" ] || return 1
+    { IFS= read -r cached_sha && IFS= read -r cached_status; } < "${file}" 2> /dev/null || return 1
+    [ -n "${sha}" ] && [ "${cached_sha}" = "${sha}" ] || return 1
+    case "${cached_status}" in
+        pass | fail | timeout) printf '%s' "${cached_status}" ;;
+        *) return 1 ;;
+    esac
+}
+
+# Records sha's status for key. Written to a temporary file and renamed, so a reader never sees
+# half a record. Best-effort: a failed write only means the next session on this SHA runs the
+# check again.
+save_precheck_result() {
+    local key="$1" sha="$2" status="$3" file
+    file=$(precheck_cache_file_path "${key}")
+    mkdir -p "${SESSION_BASE_DIR}" 2> /dev/null
+    if ! { printf '%s\n%s\n' "${sha}" "${status}" > "${file}.tmp" && mv -f "${file}.tmp" "${file}"; } 2> /dev/null; then
+        rm -f "${file}.tmp" 2> /dev/null
+        warn "Failed to cache the pre-check result for ${key} at ${sha}; the next session on it runs the check again"
+    fi
+}
+
 # Clears the blocked-notification marker for an item, re-arming the notifier so a
 # future transition back into the blocked state notifies again. Call on any path
 # where the item is observed open and not carrying the Blocked label.

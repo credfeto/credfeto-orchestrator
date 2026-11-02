@@ -57,6 +57,12 @@ setup_main_mocks() {
     build_issue_claude_md()     { printf 'mock-issue-claude-md\n'; }
     build_pr_claude_md()        { printf 'mock-pr-claude-md\n'; }
     invoke_claude()             { return 0; }
+    # The pre-commit pre-check (#1785) is tested in test/precheck.bats; main() tests skip it.
+    prepare_precheck_section() {
+        PRECHECK_SECTION=""
+        PRECHECK_SESSION_LOG=""
+        return 0
+    }
     compute_pr_fingerprint()    { printf 'new-fp\n'; }
     compute_issue_fingerprint() { printf 'new-fp\n'; }
     save_pr_fingerprint()       { return 0; }
