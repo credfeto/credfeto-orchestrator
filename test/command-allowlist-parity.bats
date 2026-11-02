@@ -110,6 +110,31 @@ NARROW_ALLOW_ONLY_NAMES=(set)
     [ "${failed}" -eq 0 ]
 }
 
+# Raw gh is denied to the agent's Bash tool (#1805): every GitHub operation goes through cfwf,
+# which runs gh as its own subprocess. The permission rules and hooks only see the command the
+# agent typed, so cfwf must stay allowed by both layers while gh is denied by both.
+@test "raw gh is denied to the agent by both layers, and cfwf is allowed by both (#1805)" {
+    [ -s "${SETTINGS}" ] || { echo "SETTINGS not found or empty: ${SETTINGS}" >&2; return 1; }
+
+    local deny_entries allow_entries gh_allow
+    deny_entries=$(jq -r '.permissions.deny[]' "${SETTINGS}")
+    allow_entries=$(jq -r '.permissions.allow[]' "${SETTINGS}")
+    printf '%s\n' "${deny_entries}" | grep -qxF 'Bash(gh)'
+    printf '%s\n' "${deny_entries}" | grep -qxF 'Bash(gh *)'
+    gh_allow=$(printf '%s\n' "${allow_entries}" | grep -E '^Bash\(([^ )]*/)?gh([ )*]|$)' || true)
+    [ -z "${gh_allow}" ] || { echo "permissions.allow still allows raw gh:" >&2; echo "${gh_allow}" >&2; return 1; }
+    printf '%s\n' "${allow_entries}" | grep -qxF 'Bash(cfwf *)'
+    printf '%s\n' "${allow_entries}" | grep -qxF 'mcp__cfwf__*'
+
+    run grep -E '^[[:space:]]*gh[[:space:]]' "${ALLOWLIST}"
+    [ "${status}" -ne 0 ]
+    grep -qE '^[[:space:]]*cfwf[[:space:]]+writer$' "${ALLOWLIST}"
+    # shellcheck disable=SC2016  # the backticks are literal text in the blocklist message
+    grep -qxF "$(printf 'gh\t%s' 'is not permitted - raw gh is not available to agents; use cfwf (run `cfwf help`)')" "${BLOCKLIST}"
+    run grep -E '^cfwf([[:space:]]|$)' "${BLOCKLIST}"
+    [ "${status}" -ne 0 ]
+}
+
 # enforce-allowed-dirs treats a command with no valid classification as unclassified and blocks
 # it, so an entry added without deciding whether the command writes files fails at runtime; this
 # fails the build first, naming the entries, so the decision is made when the entry is added. The
