@@ -28,7 +28,9 @@ ssh                                   read-only
 
 # Version control / forge
 git                                   writer
-gh                                    writer
+# (gh deliberately excluded and blocklisted in command-blocklist - raw gh is
+# not available to agents, every GitHub operation goes through cfwf, listed
+# below, which runs gh as its own subprocess where no hook sees it, see #1805)
 # (gpg deliberately excluded - only used for commit signing, which git
 # invokes internally via user.signingkey/commit.gpgsign; the agent's own
 # Bash tool has no legitimate reason to run gpg directly, see #1315)

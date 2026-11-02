@@ -15,8 +15,12 @@ The agent runs under `--permission-mode dontAsk` (it doesn't stop to ask "can I 
 command?" before every tool call - there's no human present overnight to answer) against an
 explicit `permissions.allow` list naming exactly the commands and tools the mandated workflow
 uses, backed by `PreToolUse` hooks that enforce the same boundaries independently of Claude
-Code's own permission system. Something has to make unattended operation safe. The container
-is that something:
+Code's own permission system. Raw `gh` is not on that list: it is denied outright (`Bash(gh)` and
+`Bash(gh *)` in `permissions.deny`, and `gh` on the hooks' `command-blocklist`), and a refused call
+says ``gh is not permitted - raw gh is not available to agents; use cfwf (run `cfwf help`)``.
+Every GitHub operation goes through `cfwf` or its MCP server; `cfwf` runs `gh` itself, as a
+subprocess the agent's permission rules do not see (#1805). Something has to make unattended
+operation safe. The container is that something:
 
 - It runs as an ordinary, unprivileged user (`developer`), not root.
 - **Every tool that could install new software or escalate privilege is physically deleted from

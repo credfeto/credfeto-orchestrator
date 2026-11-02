@@ -11,7 +11,8 @@ SOURCE_HOOK_DIR="${REPO_ROOT}/containers/base/development-full/claude-hooks"
 
 # Each test gets a private copy of the hook next to its own command-allowlist (the shipped one,
 # plus pushd, which reject-obfuscated-commands rejects but the hook's cd-family handling still
-# covers) and an allowed-dirs listing the sandbox repo, HOME, a source directory SRC and a private
+# covers, and gh, which is off the shipped list since raw gh was denied to agents (#1805) but
+# whose write handling the hook keeps as a second layer) and an allowed-dirs listing the sandbox repo, HOME, a source directory SRC and a private
 # TMPDIR, all inside the sandbox, so a protected path is reported as a configuration write rather
 # than as outside the roots, and TEST_TMP/outside is outside every root wherever the sandbox lives.
 setup() {
@@ -24,7 +25,7 @@ setup() {
     mkdir -p "${HOOK_DIR}"
     cp "${SOURCE_HOOK_DIR}/enforce-allowed-dirs" "${HOOK}"
     cp "${SOURCE_HOOK_DIR}/command-allowlist" "${HOOK_DIR}/command-allowlist"
-    printf '%s\n' 'pushd read-only' >> "${HOOK_DIR}/command-allowlist"
+    printf '%s\n' 'pushd read-only' 'gh writer' >> "${HOOK_DIR}/command-allowlist"
     printf '%s\n' "${TEST_TMP}/repo" "${HOME}" "${SRC}" "${TMPDIR}" > "${HOOK_DIR}/allowed-dirs"
 }
 

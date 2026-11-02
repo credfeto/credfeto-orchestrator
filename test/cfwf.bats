@@ -15978,3 +15978,15 @@ assert_status_read_only() {
     [ -z "${output}" ]
     [ "${stderr}" = "cfwf: the head of ${REPO}#42 changed while it was read, so nothing is printed: run it again" ]
 }
+
+# Raw gh is denied to the agent's Bash tool (#1805), but cfwf runs gh as its own subprocess: the
+# permission rules and PreToolUse hooks only ever see the command the agent typed (cfwf ...), so
+# nothing in the agent's permission layer reaches the gh calls cfwf makes. This pins that cfwf
+# still finds and runs gh from PATH, as it does in the container.
+@test "cfwf runs gh itself as a subprocess, which the agent's raw-gh deny does not reach (#1805)" {
+    prepare_auth_status
+    run_auth_status
+    [ "${status}" -eq 0 ]
+    grep -qxF -- '--version' "${GH_LOG}"
+    grep -q '^api user' "${GH_LOG}"
+}

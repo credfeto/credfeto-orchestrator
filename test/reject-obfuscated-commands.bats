@@ -318,9 +318,9 @@ git status'
     [ "${status}" -eq 0 ]
 }
 
-@test "the standard heredoc gh comment-body idiom is not falsely blocked" {
+@test "the standard heredoc cfwf comment-body idiom is not falsely blocked" {
     # shellcheck disable=SC2016  # literal $(...) in the printf format — must reach the hook unexpanded
-    run_hook "$(printf 'gh pr comment 1 --repo o/r --body "$(cat <<COMMENT\nhello\n%s\n)"' "COMMENT")"
+    run_hook "$(printf 'cfwf pr comment --repo o/r --pr 1 --body "$(cat <<COMMENT\nhello\n%s\n)"' "COMMENT")"
     [ "${status}" -eq 0 ]
 }
 
@@ -747,6 +747,37 @@ git status'
     run_hook "nerdctl ps"
     [ "${status}" -eq 2 ]
     [[ "${output}" == *'nerdctl is not permitted - container execution is banned'* ]]
+}
+
+# ---- raw gh (denied to agents, #1805) ---------------------------------------
+
+@test "raw gh is banned outright, alone, path-qualified or later in the command, and the message points at cfwf (#1805)" {
+    local cmd
+    for cmd in \
+        "gh" \
+        "gh pr view 1 --repo o/r" \
+        "gh api repos/o/r/contents/README.md" \
+        "/usr/bin/gh issue list" \
+        "cfwf pr view --repo o/r --pr 1 && gh pr list" \
+        "echo x | gh issue comment 1 --body-file -"; do
+        run_hook "${cmd}"
+        [ "${status}" -eq 2 ] || { echo "not blocked: ${cmd}" >&2; return 1; }
+        # shellcheck disable=SC2016  # the backticks are literal text in the hook's message
+        [[ "${output}" == *'gh is not permitted - raw gh is not available to agents; use cfwf (run `cfwf help`)'* ]] \
+            || { echo "wrong message for ${cmd}: ${output}" >&2; return 1; }
+    done
+}
+
+@test "cfwf, which runs gh itself, is still allowed, as is text that only mentions gh (#1805)" {
+    local cmd
+    for cmd in \
+        "cfwf help" \
+        "cfwf pr view --repo o/r --pr 1" \
+        "cfwf issue comment --repo o/r --issue 1 --body 'use cfwf, not gh pr view'" \
+        "git log --grep gh"; do
+        run_hook "${cmd}"
+        [ "${status}" -eq 0 ] || { echo "blocked: ${cmd}: ${output}" >&2; return 1; }
+    done
 }
 
 @test "testdocker is still allowed after the container runtime ban" {
