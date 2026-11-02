@@ -15,7 +15,7 @@
 #   Issue #1344 explicitly reviewed and rejected a blanket `gh api user*` permissions.allow
 #   entry for the agent's own Bash tool ("no real justification"). This hook does not grant
 #   that: the agent's literal `gh api user --jq '.login'` call is never executed as written --
-#   it is rewritten (via hookSpecificOutput.updatedInput, same mechanism enforce-git-dash-c's
+#   it is rewritten (via hookSpecificOutput.updatedInput, same mechanism enforce-git-policy's
 #   -C auto-insert uses) into a cache read that only ever calls the live API once per fresh
 #   copy of the cache file, not once per agent attempt. entrypoint.sh already seeds this same
 #   cache file eagerly at container start (containers/agent/entrypoint.sh's
@@ -24,7 +24,7 @@
 #   seeding is deliberately non-fatal -- see entrypoint.sh's own comment, #1086 precedent).
 #
 # Matching is deliberately narrow and whole-command-only (not "does this command contain a
-# matching call anywhere", unlike enforce-git-dash-c/block-git-worktree/etc.): the entire
+# matching call anywhere", unlike enforce-git-policy/block-git-worktree/etc.): the entire
 # parsed command must be exactly one bare call with no pipes, redirects, backgrounding,
 # negation, or surrounding statements. This hook is a convenience optimisation, not a
 # security control -- failing to match a call embedded in something more complex just means
