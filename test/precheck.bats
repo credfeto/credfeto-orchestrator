@@ -15,13 +15,23 @@ load oneshot_helper
 # Writes a podman stub. "podman run" logs its argv (one per line, then a "----" separator) to
 # ${TEST_TMP}/podman_run_args, counts itself in ${TEST_TMP}/podman_runs, and runs
 # ${TEST_TMP}/run_body.sh (write_run_body) with the argv; every other subcommand succeeds,
-# except inspect (no leftover container) and rm, which is logged to ${TEST_TMP}/podman_rm.
+# except inspect (no leftover container), "container exists" (the container is still there
+# unless ${TEST_TMP}/no_container exists) and rm, which is logged to ${TEST_TMP}/podman_rm and
+# fails when ${TEST_TMP}/podman_rm_fails exists.
 stub_precheck_podman() {
     cat > "${STUB_BIN}/podman" << 'STUBEOF'
 #!/usr/bin/env bash
 case "$1" in
     inspect) exit 1 ;;
-    rm) printf '%s\n' "$*" >> "${TEST_TMP}/podman_rm"; exit 0 ;;
+    container)
+        [ -f "${TEST_TMP}/no_container" ] && exit 1
+        exit 0
+        ;;
+    rm)
+        printf '%s\n' "$*" >> "${TEST_TMP}/podman_rm"
+        [ -f "${TEST_TMP}/podman_rm_fails" ] && exit 1
+        exit 0
+        ;;
     run)
         printf '%s\n' "$@" >> "${TEST_TMP}/podman_run_args"
         printf -- '----\n' >> "${TEST_TMP}/podman_run_args"
@@ -313,6 +323,93 @@ write_failing_run_body() {
     [ "$(podman_run_count)" = "0" ]
     [ -z "${PRECHECK_SECTION}" ]
     [ -z "${PRECHECK_SESSION_LOG}" ]
+}
+
+# --- the pre-check container after the run (#1821) --------------------------------------------
+
+# A run body that prints the start marker and then exits with code.
+write_marker_run_body() {
+    write_run_body \
+        'printf "→ orchestrator-precheck: running pre-commit-check\n"' \
+        "exit $1"
+}
+
+@test "a pre-check that timeout ends with exit 124 is a timeout and its container is removed (#1821)" {
+    setup_precheck_repo
+    stub_precheck_podman
+    write_marker_run_body 124
+
+    ensure_precheck_result "PullRequest_7" "${HEAD_SHA}" PullRequest 7 2> /dev/null
+
+    [ "${PRECHECK_STATUS}" = "timeout" ]
+    grep -qx "rm -f orchestrator-${OWNER}" "${TEST_TMP}/podman_rm"
+    [ "$(sed -n 2p "${SESSION_BASE_DIR}/PullRequest_7.precheck")" = "timeout" ]
+}
+
+@test "a pre-check that timeout had to SIGKILL (exit 137) is a timeout, cached as one, and its container is removed (#1821)" {
+    setup_precheck_repo
+    stub_precheck_podman
+    write_marker_run_body 137
+
+    ensure_precheck_result "PullRequest_7" "${HEAD_SHA}" PullRequest 7 2> /dev/null
+
+    [ "${PRECHECK_STATUS}" = "timeout" ]
+    grep -qx "rm -f orchestrator-${OWNER}" "${TEST_TMP}/podman_rm"
+    [ "$(sed -n 2p "${SESSION_BASE_DIR}/PullRequest_7.precheck")" = "timeout" ]
+    # The next session on the same head reuses the cached timeout, not a fail.
+    ensure_precheck_result "PullRequest_7" "${HEAD_SHA}" PullRequest 7 2> /dev/null
+    [ "${PRECHECK_STATUS}" = "timeout" ]
+    [ "$(podman_run_count)" = "1" ]
+}
+
+@test "a failing pre-check is a fail and its container is removed if it is still there (#1821)" {
+    setup_precheck_repo
+    stub_precheck_podman
+    write_failing_run_body
+
+    ensure_precheck_result "PullRequest_7" "${HEAD_SHA}" PullRequest 7 2> /dev/null
+
+    [ "${PRECHECK_STATUS}" = "fail" ]
+    grep -qx "rm -f orchestrator-${OWNER}" "${TEST_TMP}/podman_rm"
+    [ "$(sed -n 2p "${SESSION_BASE_DIR}/PullRequest_7.precheck")" = "fail" ]
+}
+
+@test "a failing pre-check whose container is already gone does not try to remove it (#1821)" {
+    setup_precheck_repo
+    stub_precheck_podman
+    write_failing_run_body
+    touch "${TEST_TMP}/no_container"
+
+    ensure_precheck_result "PullRequest_7" "${HEAD_SHA}" PullRequest 7 2> /dev/null
+
+    [ "${PRECHECK_STATUS}" = "fail" ]
+    [ ! -f "${TEST_TMP}/podman_rm" ]
+}
+
+@test "a passing pre-check does not remove any container (#1821)" {
+    setup_precheck_repo
+    stub_precheck_podman
+    write_marker_run_body 0
+
+    ensure_precheck_result "PullRequest_7" "${HEAD_SHA}" PullRequest 7 2> /dev/null
+
+    [ "${PRECHECK_STATUS}" = "pass" ]
+    [ ! -f "${TEST_TMP}/podman_rm" ]
+}
+
+@test "a pre-check container that cannot be removed is warned about and the result still returns (#1821)" {
+    setup_precheck_repo
+    stub_precheck_podman
+    write_marker_run_body 137
+    touch "${TEST_TMP}/podman_rm_fails"
+
+    ensure_precheck_result "PullRequest_7" "${HEAD_SHA}" PullRequest 7 2> "${TEST_TMP}/stderr"
+
+    [ "${PRECHECK_STATUS}" = "timeout" ]
+    grep -qx "rm -f orchestrator-${OWNER}" "${TEST_TMP}/podman_rm"
+    grep -qF "! Failed to remove the pre-check container orchestrator-${OWNER} (pre-check exit 137)" "${TEST_TMP}/stderr"
+    [ "$(sed -n 2p "${SESSION_BASE_DIR}/PullRequest_7.precheck")" = "timeout" ]
+    [ "$(git -C "${REPO_WORK_DIR}" branch --show-current)" = "main" ]
 }
 
 # --- the check could not run ------------------------------------------------------------------
