@@ -185,6 +185,9 @@ readonly UTF8_LINE_PATTERN=$'([\x01-\x7f]|[\xc2-\xdf][\x80-\xbf]|\xe0[\xa0-\xbf]
 # jq's regular expressions and gh's (gojq, Go's) read alike, and holds no quote or backslash, so it
 # goes in a jq string as it is.
 readonly APPROVAL_KEYWORD_PATTERN='(^|[^A-Za-z0-9_])_*(approved|lgtm)_*([^A-Za-z0-9_]|$)'
+# The line issue post-plan requires a plan to have, exactly and whole (require_plan_heading): the
+# heading the plan-approval check finds a plan by.
+readonly PLAN_HEADING="## Implementation Plan"
 readonly OWNER_PATTERN='[A-Za-z0-9][A-Za-z0-9-]*'
 readonly REPOSITORY_PATTERN="${OWNER_PATTERN}/[A-Za-z0-9_.-]+"
 # The start of every URL gh answers a write with: any host, with or without a port, then any owner
@@ -336,6 +339,9 @@ cleanup() {
     if [ "${exit_status}" -ne 0 ] && [ -n "${TAKE_BACK_DONE:-}" ]; then
         printf 'cfwf: take-back steps done before the failure: %s\n' "${TAKE_BACK_DONE}" >&2
     fi
+    if [ "${exit_status}" -ne 0 ] && [ -n "${POST_PLAN_DONE:-}" ]; then
+        printf 'cfwf: post-plan steps done before the failure: %s\n' "${POST_PLAN_DONE}" >&2
+    fi
     rm -f "${GH_ERR_FILE}" "${BODY_PATH_TMP}" "${DESCRIPTION_PATH_TMP}" "${SCAN_TMP}" "${VALUE_TMP}" "${HAND_OFF_RECORD_TMP:-}" "${LOG_TMP}" "${LOG_OUT_TMP}" "${REPO_FILE_TMP}"
 }
 
@@ -368,6 +374,7 @@ Commands:
   issue edit               Change an issue's title, body or priority, or assign the agent (exit 8 when refused, 9 when not found)
   issue reopen             Reopen a closed issue, with an optional comment first (exit 8 when refused, 9 when not found)
   issue close              Close an issue with a reason, with an optional comment first (exit 8 when refused, 9 when not found)
+  issue post-plan          Post an issue's implementation plan, add Blocked, then move the board to Planning (exit 8 when refused)
   issue comments           Print an issue's or PR's top-level comments with their bodies, oldest first (exit 9 when not found)
   issue add-sub-issue      Link an issue to a parent issue as its sub-issue (exit 8 when refused, 9 when not found)
   label add                Add standard labels to an issue or PR, one gh call a label (exit 8 when refused, 9 when not found)
@@ -826,6 +833,47 @@ stderr and nothing written; ${ISSUE_NOT_FOUND_EXIT} the issue does not exist, or
 USAGE
 }
 
+usage_issue_post_plan() {
+    cat << USAGE
+Usage: cfwf issue post-plan --repo <owner/repo> --issue <n> --body-file <file|->
+
+Posts an issue's implementation plan for a human to approve, in one command and always in this
+order: posts the body as a comment, adds the Blocked label, then moves the issue to Planning on the
+Workflow board. The comment goes first, so Blocked and Planning are never set without a plan to
+approve. An existing plan is never edited: a revised plan is a new post, and each post moves the
+board back to Planning.
+
+--repo       Always required; never taken from the current directory.
+--issue      Always required: the issue's number, above 0. A pull request's number is refused.
+--body-file  Always required: the plan, a regular file, or - to read it from stdin. It is read once,
+             into a private copy that is both checked and posted. There is no --body.
+--json and --jq are not options.
+
+Everything is checked before anything is written, and a refusal writes nothing:
+  the body   is checked for leaks (see 'cfwf help body') and for the plan-approval keywords, as
+             for comment add, and must have a line that is exactly "${PLAN_HEADING}",
+             the heading the plan-approval check looks for
+  the issue  read once, must be open and must not carry On Hold
+A refusal exits ${POLICY_REFUSED_EXIT} with "cfwf: post-plan refused: <rule>" (or "cfwf: body refused: <rule>") on
+stderr. The command does not check the plan's structure beyond the heading: write open questions
+as Q1., Q2. and so on.
+
+When the comment cannot be posted, nothing else is written. When adding Blocked or the board
+write fails after the comment was posted, the message names the steps done, the comment URL
+included. A repository with no Workflow board is not a failure: the last line says so. The board
+is never read back.
+
+Output, one line a step:
+  <comment URL>
+  <url> Blocked
+  <url> Planning        or "<url> no board" when the repository has no Workflow board
+
+Exit codes: 0 posted; 1 a runtime failure, such as a gh or network error, prefixed "cfwf:", naming
+the steps already done when it fails part way; 2 a usage error; ${POLICY_REFUSED_EXIT} refused, nothing written;
+${ISSUE_NOT_FOUND_EXIT} the issue does not exist, or the number is a pull request's.
+USAGE
+}
+
 usage_issue_comments() {
     cat << USAGE
 Usage: cfwf issue comments --repo <owner/repo> --issue <n> [--since <time>] [--author <login>]
@@ -928,6 +976,8 @@ usage_issue() {
     usage_issue_reopen
     printf '\n'
     usage_issue_close
+    printf '\n'
+    usage_issue_post_plan
     printf '\n'
     usage_issue_comments
     printf '\n'
@@ -2698,6 +2748,7 @@ usage_for() {
         "issue add-sub-issue") usage_issue_add_sub_issue ;;
         "issue reopen") usage_issue_reopen ;;
         "issue close") usage_issue_close ;;
+        "issue post-plan") usage_issue_post_plan ;;
         "issue comments") usage_issue_comments ;;
         body | "body check") usage_body ;;
         repo) usage_repo ;;
@@ -4316,6 +4367,79 @@ issue_close() {
     printf '%s closed (%s)\n' "${url}" "${CLOSE_REASON}"
 }
 
+# issue post-plan: the steps written so far, for the EXIT trap to name if a later one fails.
+POST_PLAN_DONE=""
+
+# Notes the step $1 as done, for the EXIT trap to name if a later step fails.
+post_plan_done() {
+    POST_PLAN_DONE+="${POST_PLAN_DONE:+, }$1"
+}
+
+# Refuses (exit 8) the body in the file $1 when none of its lines is exactly PLAN_HEADING, the
+# heading the plan-approval check finds a plan by. A grep that fails dies, never read as no match.
+require_plan_heading() {
+    local status=0
+    LC_ALL=C grep -qxF -e "${PLAN_HEADING}" -- "$1" || status=$?
+    [ "${status}" -le 1 ] || die "could not scan the body"
+    [ "${status}" -eq 0 ] || refuse_policy post-plan "the body has no line that is exactly ${PLAN_HEADING}"
+}
+
+# Posts the plan in BODY_FILE on ISSUE of REPO, then adds Blocked, then moves the issue to Planning
+# on the Workflow board, so a plan is never left without Blocked (work could start unapproved) and
+# Blocked is never set without a plan. Everything is checked before the comment is posted: the body
+# (the leak check, the heading and the plan-approval keywords), then the issue, read once with
+# read_issue for its URL, its state and whether it carries On Hold, then the board's project and
+# Planning option. A closed issue, or one on hold, is refused with nothing written. A comment that
+# fails writes nothing else; a later failure names the steps done, the comment URL included (the
+# EXIT trap). A repository with no Workflow board is not a failure.
+issue_post_plan() {
+    local url state on_hold
+    local -a lines
+    parse_command_options assign_issue_edit_option "--repo --issue --body-file" "" "$@"
+    require REPO --repo
+    require ISSUE --issue
+    require BODY_FILE --body-file
+    require_gh
+    resolve_body
+    require_plan_heading "${BODY_FILE}"
+    check_comment_for_approval_keywords "${BODY_FILE}"
+
+    read_issue state,labels "${HOLD_LABELS_DEF}"' .url, .state, (if is_on_hold then "yes" else "no" end)'
+    mapfile -t lines <<< "${GH_OUTPUT}"
+    [ "${#lines[@]}" -eq 3 ] || unexpected_issue_result
+    url="${lines[0]}"
+    state="${lines[1]}"
+    on_hold="${lines[2]}"
+    [[ "${url}" =~ ${REPOSITORY_URL_PATTERN}/issues/${ISSUE}$ ]] || unexpected_issue_result
+    is_one_of "${on_hold}" yes no || unexpected_issue_result
+    case "${state}" in
+        OPEN) ;;
+        CLOSED) refuse_policy post-plan "the issue is closed" ;;
+        *) unexpected_issue_result ;;
+    esac
+    [ "${on_hold}" = no ] || refuse_policy post-plan "the issue carries On Hold"
+    resolve_project optional
+    if [ -n "${PROJECT_ID}" ]; then
+        STATUS="Planning"
+        resolve_status
+    fi
+
+    post_comment issue "${ISSUE}"
+    printf '%s\n' "${POSTED_COMMENT_URL}"
+    post_plan_done "comment ${POSTED_COMMENT_URL}"
+    gh_capture issue edit "${ISSUE}" --repo "${REPO}" --add-label Blocked < /dev/null \
+        || die "could not add the label Blocked to ${REPO}#${ISSUE}: $(gh_failure_text)"
+    printf '%s Blocked\n' "${url}"
+    post_plan_done Blocked
+    if [ -n "${PROJECT_ID}" ]; then
+        put_item_on_board "${url}"
+        printf '%s Planning\n' "${url}"
+    else
+        printf '%s no board\n' "${url}"
+    fi
+    POST_PLAN_DONE=""
+}
+
 # pr close and pr reopen: the state of the pull request as read before any write, open or closed,
 # and whether it is merged.
 PR_STATE=""
@@ -4621,7 +4745,8 @@ issue_add_sub_issue() {
 cmd_issue() {
     dispatch_subcommand issue create issue_create edit issue_edit view issue_view plan-status issue_plan_status \
         list issue_list search issue_search \
-        label-history issue_label_history reopen issue_reopen close issue_close comments issue_comments add-sub-issue issue_add_sub_issue -- "$@"
+        label-history issue_label_history reopen issue_reopen close issue_close post-plan issue_post_plan comments issue_comments \
+        add-sub-issue issue_add_sub_issue -- "$@"
 }
 
 # label add and label remove: the item as read before any write, its URL and the labels it carries,
@@ -7573,18 +7698,29 @@ comment_add() {
     resolve_body
     check_comment_for_approval_keywords "${BODY_FILE}"
 
-    local kind="issue" url
+    local kind="issue"
     [ -z "${PR}" ] || kind="pr"
-    url=$(gh "${kind}" comment "${TARGET_NUMBER}" --repo "${REPO}" --body-file "${BODY_FILE}" < /dev/null) \
-        || die "could not post the comment on ${REPO}#${TARGET_NUMBER}"
+    post_comment "${kind}" "${TARGET_NUMBER}"
+    printf '%s\n' "${POSTED_COMMENT_URL}"
+}
+
+# The URL of the comment post_comment posted last.
+POSTED_COMMENT_URL=""
+
+# Posts the body (BODY_FILE, already checked) as a top-level comment on the item $2 of the kind $1
+# (issue or pr) and sets POSTED_COMMENT_URL to its URL: comment add, and issue post-plan's plan.
+post_comment() {
+    local kind="$1" number="$2" url
+    url=$(gh "${kind}" comment "${number}" --repo "${REPO}" --body-file "${BODY_FILE}" < /dev/null) \
+        || die "could not post the comment on ${REPO}#${number}"
     url="${url##*$'\n'}"
     # As for issue create, the host and the repository are not compared: a proxy answers with its
     # own host and a renamed repository with its new name. pull and issues are both accepted
     # whichever was asked for, because GitHub answers a comment on a pull request made through its
     # issue number with the pull request URL.
-    [[ "${url}" =~ ${REPOSITORY_URL_PATTERN}/(pull|issues)/${TARGET_NUMBER}#issuecomment-[0-9]+$ ]] \
-        || die "gh returned an unexpected result for the comment, which may have been posted on ${REPO}#${TARGET_NUMBER}"
-    printf '%s\n' "${url}"
+    [[ "${url}" =~ ${REPOSITORY_URL_PATTERN}/(pull|issues)/${number}#issuecomment-[0-9]+$ ]] \
+        || die "gh returned an unexpected result for the comment, which may have been posted on ${REPO}#${number}"
+    POSTED_COMMENT_URL="${url}"
 }
 
 # label create: the name, colour and description asked for, and the label as the repository has it.

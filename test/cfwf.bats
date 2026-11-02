@@ -2051,7 +2051,7 @@ assert_nothing_created() {
 @test "issue needs a subcommand, and an unknown one is refused" {
     run "${SCRIPT}" issue
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"issue needs a subcommand (create, edit, view, plan-status, list, search, label-history, reopen, close, comments, add-sub-issue)"* ]]
+    [[ "${output}" == *"issue needs a subcommand (create, edit, view, plan-status, list, search, label-history, reopen, close, post-plan, comments, add-sub-issue)"* ]]
 
     run "${SCRIPT}" issue frobnicate
     [ "${status}" -eq 2 ]
@@ -6730,7 +6730,7 @@ assert_sign_off() {
 
 @test "help for a command and its subcommand prints what that subcommand's -h prints, and the command's usage for a subcommand it does not know" {
     local pair spelling expected
-    for pair in "issue create" "issue view" "issue plan-status" "issue list" "issue search" "issue label-history" "issue add-sub-issue" "body check" "pr checks" "pr ready-at" "pr auto-merge-at" "pr diff" "comment add" "label create" "release view" "release list" "tag view"; do
+    for pair in "issue create" "issue view" "issue plan-status" "issue list" "issue search" "issue label-history" "issue add-sub-issue" "issue post-plan" "body check" "pr checks" "pr ready-at" "pr auto-merge-at" "pr diff" "comment add" "label create" "release view" "release list" "tag view"; do
         # shellcheck disable=SC2086  # each pair is split into its two words on purpose
         run "${SCRIPT}" ${pair} -h
         [ "${status}" -eq 0 ]
@@ -15521,6 +15521,260 @@ write_closing_prs() {
     [[ "${output}" == *"Usage: cfwf issue close "* ]]
     run "${SCRIPT}" help
     [[ "${output}" == *$'\n'"  issue close              Close an issue with a reason, with an optional comment first (exit 8 when refused, 9 when not found)"$'\n'* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+# --- issue post-plan (#1604) ------------------------------------------------------
+
+POST_PLAN_ISSUE=1346
+POST_PLAN_ISSUE_URL="https://github.com/${REPO}/issues/${POST_PLAN_ISSUE}"
+POST_PLAN_COMMENT_URL="${POST_PLAN_ISSUE_URL}#issuecomment-81"
+POST_PLAN_BOARD_EDIT="project item-edit --project-id PVT_proj --id PVTI_target --field-id PVTSSF_status --single-select-option-id st_2"
+
+run_post_plan() {
+    run --separate-stderr "${SCRIPT}" issue post-plan --repo "${REPO}" --issue "${POST_PLAN_ISSUE}" --body-file "${TEST_TMP}/plan.md"
+}
+
+# The issue to plan in the state $1 (OPEN by default) with the labels given as the further arguments,
+# a plan body that passes every check, and the comment URL the post answers with.
+prepare_post_plan() {
+    local state="${1:-OPEN}"
+    shift || true
+    write_issue "${POST_PLAN_ISSUE}" "fix: something" "${state}" "The body." "$@"
+    printf '%s\n' "${POST_PLAN_COMMENT_URL}" > "${GH_FIXTURES}/comment.out"
+    printf '## Implementation Plan\n\n1. Do the thing.\n\nNo open questions.\n' > "${TEST_TMP}/plan.md"
+}
+
+# Nothing was written: no comment, no label and no board change.
+assert_no_plan_written() {
+    [ "$(gh_call_count "issue comment")" -eq 0 ]
+    [ "$(gh_call_count "issue edit")" -eq 0 ]
+    [ "$(gh_call_count "project item-add")" -eq 0 ]
+    [ "$(gh_call_count "project item-edit")" -eq 0 ]
+}
+
+@test "issue post-plan posts the plan, then adds Blocked, then moves the board to Planning, printing a line a step" {
+    prepare_post_plan OPEN AI-Work
+    run_post_plan
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "${POST_PLAN_COMMENT_URL}
+${POST_PLAN_ISSUE_URL} Blocked
+${POST_PLAN_ISSUE_URL} Planning" ]
+    cmp "${TEST_TMP}/plan.md" "${GH_FIXTURES}/comment-body.txt"
+    [ "$(gh_call_count "issue view ${POST_PLAN_ISSUE} --repo ${REPO}")" -eq 1 ]
+    grep -qxF "issue edit ${POST_PLAN_ISSUE} --repo ${REPO} --add-label Blocked" "${GH_LOG}"
+    grep -qxF "project item-add 74 --owner credfeto --url ${POST_PLAN_ISSUE_URL} --format json --jq .id" "${GH_LOG}"
+    grep -qxF "${POST_PLAN_BOARD_EDIT}" "${GH_LOG}"
+    [ "$(gh_line_of "issue view")" -lt "$(gh_line_of "issue comment ${POST_PLAN_ISSUE}")" ]
+    [ "$(gh_line_of "project field-list")" -lt "$(gh_line_of "issue comment ${POST_PLAN_ISSUE}")" ]
+    [ "$(gh_line_of "issue comment ${POST_PLAN_ISSUE}")" -lt "$(gh_line_of "issue edit ${POST_PLAN_ISSUE}")" ]
+    [ "$(gh_line_of "issue edit ${POST_PLAN_ISSUE}")" -lt "$(gh_line_of "project item-add")" ]
+    [ "$(gh_call_count "issue comment")" -eq 1 ]
+    [ "$(gh_call_count "project item-list")" -eq 0 ]
+    [ "$(gh_call_count "api graphql")" -eq 0 ]
+}
+
+@test "issue post-plan reads the plan from stdin" {
+    prepare_post_plan
+    run --separate-stderr "${SCRIPT}" issue post-plan --repo "${REPO}" --issue "${POST_PLAN_ISSUE}" --body-file - < "${TEST_TMP}/plan.md"
+    [ "${status}" -eq 0 ]
+    cmp "${TEST_TMP}/plan.md" "${GH_FIXTURES}/comment-body.txt"
+}
+
+@test "issue post-plan reports a repository with no Workflow board, rather than failing, after the comment and Blocked" {
+    prepare_post_plan
+    jq -n '{projectsV2: {Nodes: [{id: "PVT_other", title: "Roadmap", number: 9, resourcePath: "/users/credfeto/projects/9", closed: false}]}}' \
+        > "${GH_FIXTURES}/repo-view.json"
+    run_post_plan
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "${POST_PLAN_COMMENT_URL}
+${POST_PLAN_ISSUE_URL} Blocked
+${POST_PLAN_ISSUE_URL} no board" ]
+    [ "$(gh_call_count "issue edit ${POST_PLAN_ISSUE} --repo ${REPO} --add-label Blocked")" -eq 1 ]
+    [ "$(gh_call_count "project ")" -eq 0 ]
+}
+
+@test "issue post-plan refuses (exit 8) a body without a line that is exactly the plan heading, before reading or writing anything" {
+    local body
+    prepare_post_plan
+    for body in $'Plan:\n\n1. Do the thing.\n' $'## Implementation Plan:\n\n1. x\n' $'##Implementation Plan\n' $'## implementation plan\n' \
+        $' ## Implementation Plan\n' $'Here is the ## Implementation Plan\n'; do
+        printf '%s' "${body}" > "${TEST_TMP}/plan.md"
+        : > "${GH_LOG}"
+        run_post_plan
+        [ "${status}" -eq 8 ]
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: post-plan refused: the body has no line that is exactly ## Implementation Plan" ]
+        [ "$(gh_call_count "issue view")" -eq 0 ]
+        assert_no_plan_written
+    done
+}
+
+@test "issue post-plan refuses (exit 8) a plan-approval keyword outside a quote, and posts one inside a quote" {
+    local keyword
+    prepare_post_plan
+    for keyword in $(sign_off_keywords); do
+        printf '## Implementation Plan\n\n1. Already %s.\n' "${keyword}" > "${TEST_TMP}/plan.md"
+        : > "${GH_LOG}"
+        run_post_plan
+        [ "${status}" -eq 8 ]
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: body refused: approval keyword (line 3)" ]
+        [ "$(gh_call_count "issue view")" -eq 0 ]
+        assert_no_plan_written
+    done
+    printf '## Implementation Plan\n\n> %s\n\n1. Do the thing.\n' "$(sign_off_keywords | head -1)" > "${TEST_TMP}/plan.md"
+    run_post_plan
+    [ "${status}" -eq 0 ]
+}
+
+@test "issue post-plan refuses (exit 8) a body that fails the leak check, writing nothing" {
+    prepare_post_plan
+    printf '## Implementation Plan\n\ntoken ghp_%s\n' "$(printf 'a%.0s' {1..36})" > "${TEST_TMP}/plan.md"
+    : > "${GH_LOG}"
+    run_post_plan
+    [ "${status}" -eq 8 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: body refused: "* ]]
+    [ "$(gh_call_count "issue view")" -eq 0 ]
+    assert_no_plan_written
+    printf '## Implementation Plan\n\nsee /home/someone/secret.txt\n' > "${TEST_TMP}/plan.md"
+    : > "${GH_LOG}"
+    run_post_plan
+    [ "${status}" -eq 8 ]
+    [[ "${stderr}" == "cfwf: body refused: "* ]]
+    assert_no_plan_written
+}
+
+@test "issue post-plan refuses (exit 8) a closed issue, writing nothing" {
+    prepare_post_plan CLOSED
+    run_post_plan
+    [ "${status}" -eq 8 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: post-plan refused: the issue is closed" ]
+    assert_no_plan_written
+}
+
+@test "issue post-plan refuses (exit 8) an issue that carries On Hold, in any spelling, writing nothing" {
+    local label
+    for label in "On Hold" "on hold" "On-Hold"; do
+        prepare_post_plan OPEN AI-Work "${label}"
+        : > "${GH_LOG}"
+        run_post_plan
+        [ "${status}" -eq 8 ]
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: post-plan refused: the issue carries On Hold" ]
+        [ "$(gh_call_count "issue view")" -eq 1 ]
+        assert_no_plan_written
+    done
+}
+
+@test "issue post-plan exits 9 for a number that is no issue or is a pull request's, writing nothing" {
+    printf '## Implementation Plan\n\n1. x\n' > "${TEST_TMP}/plan.md"
+    run_post_plan
+    [ "${status}" -eq 9 ]
+    [ "${stderr}" = "cfwf: ${REPO}#${POST_PLAN_ISSUE} was not found" ]
+    jq -n --arg url "https://github.com/${REPO}/pull/${POST_PLAN_ISSUE}" '{url: $url, state: "OPEN", labels: []}' > "$(issue_fixture "${POST_PLAN_ISSUE}").json"
+    run_post_plan
+    [ "${status}" -eq 9 ]
+    [ "${stderr}" = "cfwf: ${REPO}#${POST_PLAN_ISSUE} is a pull request, not an issue" ]
+    assert_no_plan_written
+}
+
+@test "issue post-plan writes nothing else when the comment cannot be posted" {
+    prepare_post_plan
+    touch "${GH_FIXTURES}/comment.fail"
+    run_post_plan
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == *"cfwf: could not post the comment on ${REPO}#${POST_PLAN_ISSUE}" ]]
+    [[ "${stderr}" != *"steps done"* ]]
+    [ "$(gh_call_count "issue edit")" -eq 0 ]
+    [ "$(gh_call_count "project item-add")" -eq 0 ]
+    [ "$(gh_call_count "project item-edit")" -eq 0 ]
+
+    rm "${GH_FIXTURES}/comment.fail"
+    printf 'not a comment URL\n' > "${GH_FIXTURES}/comment.out"
+    run_post_plan
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: gh returned an unexpected result for the comment, which may have been posted on ${REPO}#${POST_PLAN_ISSUE}" ]
+    [ "$(gh_call_count "issue edit")" -eq 0 ]
+    [ "$(gh_call_count "project item-")" -eq 0 ]
+}
+
+@test "issue post-plan fails (exit 1) naming the comment URL when adding Blocked fails, and moves no board" {
+    prepare_post_plan
+    echo "HTTP 502: Bad Gateway" > "${GH_FIXTURES}/issue-edit.fail"
+    run_post_plan
+    [ "${status}" -eq 1 ]
+    [ "${output}" = "${POST_PLAN_COMMENT_URL}" ]
+    [[ "${stderr}" == "cfwf: could not add the label Blocked to ${REPO}#${POST_PLAN_ISSUE}: HTTP 502: Bad Gateway"* ]]
+    [[ "${stderr}" == *"cfwf: post-plan steps done before the failure: comment ${POST_PLAN_COMMENT_URL}" ]]
+    [ "$(gh_call_count "project item-")" -eq 0 ]
+}
+
+@test "issue post-plan fails (exit 1) naming the comment URL and Blocked when the board write fails" {
+    prepare_post_plan
+    touch "${GH_FIXTURES}/item-edit.fail"
+    run_post_plan
+    [ "${status}" -eq 1 ]
+    [ "${output}" = "${POST_PLAN_COMMENT_URL}
+${POST_PLAN_ISSUE_URL} Blocked" ]
+    [[ "${stderr}" == *"cfwf: could not set the Status of ${POST_PLAN_ISSUE_URL}"$'\n'* ]]
+    [[ "${stderr}" == *"cfwf: post-plan steps done before the failure: comment ${POST_PLAN_COMMENT_URL}, Blocked" ]]
+}
+
+@test "issue post-plan fails (exit 1) before writing anything when the board cannot be read" {
+    prepare_post_plan
+    touch "${GH_FIXTURES}/repo-view.fail"
+    run_post_plan
+    [ "${status}" -eq 1 ]
+    [[ "${stderr}" == *"cfwf: could not read the projects of ${REPO}" ]]
+    assert_no_plan_written
+}
+
+@test "issue post-plan usage errors exit 2 with its usage on stderr, before any gh call" {
+    local args
+    printf '## Implementation Plan\n\n1. x\n' > "${TEST_TMP}/plan.md"
+    for args in "--repo ${REPO} --issue 1" "--repo ${REPO} --body-file ${TEST_TMP}/plan.md" \
+        "--issue 1 --body-file ${TEST_TMP}/plan.md" "--repo ${REPO} --issue 0 --body-file ${TEST_TMP}/plan.md" \
+        "--repo ${REPO} --issue 1a --body-file ${TEST_TMP}/plan.md" "--repo nope --issue 1 --body-file ${TEST_TMP}/plan.md" \
+        "--repo ${REPO} --issue 1 --issue 2 --body-file ${TEST_TMP}/plan.md" \
+        "--repo ${REPO} --issue 1 --body-file ${TEST_TMP}/plan.md --body-file ${TEST_TMP}/plan.md" \
+        "--repo ${REPO} --issue 1 --body-file ${TEST_TMP}/plan.md --body text" \
+        "--repo ${REPO} --pr 1 --body-file ${TEST_TMP}/plan.md" "--repo ${REPO} --issue 1 --body-file"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run --separate-stderr "${SCRIPT}" issue post-plan ${args}
+        [ "${status}" -eq 2 ]
+        [ -z "${output}" ]
+        [[ "${stderr}" == *"Usage: cfwf issue post-plan --repo <owner/repo> --issue <n> --body-file <file|->"* ]]
+        [ ! -f "${GH_LOG}" ]
+    done
+}
+
+@test "issue post-plan help, from -h, --help and help, gives the usage, the order, the refusals and the exit codes, help issue and the general help include it, and none calls gh" {
+    local invocation
+    for invocation in "issue post-plan -h" "issue post-plan --help" "help issue post-plan"; do
+        # shellcheck disable=SC2086  # each invocation is several words on purpose
+        run --separate-stderr "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [ -z "${stderr}" ]
+        [[ "${output}" == "Usage: cfwf issue post-plan --repo <owner/repo> --issue <n> --body-file <file|->"* ]]
+        [[ "${output}" == *"posts the body as a comment, adds the Blocked label, then moves the issue to Planning"* ]]
+        [[ "${output}" == *'exactly "## Implementation Plan"'* ]]
+        [[ "${output}" == *"must be open and must not carry On Hold"* ]]
+        [[ "${output}" == *'"cfwf: post-plan refused: <rule>"'* ]]
+        [[ "${output}" == *'"<url> no board"'* ]]
+        [[ "${output}" == *"8 refused, nothing written"* ]]
+        [[ "${output}" != *"usage_"* ]]
+    done
+    run "${SCRIPT}" help issue
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Usage: cfwf issue close "*"Usage: cfwf issue post-plan "*"Usage: cfwf issue comments "* ]]
+    run "${SCRIPT}" help
+    [[ "${output}" == *$'\n'"  issue close              Close an issue with a reason, with an optional comment first (exit 8 when refused, 9 when not found)"$'\n'"  issue post-plan          Post an issue's implementation plan, add Blocked, then move the board to Planning (exit 8 when refused)"$'\n'* ]]
     [ ! -f "${GH_LOG}" ]
 }
 
