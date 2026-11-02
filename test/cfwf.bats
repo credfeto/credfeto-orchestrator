@@ -1014,7 +1014,8 @@ TAB=$'\t'
 # the first page, discussion-reviews-r2.json for the page of reviews after the cursor r2), so each
 # page is a call of its own; a GET of an inline comment is answered as setup's stand-in answers any
 # API path; a POST to .../replies copies the file it is given as the body to reply-body.txt and
-# answers from reply.json. An answer is the fixture with the call's own --jq filter applied by the
+# answers from reply.json, and a POST of a new inline comment (.../pulls/<n>/comments) copies it to
+# review-comment-body.txt and answers from review-comment.json. An answer is the fixture with the call's own --jq filter applied by the
 # real jq; beside a fixture, .fail is the stderr of a failed call (.failout its stdout), .raw an
 # answer printed as it is, and .stderr noise on a call that works. When the file rewrite exists,
 # the read of an inline comment overwrites the file it names, so a test can change the body file
@@ -1042,7 +1043,8 @@ prepare_pr_comments() {
         '}' \
         'case "$1 $2" in' \
         '  "api graphql") case "$*" in *reviewThreads*) answer "${GH_FIXTURES}/discussion${cursors}" ;; esac ;;' \
-        '  "api --method") case "$3 $4" in "POST repos/"*"/replies") cp "${body}" "${GH_FIXTURES}/reply-body.txt"; answer "${GH_FIXTURES}/reply" ;; esac ;;' \
+        '  "api --method") case "$3 $4" in "POST repos/"*"/replies") cp "${body}" "${GH_FIXTURES}/reply-body.txt"; answer "${GH_FIXTURES}/reply" ;;' \
+        '    "POST repos/"*"/comments") cp "${body}" "${GH_FIXTURES}/review-comment-body.txt"; answer "${GH_FIXTURES}/review-comment" ;; esac ;;' \
         '  "api repos/"*) [ ! -f "${GH_FIXTURES}/rewrite" ] || printf "%s\n" "rewritten with /tmp/leak" > "$(cat "${GH_FIXTURES}/rewrite")"; answer "${GH_FIXTURES}/api-${2//\//_}" ;;' \
         '  "repo view") case " $* " in *" --json visibility "*) v="${3,,}"; f="${GH_FIXTURES}/visibility-${v//\//_}"; [ -f "${f}.fail" ] && { if [ -s "${f}.fail" ]; then cat "${f}.fail" >&2; else echo "HTTP 502: Bad Gateway" >&2; fi; exit 1; }; [ -f "${f}.json" ] || { echo "GraphQL: Could not resolve to a Repository with the name ${3}. (repository)" >&2; exit 1; }; jq -r "${jq_expr}" < "${f}.json"; exit 0 ;; esac ;;' \
         'esac' \
@@ -7004,7 +7006,7 @@ assert_sign_off() {
 
 @test "help for a command and its subcommand prints what that subcommand's -h prints, and the command's usage for a subcommand it does not know" {
     local pair spelling expected
-    for pair in "issue create" "issue view" "issue plan-status" "issue list" "issue search" "issue label-history" "issue add-sub-issue" "issue post-plan" "issue block" "body check" "pr checks" "pr ready-at" "pr auto-merge-at" "pr diff" "pr block" "pr post-merge-runs" "pr sync-labels" "comment add" "comment edit" "label create" "release view" "release list" "tag view"; do
+    for pair in "issue create" "issue view" "issue plan-status" "issue list" "issue search" "issue label-history" "issue add-sub-issue" "issue post-plan" "issue block" "body check" "pr checks" "pr ready-at" "pr auto-merge-at" "pr diff" "pr block" "pr post-merge-runs" "pr sync-labels" "pr review-comment" "comment add" "comment edit" "label create" "release view" "release list" "tag view"; do
         # shellcheck disable=SC2086  # each pair is split into its two words on purpose
         run "${SCRIPT}" ${pair} -h
         [ "${status}" -eq 0 ]
@@ -9820,7 +9822,7 @@ read_once_asking_for() {
     run --separate-stderr "${SCRIPT}" pr
     [ "${status}" -eq 2 ]
     [ -z "${output}" ]
-    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, checks-wait, view, list, comments, reply, create, ready-at, status, auto-merge-at, diff, edit, hand-off, finalise-dependency, take-back, close, reopen, block, search, post-merge-runs, sync-labels)"* ]]
+    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, checks-wait, view, list, comments, reply, create, ready-at, status, auto-merge-at, diff, edit, hand-off, finalise-dependency, take-back, close, reopen, block, search, post-merge-runs, sync-labels, review-comment)"* ]]
     [[ "${stderr}" == *"Usage: cfwf pr checks"*"Run 'cfwf pr view --help' for pr view"* ]]
 
     run --separate-stderr "${SCRIPT}" pr frobnicate
@@ -17654,5 +17656,282 @@ no_label_removed() {
     run "${SCRIPT}" help
     [ "${status}" -eq 0 ]
     [[ "${output}" == *$'\n'"  pr sync-labels           Add the labels of the issues a PR closes to it, never removing one, and optionally assign the agent"$'\n'* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+# --- pr review-comment (#1631) ----------------------------------------------------
+
+REVIEW_COMMENT_USAGE="Usage: cfwf pr review-comment --repo <owner/repo> --pr <n> --path <file> --line <n> [--start-line <n>] [--side RIGHT|LEFT] --body-file <file|->"
+REVIEW_HEAD_SHA="0123456789abcdef0123456789abcdef01234567"
+
+# Pull request 42 as REST gives it, with REVIEW_HEAD_SHA as its head, the answer GitHub gives to a
+# new inline comment posted on it, and a body to post. It uses the gh stand-in of pr comments.
+prepare_review_comment() {
+    prepare_pr_comments
+    jq -n --arg sha "${REVIEW_HEAD_SHA}" '{number: 42, head: {sha: $sha, ref: "feat/x"}, base: {sha: "f00", ref: "main"}}' \
+        | write_api "repos/${REPO}/pulls/42"
+    jq -n --arg url "${DISCUSSION_URL}#discussion_r901" '{id: 901, html_url: $url, path: "src/app.sh", line: 12}' > "${GH_FIXTURES}/review-comment.json"
+    printf 'This branch never closes the file.\n\n> quoted from the diff\n' > "${TEST_TMP}/review.md"
+}
+
+run_review_comment() {
+    run --separate-stderr "${SCRIPT}" pr review-comment --repo "${REPO}" --pr 42 --path src/app.sh "$@"
+}
+
+review_comment_posts() {
+    gh_call_count "api --method POST"
+}
+
+# The start of the logged POST, up to the body, for the fields $1 (after commit_id and path).
+review_comment_post() {
+    printf '%s' "api --method POST repos/${REPO}/pulls/42/comments -f commit_id=${REVIEW_HEAD_SHA} -f path=src/app.sh $1 -F body=@"
+}
+
+@test "pr review-comment reads the head once and posts one comment on a single line, on each side, with the right fields" {
+    prepare_review_comment
+    local side expected
+    for side in "" RIGHT LEFT; do
+        : > "${GH_LOG}"
+        rm -f "${GH_FIXTURES}/review-comment-body.txt"
+        run_review_comment --line 0012 --body-file "${TEST_TMP}/review.md" ${side:+--side "${side}"}
+        [ "${status}" -eq 0 ]
+        [ -z "${stderr}" ]
+        [ "${output}" = "$(printf '%s\n' "inline${TAB}901" "url${TAB}${DISCUSSION_URL}#discussion_r901")" ]
+        cmp "${TEST_TMP}/review.md" "${GH_FIXTURES}/review-comment-body.txt"
+        [ "$(gh_call_count "api repos/${REPO}/pulls/42 --jq .head.sha")" -eq 1 ]
+        expected="$(review_comment_post "-F line=12 -f side=${side:-RIGHT}")"
+        [ "$(gh_call_count "${expected}")" -eq 1 ]
+        [ "$(review_comment_posts)" -eq 1 ]
+        [ "$(gh_call_count "start_")" -eq 0 ]
+        [ "$(grep -c -- "--repo\|-f body=\|${TEST_TMP}/review.md\|never closes" "${GH_LOG}")" -eq 0 ]
+        [ "$(wc -l < "${GH_LOG}")" -eq 2 ]
+        # The head is read before the post.
+        [ "$(gh_line_of "api repos/${REPO}/pulls/42 ")" -lt "$(gh_line_of "api --method POST")" ]
+    done
+}
+
+@test "pr review-comment posts a range with start_line and start_side on the side of --line, on each side" {
+    prepare_review_comment
+    local side expected
+    for side in RIGHT LEFT; do
+        : > "${GH_LOG}"
+        run --separate-stderr "${SCRIPT}" pr review-comment --body-file "${TEST_TMP}/review.md" --side "${side}" --line 12 \
+            --start-line 010 --path src/app.sh --pr 042 --repo "${REPO}"
+        [ "${status}" -eq 0 ]
+        [ "${output}" = "$(printf '%s\n' "inline${TAB}901" "url${TAB}${DISCUSSION_URL}#discussion_r901")" ]
+        cmp "${TEST_TMP}/review.md" "${GH_FIXTURES}/review-comment-body.txt"
+        [ "$(gh_call_count "api repos/${REPO}/pulls/42 --jq .head.sha")" -eq 1 ]
+        expected="$(review_comment_post "-F line=12 -f side=${side} -F start_line=10 -f start_side=${side}")"
+        [ "$(gh_call_count "${expected}")" -eq 1 ]
+        [ "$(review_comment_posts)" -eq 1 ]
+    done
+}
+
+@test "pr review-comment reads the body from stdin and posts the copy it checked" {
+    prepare_review_comment
+    run_review_comment --line 12 --body-file - <<< "A comment from stdin"
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${GH_FIXTURES}/review-comment-body.txt")" = "A comment from stdin" ]
+    [ "$(review_comment_posts)" -eq 1 ]
+}
+
+@test "pr review-comment refuses a leaking body or --path with exit 8, naming the rule only, before reading or posting anything" {
+    prepare_review_comment
+    local token
+    token="$(leak_tokens | head -1)"
+    local -a leaks=("${token}" "see /home/someone/notes" $'a bell \x07 here' $'bad \xff byte')
+    local -a rules=("token" "host path" "control character" "invalid UTF-8")
+    local index
+    for index in "${!leaks[@]}"; do
+        write_leak_body "${leaks[index]}"
+        run_review_comment --line 12 --body-file "${TEST_TMP}/leak.md"
+        assert_refused "${status}" "${output}" "${stderr}" "${rules[index]}" "${leaks[index]}"
+    done
+    [ ! -f "${GH_LOG}" ]
+
+    run --separate-stderr "${SCRIPT}" pr review-comment --repo "${REPO}" --pr 42 --path "docs/${token}.md" --line 12 --body-file "${TEST_TMP}/review.md"
+    [ "${status}" -eq 8 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: path refused: token" ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "pr review-comment refuses a plan-approval keyword outside a quote with exit 8, and posts one inside a quote" {
+    prepare_review_comment
+    local keyword
+    while IFS= read -r keyword; do
+        printf 'Looks right to me: %s.\n' "${keyword}" > "${TEST_TMP}/review.md"
+        run_review_comment --line 12 --body-file "${TEST_TMP}/review.md"
+        [ "${status}" -eq 8 ]
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: body refused: approval keyword (line 1)" ]
+        [ ! -f "${GH_LOG}" ]
+    done < <(sign_off_keywords)
+
+    printf 'As the issue says:\n\n> %s\n' "$(sign_off_keywords | head -1)" > "${TEST_TMP}/review.md"
+    run_review_comment --line 12 --body-file "${TEST_TMP}/review.md"
+    [ "${status}" -eq 0 ]
+    cmp "${TEST_TMP}/review.md" "${GH_FIXTURES}/review-comment-body.txt"
+}
+
+@test "pr review-comment refuses a blank, missing or unreadable body as a runtime failure, without calling gh" {
+    prepare_review_comment
+    printf ' \n\t\n' > "${TEST_TMP}/blank.md"
+    run_review_comment --line 12 --body-file "${TEST_TMP}/blank.md"
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: the body is empty" ]
+    run_review_comment --line 12 --body-file "${TEST_TMP}/nope.md"
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: cannot read the --body-file" ]
+    [ -z "${output}" ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "pr review-comment exits 1 with a clear message when GitHub answers 422 for a line not in the diff, and never posts twice" {
+    prepare_review_comment
+    printf 'gh: Validation Failed (HTTP 422)\n' > "${GH_FIXTURES}/review-comment.fail"
+    run_review_comment --line 12 --side LEFT --body-file "${TEST_TMP}/review.md"
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the review comment was not posted: GitHub refused it (HTTP 422) because the --line, or a line of the range, is not part of the diff of ${REPO}#42 on the LEFT side, or the head moved after it was read; see 'cfwf pr diff'" ]
+    [ "$(review_comment_posts)" -eq 1 ]
+
+    local error
+    for error in "gh: Not Found (HTTP 404)" "gh: Resource not accessible by integration (HTTP 403)"; do
+        : > "${GH_LOG}"
+        printf '%s\n' "${error}" > "${GH_FIXTURES}/review-comment.fail"
+        run_review_comment --line 12 --body-file "${TEST_TMP}/review.md"
+        [ "${status}" -eq 1 ]
+        [ "${stderr}" = "cfwf: the review comment was not posted: ${error}" ]
+        [ "$(review_comment_posts)" -eq 1 ]
+    done
+
+    local check="run 'cfwf pr comments' and look for it on the same path and line before posting again"
+    for error in "gh: Bad Gateway (HTTP 502)" "gh: Too Many Requests (HTTP 429)"; do
+        : > "${GH_LOG}"
+        printf '%s\n' "${error}" > "${GH_FIXTURES}/review-comment.fail"
+        run_review_comment --line 12 --body-file "${TEST_TMP}/review.md"
+        [ "${status}" -eq 1 ]
+        [ "${stderr}" = "cfwf: the review comment may have been posted (${error}); ${check}" ]
+        [ "$(review_comment_posts)" -eq 1 ]
+    done
+
+    rm "${GH_FIXTURES}/review-comment.fail"
+    local answer
+    for answer in '{id: 901, html_url: "https://github.com/credfeto/credfeto-orchestrator/pull/43#discussion_r901"}' '{id: "x", html_url: "y"}' '{}'; do
+        : > "${GH_LOG}"
+        jq -n "${answer}" > "${GH_FIXTURES}/review-comment.json"
+        run_review_comment --line 12 --body-file "${TEST_TMP}/review.md"
+        [ "${status}" -eq 1 ]
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: the review comment may have been posted (gh returned an unexpected answer); ${check}" ]
+        [ "$(review_comment_posts)" -eq 1 ]
+    done
+}
+
+@test "pr review-comment exits 9 without posting for a pull request that does not exist, and 1 when the head cannot be read" {
+    prepare_review_comment
+    rm "$(api_fixture "repos/${REPO}/pulls/42").json"
+    run_review_comment --line 12 --body-file "${TEST_TMP}/review.md"
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the pull request ${REPO}#42 was not found" ]
+    [ "$(review_comment_posts)" -eq 0 ]
+
+    fail_api "repos/${REPO}/pulls/42"
+    run_review_comment --line 12 --body-file "${TEST_TMP}/review.md"
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: could not read ${REPO}#42: gh: Bad Gateway (HTTP 502)" ]
+    rm "$(api_fixture "repos/${REPO}/pulls/42").fail"
+
+    jq -n '{head: {sha: "not-a-sha"}}' | write_api "repos/${REPO}/pulls/42"
+    run_review_comment --line 12 --body-file "${TEST_TMP}/review.md"
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: gh returned an unexpected head commit for ${REPO}#42" ]
+    [ "$(review_comment_posts)" -eq 0 ]
+}
+
+@test "pr review-comment usage errors exit 2 with its usage on stderr and nothing on stdout, never echoing a value, before any gh call" {
+    prepare_review_comment
+    local body="--body-file ${TEST_TMP}/review.md" repo="--repo ${REPO}" args
+    local -a cases=(
+        "" "--pr 42 --path a --line 1 ${body}" "${repo} --path a --line 1 ${body}" "${repo} --pr 42 --line 1 ${body}"
+        "${repo} --pr 42 --path a ${body}" "${repo} --pr 42 --path a --line 1"
+        "${repo} --pr 0 --path a --line 1 ${body}" "${repo} --pr x --path a --line 1 ${body}" "${repo} --pr 42 --pr 42 --path a --line 1 ${body}"
+        "--repo x --pr 42 --path a --line 1 ${body}" "${repo} ${repo} --pr 42 --path a --line 1 ${body}"
+        "${repo} --pr 42 --path a --line 0 ${body}" "${repo} --pr 42 --path a --line -1 ${body}" "${repo} --pr 42 --path a --line x ${body}"
+        "${repo} --pr 42 --path a --line 1234567890 ${body}" "${repo} --pr 42 --path a --line 1 --line 1 ${body}"
+        "${repo} --pr 42 --path a --line 5 --start-line 5 ${body}" "${repo} --pr 42 --path a --line 5 --start-line 6 ${body}"
+        "${repo} --pr 42 --path a --line 5 --start-line 0 ${body}" "${repo} --pr 42 --path a --line 5 --start-line 1 --start-line 2 ${body}"
+        "${repo} --pr 42 --path a --line 1 --side right ${body}" "${repo} --pr 42 --path a --line 1 --side BOTH ${body}"
+        "${repo} --pr 42 --path a --line 1 --side LEFT --side LEFT ${body}"
+        "${repo} --pr 42 --path /a --line 1 ${body}" "${repo} --pr 42 --path a/../b --line 1 ${body}" "${repo} --pr 42 --path .. --line 1 ${body}"
+        "${repo} --pr 42 --path ./a --line 1 ${body}" "${repo} --pr 42 --path a//b --line 1 ${body}" "${repo} --pr 42 --path a/ --line 1 ${body}"
+        "${repo} --pr 42 --path a --path b --line 1 ${body}" "${repo} --pr 42 --path a --line 1 ${body} ${body}"
+        "${repo} --pr 42 --path a --line 1 --body x" "${repo} --pr 42 --path a --line 1 --commit-id ${REVIEW_HEAD_SHA} ${body}"
+        "${repo} --pr 42 --path a --line 1 ${body} extra" "${repo} --pr 42 --path a --line"
+    )
+    for args in "${cases[@]}"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run --separate-stderr "${SCRIPT}" pr review-comment ${args}
+        if [ "${status}" -ne 2 ]; then
+            echo "accepted: ${args} (${status})" >&2
+            return 1
+        fi
+        [ -z "${output}" ]
+        if [[ "${stderr}" != "cfwf: "*$'\n\n'"${REVIEW_COMMENT_USAGE}"$'\n'* ]]; then
+            echo "usage: ${args}" >&2
+            return 1
+        fi
+    done
+
+    local path
+    for path in $'a\tb' $'a\x01b' $'a\nb'; do
+        run_review_comment --line 1 --body-file "${TEST_TMP}/review.md" --path "${path}"
+        [ "${status}" -eq 2 ]
+    done
+    run --separate-stderr "${SCRIPT}" pr review-comment --repo "${REPO}" --pr 42 --path $'a\x7fb' --line 1 --body-file "${TEST_TMP}/review.md"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: invalid value for --path: it must not contain a control character"$'\n'* ]]
+    run --separate-stderr "${SCRIPT}" pr review-comment --repo "${REPO}" --pr 42 --path a --line 5 --start-line 7 --body-file "${TEST_TMP}/review.md"
+    [[ "${stderr}" == "cfwf: invalid value for --start-line: it must be below --line"$'\n'* ]]
+
+    local secret
+    secret="$(leak_tokens | head -1)"
+    run --separate-stderr "${SCRIPT}" pr review-comment --repo "${REPO}" --pr 42 --path "a/../${secret}" --line 1 --body-file "${TEST_TMP}/review.md"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" != *"${secret}"* ]]
+    run --separate-stderr "${SCRIPT}" pr review-comment --repo "${REPO}" --pr 42 --path a --line "${secret}" --body-file "${TEST_TMP}/review.md"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" != *"${secret}"* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "pr review-comment help, from -h, --help and help, gives the usage, the rules, the output, the retry rule and every exit code; help pr and the general help point to it; none calls gh" {
+    local invocation
+    for invocation in "pr review-comment -h" "pr review-comment --help" "help pr review-comment"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run --separate-stderr "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [ -z "${stderr}" ]
+        [[ "${output}" == "${REVIEW_COMMENT_USAGE}"$'\n'* ]]
+        [[ "${output}" == *"never passed to gh api."* ]]
+        [[ "${output}" == *"There is no --body."* ]]
+        [[ "${output}" == *"There is no --commit-id: the comment is put on the"$'\n'"pull request's head, read once when the command runs."* ]]
+        [[ "${output}" == *"RIGHT (the default)"* ]]
+        [[ "${output}" == *"\"cfwf: path refused: <rule>\""* ]]
+        [[ "${output}" == *$'\n'"  inline  the new comment's id, the id 'cfwf pr reply --comment-id' takes"$'\n'"  url     the new comment's URL"$'\n'* ]]
+        [[ "${output}" == *"It posts once and never tries again. When GitHub answers HTTP 422, the comment was not posted:"* ]]
+        [[ "${output}" == *"do not run it again blindly. Run 'cfwf pr comments'"* ]]
+        [[ "${output}" == *"Exit codes: 0 posted; 8 the body or --path was refused; 9 the pull request was not found"* ]]
+        [[ "${output}" == *"prefixed \"cfwf:\"; 2 a usage error."* ]]
+        [[ "${output}" != *"usage_"* ]]
+    done
+    run "${SCRIPT}" help pr
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *$'\n'"Run 'cfwf pr reply --help' for pr reply, which replies to an inline review comment."$'\n'"Run 'cfwf pr review-comment --help' for pr review-comment, which posts a new inline review comment"$'\n'"on a line or a range of lines of a pull request's diff."$'\n'"Run 'cfwf pr ready-at --help'"* ]]
+    run "${SCRIPT}" help
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *$'\n'"  pr reply "*$'\n'"  pr review-comment        Post a new inline review comment on a line or a range of a PR's diff (exit 8 refused, 9 not found)"$'\n'"  pr hand-off "* ]]
     [ ! -f "${GH_LOG}" ]
 }
