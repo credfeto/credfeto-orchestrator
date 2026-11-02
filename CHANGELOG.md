@@ -16,6 +16,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - TBD - mask repo secret files in the container and add the block-secret-file-reads hook - #1419
 - Denied Edit access to ~/.claude/projects/** and */.claude/projects/** in the managed Claude settings (#1564)
 ### Added
+- `cfwf repo file --repo <owner/repo> --path <path> [--ref <branch|tag|sha>]` prints a file's contents byte for byte, or lists a directory as `<type>\t<name>` lines, at a branch, tag or commit, read-only through the contents API; binary files, files over 1 MiB, long directories, submodules and unfollowed symlinks are refused (exit 8), and a missing repository, path or ref exits 9, so agents no longer need raw `gh api .../contents | base64 -d` (#1721)
 - `cfwf repo advisories --repo <owner/repo>` lists a repository's security advisories, one `<ghsa_id>\t<severity>\t<state>\t<summary>` line each, so the dependency updater's advisory check no longer needs raw `gh api` (#1598)
 - `cfwf run list`, `cfwf run view` and `cfwf run log`: list a branch's or a commit's GitHub Actions runs with no event filter, read one run and its latest attempt's jobs, and read the tail of its failed steps' logs (at most 2000 lines a step, 1000 bytes a line, 256 KiB in all) made printable, with token lines redacted and long hex and base64 runs masked, replacing raw `gh run` and `gh api` reads (#1586)
 - cfwf issue edit: change an issue's title or body, or assign the agent, with the body and title checked for leaks first (#1596)
