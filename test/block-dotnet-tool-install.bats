@@ -144,7 +144,7 @@ run_hook() {
     [ "${status}" -eq 0 ]
 }
 
-@test "eval wrapping a tool install command is opaque to this hook (eval is already blocked upstream by enforce-git-dash-c/command-blocklist)" {
+@test "eval wrapping a tool install command is opaque to this hook (eval is already blocked upstream by enforce-git-policy/command-blocklist)" {
     run_hook 'eval "dotnet tool install -g Foo.Bar"'
     [ "${status}" -eq 0 ]
 }
