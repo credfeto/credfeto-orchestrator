@@ -472,6 +472,14 @@ installed_mcp_names() {
     jq -r '.permissions.allow[]' "${SOURCE_MANAGED_SETTINGS}" | grep -qxF 'mcp__cfwf__*'
 }
 
+@test "the Dockerfile sanity block fails the build unless raw gh is denied by both layers and cfwf stays allowed (#1805)" {
+    local dockerfile="${SOURCE_DIR}/Dockerfile"
+    grep -qF 'jq -e '"'"'(.permissions.deny | index("Bash(gh)") and index("Bash(gh *)")) and (.permissions.allow | index("Bash(cfwf *)"))' "${dockerfile}"
+    grep -qF 'cut -f1 /etc/claude-code/hooks/command-blocklist | grep -qxF gh' "${dockerfile}"
+    # gh itself stays installed: cfwf runs it as its own subprocess.
+    grep -qE 'for cmd in git gh ' "${dockerfile}"
+}
+
 @test "the Dockerfile copies managed-mcp.json and the headers helper into /etc/claude-code" {
     local dockerfile="${SOURCE_DIR}/Dockerfile"
     grep -qxF 'COPY --chown=root:root --chmod=0444 claude-managed-mcp.json /etc/claude-code/managed-mcp.json' "${dockerfile}"
