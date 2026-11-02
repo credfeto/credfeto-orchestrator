@@ -16,6 +16,8 @@ readonly NOT_ALLOWED_FOR_AGENTS_EXIT=10
 readonly ISSUE_NOT_FOUND_EXIT=9
 # The same code as ISSUE_NOT_FOUND_EXIT, so a missing item exits alike whatever kind of item it is.
 readonly PR_NOT_FOUND_EXIT=9
+# The same code again, for comment edit's comment id that is no comment of that kind in the repository.
+readonly COMMENT_NOT_FOUND_EXIT=9
 # How GitHub answers a read of a pull request number it does not have, the number of an issue included.
 readonly PR_NOT_FOUND_TEXT='Could not resolve to a PullRequest with the number'
 readonly RELEASE_NOT_FOUND_EXIT=9
@@ -421,6 +423,7 @@ Commands:
   pr block                 Post a question on a PR, then add Blocked, leaving the board as it is (exit 8 when refused)
   pr search                Search one repository's pull requests by words in their title or body, one line each
   comment add              Post a comment on a PR or an issue and print its URL
+  comment edit             Replace the body of the agent's own comment, by id, and print its URL (exit 8 refused, 9 not found)
   label create             Create one of the standard labels in a repository (exit 8 for any other name)
   release view             Print a repository's latest release, one key and value a line (exit 9 when it has none)
   release list             List a repository's releases, newest first, one line each
@@ -2446,6 +2449,41 @@ been posted); 2 a usage error.
 USAGE
 }
 
+usage_comment_edit() {
+    cat << USAGE
+Usage: cfwf comment edit --repo <owner/repo> --comment-id <id> (--issue-comment | --review-comment) --body-file <file|->
+
+Replaces the body of one of the agent's own comments, found by its id, then prints the comment
+URL and nothing else. There is no delete: a claim that turns out wrong is corrected by editing
+the comment that made it.
+
+--repo            Always required; never taken from the current directory.
+--comment-id      The comment's id, digits only: the number after #issuecomment- or #discussion_r
+                  in its URL.
+--issue-comment   The id is that of a top-level comment on an issue or a pull request. Exactly one
+                  of --issue-comment and --review-comment is required.
+--review-comment  The id is that of an inline review comment on a pull request.
+--body-file       The new body: a regular file, or - to read it from stdin. An empty body is an
+                  error. It is read once, into a private copy that is both checked and written.
+
+There is no --body, and no method, path, -f or -F option: the comment is read once, then edited
+with one PATCH, at the one REST path for its kind, repos/<owner>/<repo>/issues/comments/<id> or
+repos/<owner>/<repo>/pulls/comments/<id>, built only from --repo and --comment-id.
+
+The new body is checked first, as 'cfwf comment add' checks a body: for leaks (see 'cfwf help
+body') and for the two plan-approval keywords on a line that is not a Markdown quote. Then the
+comment is read, and the edit is refused when its author is not the authenticated login (gh api
+user), or when its body has a line that is exactly "${PLAN_HEADING}": a plan is revised
+only by posting a new one ('cfwf issue post-plan'). A refused body exits ${BODY_REFUSED_EXIT} with
+"cfwf: body refused: <rule>", and a refused edit with "cfwf: comment edit refused: <rule>", on
+stderr; nothing is written.
+
+Exit codes: 0 edited; ${POLICY_REFUSED_EXIT} refused; ${COMMENT_NOT_FOUND_EXIT} the repository has no comment of that kind with that id; 1 a
+runtime failure, such as an unreadable or blank body, a failed read or edit, or an answer that is
+not that comment, prefixed "cfwf:"; 2 a usage error.
+USAGE
+}
+
 usage_release_view() {
     cat << USAGE
 Usage: cfwf release view --repo <owner/repo>
@@ -2859,7 +2897,13 @@ usage_for() {
         "pr take-back") usage_pr_take_back ;;
         "pr comments") usage_pr_comments ;;
         "pr reply") usage_pr_reply ;;
-        comment | "comment add") usage_comment ;;
+        comment)
+            usage_comment
+            printf '\n'
+            usage_comment_edit
+            ;;
+        "comment add") usage_comment ;;
+        "comment edit") usage_comment_edit ;;
         label) usage_label ;;
         "label create") usage_label_create ;;
         "label add") usage_label_add ;;
@@ -7865,6 +7909,96 @@ post_comment() {
     POSTED_COMMENT_URL="${url}"
 }
 
+# comment edit: the kind of comment the id is (issue-comment or review-comment), the one REST path
+# its read and its edit both go to, built only from REPO and COMMENT_ID, and its author as read.
+COMMENT_KIND=""
+COMMENT_PATH=""
+COMMENT_AUTHOR=""
+# The jq program that reads a comment for comment edit, put after FIELDS_ROW_DEF: its id, its
+# author's login, its URL and whether its body has a line that is exactly PLAN_HEADING (a CR before
+# the line end left out, as GitHub keeps one from a browser), the check require_plan_heading makes.
+readonly COMMENT_EDIT_ROW_PROGRAM="[.id, .user.login, .html_url, (.body // \"\" | split(\"\\n\") | any(.[]; rtrimstr(\"\\r\") == \"${PLAN_HEADING}\")), \"end\"] | fields_row"
+
+assign_comment_edit_option() {
+    local flag="$1" value="${2:-}"
+    case "${flag}" in
+        --repo) assign_repository_option "${flag}" "${value}" ;;
+        --comment-id) assign_pr_comment_option "${flag}" "${value}" ;;
+        --issue-comment | --review-comment)
+            [ -z "${COMMENT_KIND}" ] || usage_error "give exactly one of --issue-comment and --review-comment"
+            COMMENT_KIND="${flag#--}"
+            ;;
+        --body-file) assign_issue_option "${flag}" "${value}" ;;
+    esac
+}
+
+# Succeeds when the URL $1 is that of the comment COMMENT_ID of the kind COMMENT_KIND. As for
+# post_comment, neither the host nor the repository is compared, and an issue comment may be on an
+# issue or a pull request.
+is_edited_comment_url() {
+    if [ "${COMMENT_KIND}" = issue-comment ]; then
+        matches_pattern "$1" "${REPOSITORY_URL_PATTERN}/(issues|pull)/[0-9]+#issuecomment-${COMMENT_ID}\$"
+    else
+        matches_pattern "$1" "${REPOSITORY_URL_PATTERN}/pull/[0-9]+#discussion_r${COMMENT_ID}\$"
+    fi
+}
+
+# Reads the comment at COMMENT_PATH once, setting COMMENT_AUTHOR, and refuses (exit 8) a comment
+# whose body is a plan. A 404 is a comment that is not there (the id of a comment of the other kind
+# included) once the repository has been read and found; any other failure dies, and so does an
+# answer that is not this comment.
+read_comment_for_edit() {
+    local id url plan end noun="${COMMENT_KIND/-/ }"
+    api_read "could not read the comment ${COMMENT_ID} of ${REPO}" "${COMMENT_PATH}" "${FIELDS_ROW_DEF} ${COMMENT_EDIT_ROW_PROGRAM}" \
+        || not_found_in_repository "${COMMENT_NOT_FOUND_EXIT}" "${REPO} has no ${noun} ${COMMENT_ID}"
+    IFS="${ROW_SEPARATOR}" read -r id COMMENT_AUTHOR url plan end <<< "${GH_OUTPUT}"
+    if [ "${id}" != "${COMMENT_ID}" ] || [ "${end}" != end ] || [[ ! "${plan}" =~ ^(true|false)$ ]] \
+        || ! is_edited_comment_url "${url}"; then
+        die "gh returned an unexpected answer for the comment ${COMMENT_ID} of ${REPO}"
+    fi
+    [ "${plan}" = false ] \
+        || refuse_policy "comment edit" "the comment is a plan (a line is exactly ${PLAN_HEADING}); post a new plan instead"
+}
+
+# Replaces the body of the comment at COMMENT_PATH with the checked copy in BODY_FILE, in one PATCH
+# that gh reads the body for from the file, so it is never an argument, and prints its URL.
+patch_comment() {
+    local id url end
+    gh_capture api --method PATCH "${COMMENT_PATH}" -F "body=@${BODY_FILE}" \
+        --jq "${FIELDS_ROW_DEF} [.id, .html_url, \"end\"] | fields_row" \
+        || die "could not edit the comment ${COMMENT_ID} of ${REPO}: $(gh_failure_text)"
+    IFS="${ROW_SEPARATOR}" read -r id url end <<< "${GH_OUTPUT}"
+    if [ "${id}" != "${COMMENT_ID}" ] || [ "${end}" != end ] || ! is_edited_comment_url "${url}"; then
+        die "gh returned an unexpected answer for the edit of the comment ${COMMENT_ID} of ${REPO}, which may have been made"
+    fi
+    printf '%s\n' "${url}"
+}
+
+# Replaces the body of one of the agent's own comments, by id (#1592). Everything is checked before
+# the one write: the options, the body (leaks and plan-approval keywords, as comment add checks
+# one), then the comment as read, which must be the agent's (gh api user) and not a plan.
+comment_edit() {
+    parse_command_options assign_comment_edit_option "--repo --comment-id --body-file" "--issue-comment --review-comment" "$@"
+    require REPO --repo
+    require COMMENT_ID --comment-id
+    [ -n "${COMMENT_KIND}" ] || usage_error "give exactly one of --issue-comment and --review-comment"
+    require BODY_FILE --body-file
+    require_gh
+    resolve_body
+    check_comment_for_approval_keywords "${BODY_FILE}"
+
+    if [ "${COMMENT_KIND}" = issue-comment ]; then
+        COMMENT_PATH="repos/${REPO}/issues/comments/${COMMENT_ID}"
+    else
+        COMMENT_PATH="repos/${REPO}/pulls/comments/${COMMENT_ID}"
+    fi
+    read_comment_for_edit
+    read_agent_login
+    [ -n "${COMMENT_AUTHOR}" ] && [ "${COMMENT_AUTHOR,,}" = "${AGENT_LOGIN,,}" ] \
+        || refuse_policy "comment edit" "the comment was not written by the agent's login"
+    patch_comment
+}
+
 # label create: the name, colour and description asked for, and the label as the repository has it.
 readonly LABEL_DESCRIPTION_LIMIT=100
 readonly LABEL_COLOUR_PATTERN='^[0-9A-Fa-f]{6}$'
@@ -7988,7 +8122,7 @@ cmd_label() {
 }
 
 cmd_comment() {
-    dispatch_subcommand comment add comment_add -- "$@"
+    dispatch_subcommand comment add comment_add edit comment_edit -- "$@"
 }
 
 assign_release_option() {

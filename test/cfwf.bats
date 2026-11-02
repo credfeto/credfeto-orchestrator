@@ -58,7 +58,7 @@ setup() {
         '  "issue edit") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/edit-body.txt"; prev="${arg}"; done; [ -f "${GH_FIXTURES}/issue-edit.fail" ] && { cat "${GH_FIXTURES}/issue-edit.fail" >&2; exit 1; }; echo "https://github.com/credfeto/credfeto-orchestrator/issues/0" ;;' \
         '  "run list") f="${GH_FIXTURES}/run-list"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; lim=30; asked=""; prev=""; for arg in "$@"; do [ "${prev}" = "--limit" ] && lim="${arg}"; [ "${prev}" = "--json" ] && asked="${arg}"; prev="${arg}"; done; jq --argjson lim "${lim}" --arg asked "${asked}" ".[:\$lim] | map(with_entries(select(.key as \$key | (\$asked | split(\",\")) | index(\$key))))" "${f}.json" > "${f}.asked.json" || exit 1; emit "${f}.asked.json" ;;' \
         '  "run view") job=""; prev=""; for arg in "$@"; do [ "${prev}" = "--job" ] && job="${arg}"; prev="${arg}"; done; if [ -n "${job}" ]; then f="${GH_FIXTURES}/run-log-job-${job}"; else f="${GH_FIXTURES}/run-log-$3"; fi; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.txt" ] || { echo "stub: no log" >&2; exit 1; }; cat "${f}.txt" ;;' \
-        '  "api --method") e="${4%%\?*}"; f="${GH_FIXTURES}/api-${3}-${e//\//_}"; [ -f "${f}.fail" ] && { [ -d "${f}.then" ] && cp "${f}.then/"* "${GH_FIXTURES}/"; cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.json" ] || { echo "gh stub: no fixture for $*" >&2; exit 99; }; emit "${f}.json" ;;' \
+        '  "api --method") e="${4%%\?*}"; f="${GH_FIXTURES}/api-${3}-${e//\//_}"; for arg in "$@"; do case "${arg}" in body=@*) cp "${arg#body=@}" "${f}.body.txt" ;; esac; done; [ -f "${f}.fail" ] && { [ -d "${f}.then" ] && cp "${f}.then/"* "${GH_FIXTURES}/"; cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.json" ] || { echo "gh stub: no fixture for $*" >&2; exit 99; }; emit "${f}.json" ;;' \
         '  "repo list") f="${GH_FIXTURES}/repo-list"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; arch=true; for arg in "$@"; do [ "${arg}" = "--no-archived" ] && arch=false; done; jq --argjson arch "${arch}" "[.[] | select(\$arch or .isArchived != true)]" "${f}.json" > "${f}.asked.json" || exit 1; emit "${f}.asked.json" ;;' \
         '  "search repos" | "search code") f="${GH_FIXTURES}/search-$2"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; lim=30; prev=""; for arg in "$@"; do [ "${prev}" = "--limit" ] && lim="${arg}"; prev="${arg}"; done; jq --argjson lim "${lim}" ".[:\$lim]" "${f}.json" > "${f}.asked.json" || exit 1; emit "${f}.asked.json" ;;' \
         '  *) echo "gh stub: unexpected call: $*" >&2; exit 99 ;;' \
@@ -203,6 +203,7 @@ gh_line_of() {
         [[ "${output}" == *"pr view"*"(exit 9 when not found)"* ]]
         [[ "${output}" == *"pr diff"*"(exit 9 when not found)"* ]]
         [[ "${output}" == *"comment add"* ]]
+        [[ "${output}" == *$'\n'"  comment edit             Replace the body of the agent's own comment, by id, and print its URL (exit 8 refused, 9 not found)"$'\n'* ]]
         [[ "${output}" == *"release view"*"(exit 9 when it has none)"* ]]
         [[ "${output}" == *"release list"* ]]
         [[ "${output}" == *"tag view"*"(exit 9 when not found)"* ]]
@@ -238,6 +239,7 @@ gh_line_of() {
     run "${SCRIPT}" help comment
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"cfwf comment add --repo <owner/repo> (--pr <n> | --issue <n>) --body-file <file|->"* ]]
+    [[ "${output}" == *"cfwf comment edit --repo <owner/repo> --comment-id <id> (--issue-comment | --review-comment) --body-file <file|->"* ]]
 }
 
 @test "the workflow-status help states that --set does not read back, the fallback listing limit and the GraphQL exception" {
@@ -6546,9 +6548,9 @@ run_comment_add() {
 
     run --separate-stderr "${SCRIPT}" comment
     [ "${status}" -eq 2 ]
-    [[ "${stderr}" == *"comment needs a subcommand (add)"* ]]
+    [[ "${stderr}" == *"comment needs a subcommand (add, edit)"* ]]
 
-    run --separate-stderr "${SCRIPT}" comment edit
+    run --separate-stderr "${SCRIPT}" comment frobnicate
     [ "${status}" -eq 2 ]
     [[ "${stderr}" == *"unknown comment subcommand (argument 2; its value is not shown)"* ]]
     [ ! -f "${GH_LOG}" ]
@@ -6571,6 +6573,268 @@ run_comment_add() {
     TMPDIR="${scratch}" run_comment_add --pr 1623 --body-file "${TEST_TMP}/comment.md"
     [ "${status}" -eq 1 ]
     [ -z "$(ls -A "${scratch}")" ]
+}
+
+# --- comment edit (#1592) -------------------------------------------------------
+
+# The agent's login, which the stub answers gh api user with, and the URLs of the issue comment 123
+# and of the inline review comment 456.
+EDIT_AGENT="the-agent"
+EDIT_ISSUE_COMMENT_URL="https://github.com/${REPO}/issues/1592#issuecomment-123"
+EDIT_REVIEW_COMMENT_URL="https://github.com/${REPO}/pull/42#discussion_r456"
+
+# Prints the REST path of the comment $2 of the kind $1 (issues or pulls).
+comment_edit_path() {
+    printf 'repos/%s/%s/comments/%s' "${REPO}" "$1" "$2"
+}
+
+# Writes the comment $2 of the kind $1 (issues or pulls) as REST gives it, by the login $3 ("" for a
+# deleted account, which has no user), with the body $4 and the URL $5, as the answer to both its
+# read and its PATCH, whose body the stub copies beside that answer (edited_body).
+write_edit_comment() {
+    local path
+    path=$(comment_edit_path "$1" "$2")
+    jq -n --argjson id "$2" --arg login "$3" --arg body "$4" --arg url "$5" \
+        '{id: $id, user: (if $login == "" then null else {login: $login} end), body: $body, html_url: $url}' \
+        | tee "$(api_fixture "PATCH-${path}").json" | write_api "${path}"
+}
+
+# Prints the body file the PATCH of the comment $2 of the kind $1 was given.
+edited_body() {
+    printf '%s.body.txt' "$(api_fixture "PATCH-$(comment_edit_path "$1" "$2")")"
+}
+
+# The agent's login, the repository (read when a comment is not found), the issue comment 123 and
+# the inline review comment 456, both by the agent, and a new body.
+prepare_comment_edit() {
+    jq -n --arg login "${EDIT_AGENT}" '{login: $login, id: 2}' | write_api user
+    jq -n '{id: 1}' | write_api "repos/${REPO}"
+    write_edit_comment issues 123 "${EDIT_AGENT}" "An earlier claim." "${EDIT_ISSUE_COMMENT_URL}"
+    write_edit_comment pulls 456 "${EDIT_AGENT}" "An earlier inline claim." "${EDIT_REVIEW_COMMENT_URL}"
+    printf 'A corrected claim.\n\nWith a second paragraph.\n' > "${TEST_TMP}/edit.md"
+}
+
+run_comment_edit() {
+    run --separate-stderr "${SCRIPT}" comment edit --repo "${REPO}" "$@"
+}
+
+edit_patches() {
+    gh_call_count "api --method PATCH"
+}
+
+@test "comment edit reads an issue comment at its fixed path, checks the login, patches it there with the checked copy and prints its URL" {
+    prepare_comment_edit
+    run_comment_edit --comment-id 123 --issue-comment --body-file "${TEST_TMP}/edit.md"
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "${EDIT_ISSUE_COMMENT_URL}" ]
+    [ "$(grep -c '^api ' "${GH_LOG}")" -eq 3 ]
+    [[ "$(grep '^api ' "${GH_LOG}" | sed -n 1p)" == "api repos/${REPO}/issues/comments/123 --jq "* ]]
+    [[ "$(grep '^api ' "${GH_LOG}" | sed -n 2p)" == "api user --jq "* ]]
+    [[ "$(grep '^api ' "${GH_LOG}" | sed -n 3p)" == "api --method PATCH repos/${REPO}/issues/comments/123 -F body=@"*" --jq "* ]]
+    cmp "${TEST_TMP}/edit.md" "$(edited_body issues 123)"
+    [ "$(gh_call_count "${TEST_TMP}/edit.md")" -eq 0 ]
+    [ "$(gh_call_count "A corrected claim")" -eq 0 ]
+    [ "$(gh_call_count "pulls/comments")" -eq 0 ]
+}
+
+@test "comment edit reads and patches a review comment at the pulls path, a body from stdin and an id with leading zeros included" {
+    prepare_comment_edit
+    run_comment_edit --review-comment --comment-id 000456 --body-file - <<< "A corrected inline claim."
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_REVIEW_COMMENT_URL}" ]
+    [ "$(gh_call_count "api repos/${REPO}/pulls/comments/456 --jq ")" -eq 1 ]
+    [ "$(gh_call_count "api --method PATCH repos/${REPO}/pulls/comments/456 -F body=@")" -eq 1 ]
+    [ "$(edit_patches)" -eq 1 ]
+    [ "$(gh_call_count "issues/comments")" -eq 0 ]
+    [ "$(cat "$(edited_body pulls 456)")" = "A corrected inline claim." ]
+}
+
+@test "comment edit refuses a comment by another login, or by a deleted account, with exit 8 and no PATCH, and takes the agent's login in any case" {
+    prepare_comment_edit
+    local login
+    for login in someone-else "${EDIT_AGENT}-two" ""; do
+        write_edit_comment issues 123 "${login}" "Someone's claim." "${EDIT_ISSUE_COMMENT_URL}"
+        run_comment_edit --comment-id 123 --issue-comment --body-file "${TEST_TMP}/edit.md"
+        [ "${status}" -eq 8 ]
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: comment edit refused: the comment was not written by the agent's login" ]
+    done
+    [ "$(edit_patches)" -eq 0 ]
+
+    write_edit_comment pulls 456 "The-Agent" "An earlier inline claim." "${EDIT_REVIEW_COMMENT_URL}"
+    run_comment_edit --comment-id 456 --review-comment --body-file "${TEST_TMP}/edit.md"
+    [ "${status}" -eq 0 ]
+    [ "$(edit_patches)" -eq 1 ]
+}
+
+@test "comment edit refuses a comment with a line that is exactly the plan heading, with exit 8 and no PATCH, and edits one that only mentions it" {
+    prepare_comment_edit
+    local body
+    for body in $'## Implementation Plan\n\n1. Do it.' $'Intro.\n## Implementation Plan\r\n1. Do it.' $'Intro.\n\n## Implementation Plan'; do
+        write_edit_comment issues 123 "${EDIT_AGENT}" "${body}" "${EDIT_ISSUE_COMMENT_URL}"
+        run_comment_edit --comment-id 123 --issue-comment --body-file "${TEST_TMP}/edit.md"
+        [ "${status}" -eq 8 ]
+        [ -z "${output}" ]
+        [[ "${stderr}" == "cfwf: comment edit refused: the comment is a plan (a line is exactly ## Implementation Plan); post a new plan instead" ]]
+    done
+    [ "$(edit_patches)" -eq 0 ]
+
+    for body in "See the ## Implementation Plan above." "## Implementation Plan, revised" " ## Implementation Plan" "### Implementation Plan"; do
+        write_edit_comment issues 123 "${EDIT_AGENT}" "${body}" "${EDIT_ISSUE_COMMENT_URL}"
+        run_comment_edit --comment-id 123 --issue-comment --body-file "${TEST_TMP}/edit.md"
+        [ "${status}" -eq 0 ]
+    done
+}
+
+@test "comment edit refuses a leaking body or a plan-approval keyword outside a quote with exit 8, before any gh call" {
+    prepare_comment_edit
+    local secret="gh""p_LEAKMARKER0123456789"
+    write_leak_body "the value is ${secret} here"
+    run_comment_edit --comment-id 123 --issue-comment --body-file "${TEST_TMP}/leak.md"
+    assert_refused "${status}" "${output}" "${stderr}" token "${secret}"
+
+    write_leak_body "see /home/someone/notes"
+    run_comment_edit --comment-id 456 --review-comment --body-file "${TEST_TMP}/leak.md"
+    assert_refused "${status}" "${output}" "${stderr}" "host path" "/home/someone"
+
+    local keyword
+    keyword="$(printf '%s%s' lg tm)"
+    write_leak_body "${keyword^^}, ship it"
+    run_comment_edit --comment-id 123 --issue-comment --body-file "${TEST_TMP}/leak.md"
+    assert_refused "${status}" "${output}" "${stderr}" "approval keyword" "${keyword^^}"
+    [ ! -f "${GH_LOG}" ]
+
+    write_leak_body "> ${keyword}"
+    run_comment_edit --comment-id 123 --issue-comment --body-file "${TEST_TMP}/leak.md"
+    [ "${status}" -eq 0 ]
+}
+
+@test "comment edit exits 9 without a PATCH for an id that is no comment of that kind in the repository, and 1 when the repository is not there" {
+    prepare_comment_edit
+    run_comment_edit --comment-id 999 --issue-comment --body-file "${TEST_TMP}/edit.md"
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: ${REPO} has no issue comment 999" ]
+
+    # The id of a comment of the other kind is not found at this kind's path.
+    run_comment_edit --comment-id 456 --issue-comment --body-file "${TEST_TMP}/edit.md"
+    [ "${status}" -eq 9 ]
+    [ "${stderr}" = "cfwf: ${REPO} has no issue comment 456" ]
+    run_comment_edit --comment-id 123 --review-comment --body-file "${TEST_TMP}/edit.md"
+    [ "${status}" -eq 9 ]
+    [ "${stderr}" = "cfwf: ${REPO} has no review comment 123" ]
+    [ "$(gh_call_count "api user")" -eq 0 ]
+
+    rm "$(api_fixture "repos/${REPO}").json"
+    run_comment_edit --comment-id 999 --issue-comment --body-file "${TEST_TMP}/edit.md"
+    [ "${status}" -eq 1 ]
+    [ "$(edit_patches)" -eq 0 ]
+}
+
+@test "comment edit fails without a PATCH when the comment cannot be read or the answer is not that comment, and exits 1 when the PATCH fails" {
+    prepare_comment_edit
+    fail_api "repos/${REPO}/issues/comments/123"
+    run_comment_edit --comment-id 123 --issue-comment --body-file "${TEST_TMP}/edit.md"
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read the comment 123 of ${REPO}: gh: Bad Gateway (HTTP 502)" ]
+    rm "$(api_fixture "repos/${REPO}/issues/comments/123").fail"
+
+    local url
+    for url in "${EDIT_REVIEW_COMMENT_URL}" "https://github.com/${REPO}/issues/1592#issuecomment-1234" "not a URL"; do
+        write_edit_comment issues 123 "${EDIT_AGENT}" "An earlier claim." "${url}"
+        run_comment_edit --comment-id 123 --issue-comment --body-file "${TEST_TMP}/edit.md"
+        [ "${status}" -eq 1 ]
+        [ "${stderr}" = "cfwf: gh returned an unexpected answer for the comment 123 of ${REPO}" ]
+    done
+    jq -n --arg url "${EDIT_ISSUE_COMMENT_URL}" '{id: 124, user: {login: "the-agent"}, body: "x", html_url: $url}' | write_api "repos/${REPO}/issues/comments/123"
+    run_comment_edit --comment-id 123 --issue-comment --body-file "${TEST_TMP}/edit.md"
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: gh returned an unexpected answer for the comment 123 of ${REPO}" ]
+    [ "$(edit_patches)" -eq 0 ]
+
+    # An issue comment on a pull request has a pull URL.
+    write_edit_comment issues 123 "${EDIT_AGENT}" "An earlier claim." "https://github.com/${REPO}/pull/42#issuecomment-123"
+    run_comment_edit --comment-id 123 --issue-comment --body-file "${TEST_TMP}/edit.md"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "https://github.com/${REPO}/pull/42#issuecomment-123" ]
+
+    fail_api "PATCH-repos/${REPO}/issues/comments/123" "gh: Validation Failed (HTTP 422)"
+    run_comment_edit --comment-id 123 --issue-comment --body-file "${TEST_TMP}/edit.md"
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not edit the comment 123 of ${REPO}: gh: Validation Failed (HTTP 422)" ]
+}
+
+@test "comment edit usage errors exit 2 with the usage on stderr and never call gh" {
+    prepare_comment_edit
+    local body="${TEST_TMP}/edit.md" args expected
+    local -a cases=(
+        "--comment-id 12a --issue-comment|invalid value for --comment-id: it must be a number of at most 19 digits"
+        "--comment-id -5 --issue-comment|invalid value for --comment-id: it must be a number of at most 19 digits"
+        "--comment-id 12345678901234567890 --issue-comment|invalid value for --comment-id: it must be a number of at most 19 digits"
+        "--comment-id 000 --review-comment|invalid value for --comment-id: it must be above 0"
+        "--comment-id 1 --comment-id 2 --issue-comment|--comment-id can only be given once"
+        "--comment-id 123|give exactly one of --issue-comment and --review-comment"
+        "--comment-id 123 --issue-comment --review-comment|give exactly one of --issue-comment and --review-comment"
+        "--review-comment --comment-id 123 --issue-comment|give exactly one of --issue-comment and --review-comment"
+        "--comment-id 123 --issue-comment --issue-comment|give exactly one of --issue-comment and --review-comment"
+        "--issue-comment|missing required option --comment-id"
+        "--comment-id 123 --issue-comment --method PATCH|unknown option"
+        "--comment-id 123 --issue-comment -F body=x|unknown option"
+        "--comment-id 123 --issue-comment -f body=x|unknown option"
+        "--comment-id 123 --issue-comment --body x|unknown option"
+        "--comment-id 123 --issue-comment --delete|unknown option"
+        "--comment-id 123 --issue-comment --pr 42|unknown option"
+    )
+    for args in "${cases[@]}"; do
+        expected="${args#*|}"
+        # shellcheck disable=SC2086  # each case is a list of words
+        run_comment_edit ${args%%|*} --body-file "${body}"
+        [ "${status}" -eq 2 ]
+        [ -z "${output}" ]
+        [[ "${stderr}" == "cfwf: ${expected}"* ]]
+        [[ "${stderr}" == *"Usage: cfwf comment edit"* ]]
+    done
+
+    run --separate-stderr "${SCRIPT}" comment edit --comment-id 123 --issue-comment --body-file "${body}"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: missing required option --repo"* ]]
+    run_comment_edit --comment-id 123 --issue-comment
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: missing required option --body-file"* ]]
+    run_comment_edit --comment-id 123 --issue-comment --body-file "${body}" --body-file "${body}"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: --body-file can only be given once"* ]]
+    [ ! -f "${GH_LOG}" ]
+
+    # A blank body is a runtime failure, still before any gh call.
+    run_comment_edit --comment-id 123 --issue-comment --body-file - <<< "   "
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: the body is empty" ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "comment edit help, from help comment edit, -h and --help, gives the usage, the fixed paths, the refusals and the exit codes, and calls no gh" {
+    local args
+    for args in "help comment edit" "comment edit -h" "comment edit --help" "-h comment edit"; do
+        # shellcheck disable=SC2086  # each entry is a list of words
+        run --separate-stderr "${SCRIPT}" ${args}
+        [ "${status}" -eq 0 ]
+        [ -z "${stderr}" ]
+        [[ "${output}" == "Usage: cfwf comment edit --repo <owner/repo> --comment-id <id> (--issue-comment | --review-comment) --body-file <file|->"$'\n'* ]]
+        [[ "${output}" == *"There is no delete"* ]]
+        [[ "${output}" == *"repos/<owner>/<repo>/issues/comments/<id> or"$'\n'"repos/<owner>/<repo>/pulls/comments/<id>"* ]]
+        [[ "${output}" == *'exactly "## Implementation Plan"'* ]]
+        [[ "${output}" == *"is not the authenticated login"* ]]
+        [[ "${output}" == *"Exit codes: 0 edited; 8 refused; 9 the repository has no comment of that kind with that id; 1"* ]]
+    done
+
+    run --separate-stderr "${SCRIPT}" help comment
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == "Usage: cfwf comment add"*$'\n\n'"Usage: cfwf comment edit"* ]]
+    [ ! -f "${GH_LOG}" ]
 }
 
 # --- issue view and issue plan-status -------------------------------------------
@@ -6730,7 +6994,7 @@ assert_sign_off() {
 
 @test "help for a command and its subcommand prints what that subcommand's -h prints, and the command's usage for a subcommand it does not know" {
     local pair spelling expected
-    for pair in "issue create" "issue view" "issue plan-status" "issue list" "issue search" "issue label-history" "issue add-sub-issue" "issue post-plan" "issue block" "body check" "pr checks" "pr ready-at" "pr auto-merge-at" "pr diff" "pr block" "comment add" "label create" "release view" "release list" "tag view"; do
+    for pair in "issue create" "issue view" "issue plan-status" "issue list" "issue search" "issue label-history" "issue add-sub-issue" "issue post-plan" "issue block" "body check" "pr checks" "pr ready-at" "pr auto-merge-at" "pr diff" "pr block" "comment add" "comment edit" "label create" "release view" "release list" "tag view"; do
         # shellcheck disable=SC2086  # each pair is split into its two words on purpose
         run "${SCRIPT}" ${pair} -h
         [ "${status}" -eq 0 ]
@@ -10248,6 +10512,7 @@ run_tag_view() {
     run "${SCRIPT}" help
     [ "${status}" -eq 0 ]
     local listed=$'\n'"  comment add              Post a comment on a PR or an issue and print its URL"$'\n'
+    listed+="  comment edit             Replace the body of the agent's own comment, by id, and print its URL (exit 8 refused, 9 not found)"$'\n'
     listed+="  label create             Create one of the standard labels in a repository (exit 8 for any other name)"$'\n'
     listed+="  release view             Print a repository's latest release, one key and value a line (exit 9 when it has none)"$'\n'
     listed+="  release list             List a repository's releases, newest first, one line each"$'\n'
