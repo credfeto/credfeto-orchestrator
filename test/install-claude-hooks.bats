@@ -748,8 +748,7 @@ run_dockerfile_mcp_checks() {
 
 @test "the Dockerfile sanity block pins the kb server, its helper's owner and mode, and its allow rule" {
     local dockerfile="${SOURCE_DIR}/Dockerfile"
-    grep -qF "jq -e '.mcpServers.kb.type == \"http\" and .mcpServers.kb.url == \"${KB_URL}\" and .mcpServers.kb.headersHelper == \"/etc/claude-code/mcp/kb-mcp-headers\"' /etc/claude-code/managed-mcp.json" "${dockerfile}"
-    grep -qF "jq -e '.mcpServers.kb | has(\"headers\") or has(\"env\") | not' /etc/claude-code/managed-mcp.json" "${dockerfile}"
+    grep -qF "jq -e '.mcpServers.kb == {\"type\": \"http\", \"url\": \"${KB_URL}\", \"headersHelper\": \"/etc/claude-code/mcp/kb-mcp-headers\"}' /etc/claude-code/managed-mcp.json" "${dockerfile}"
     grep -qF "[ \"\$(stat -c '%U:%G %a' /etc/claude-code/mcp/kb-mcp-headers)\" = \"root:root 755\" ]" "${dockerfile}"
     grep -qF "jq -e '.permissions.allow | index(\"mcp__kb__*\")' /etc/claude-code/managed-settings.json" "${dockerfile}"
 }
