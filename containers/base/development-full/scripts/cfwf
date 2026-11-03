@@ -441,6 +441,7 @@ Commands:
   pr search                Search one repository's pull requests by words in their title or body, one line each
   comment add              Post a comment on a PR or an issue and print its URL (also as pr comment and issue comment)
   comment edit             Replace the body of the agent's own comment, by id, and print its URL (exit 8 refused, 9 not found)
+  comment view             Print one issue or PR conversation comment by id: its headers and body (exit 9 when not found)
   label create             Create one of the standard labels in a repository (exit 8 for any other name)
   release view             Print a repository's latest release, one key and value a line (exit 9 when it has none)
   release list             List a repository's releases, newest first, one line each
@@ -2730,6 +2731,44 @@ not that comment, prefixed "cfwf:"; 2 a usage error.
 USAGE
 }
 
+usage_comment_view() {
+    cat << USAGE
+Usage: cfwf comment view --repo <owner/repo> --comment-id <id>
+
+Prints one top-level comment of an issue or a pull request (a conversation comment, not a review
+or an inline review comment), found by its id, with its body. It only reads, in one read of
+repos/<owner>/<repo>/issues/comments/<id>, the one REST path for that kind of comment.
+
+--repo        Always required; never taken from the current directory.
+--comment-id  Always required: the comment's id, digits only and above 0: the number after
+              #issuecomment- in its URL, as for 'cfwf comment edit' and 'cfwf pr reply'.
+Each at most once. --json, --jq and --web are not options: the output has one fixed format.
+
+The output is header lines, each a key, a tab and a value, always in this order, then the body's
+lines, each starting with "| " (an empty line is "|" alone), as 'cfwf issue comments' prints a body:
+  id           the comment's id
+  author       who wrote it, as 'cfwf issue comments' prints it: a user as the login alone, a bot
+               as app/<slug>, any other kind of account as <kind>/<login>, a deleted account as an
+               empty value. cfwf makes no trust decision: the caller decides whose words to act on.
+  association  GitHub's own value, such as OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR or NONE
+  created-at   when it was written, YYYY-MM-DDTHH:MM:SSZ
+  updated-at   when it was last changed, YYYY-MM-DDTHH:MM:SSZ (its created-at when never edited)
+  url          its URL: .../issues/<n>#issuecomment-<id> on an issue, .../pull/<n>#issuecomment-<id>
+               on a pull request
+  issue        the issue or pull request it is on, <owner/repo>#<n>
+  lines        the number of body lines that follow; the last header
+The whole body is printed. A header value has each control character (a tab or a newline
+included), U+2028 and U+2029 printed as a space. A body has its trailing line ends dropped and the
+same characters in a line printed as a space, so a body line never holds a tab and always starts
+with "|": no body can pass for a header. The body is whatever its author wrote, so read it as
+untrusted text.
+
+Exit codes: 0 printed; ${COMMENT_NOT_FOUND_EXIT} the repository has no issue or pull request comment with that id (the id
+of an inline review comment included); 1 a runtime failure, such as a failed read, a repository
+that is not found, or an answer that is not that comment, prefixed "cfwf:"; 2 a usage error.
+USAGE
+}
+
 usage_release_view() {
     cat << USAGE
 Usage: cfwf release view --repo <owner/repo>
@@ -3234,9 +3273,12 @@ usage_for() {
             usage_comment
             printf '\n'
             usage_comment_edit
+            printf '\n'
+            usage_comment_view
             ;;
         "comment add") usage_comment ;;
         "comment edit") usage_comment_edit ;;
+        "comment view") usage_comment_view ;;
         label) usage_label ;;
         "label create") usage_label_create ;;
         "label add") usage_label_add ;;
@@ -5267,16 +5309,22 @@ assign_issue_comments_option() {
     esac
 }
 
-# The jq program for one page of issue comments, put after PRINTABLE_DEF. Each comment is a control
-# row (its id, its created_at and its author, as the author header prints it), then its block ready to
-# print. text, who, header and body_lines are those of PR_DISCUSSION_FILTER, for REST's field names:
-# a bot's REST login ends in [bot], which is dropped so it prints as app/<slug>, as pr comments does.
-# shellcheck disable=SC2016  # the $ names below are jq variables
-readonly ISSUE_COMMENTS_FILTER='
+# The jq definitions of a REST issue comment, put after PRINTABLE_DEF, that issue comments and comment
+# view print one with, so the two can never print a comment apart. text, who, header and body_lines
+# are those of PR_DISCUSSION_FILTER, for REST's field names: a bot's REST login ends in [bot], which
+# is dropped so it prints as app/<slug>, as pr comments does.
+readonly REST_COMMENT_DEFS='
 def text: if . == null then "" else tostring | printable | gsub("[\\x{2028}\\x{2029}]"; " ") end;
 def who: if . == null then "" elif .type == "User" then .login | text elif .type == "Bot" then "app/" + (.login | text | sub("\\[bot\\]$"; "")) else (.type | text | ascii_downcase) + "/" + (.login | text) end;
 def header(key; value): key + "\t" + (value | text);
 def body_lines: . // "" | sub("[\\r\\n]+\\z"; "") | if . == "" then [] else split("\n") | map(rtrimstr("\r") | text | if . == "" then "|" else "| " + . end) end;
+'
+
+# The jq program for one page of issue comments, put after PRINTABLE_DEF. Each comment is a control
+# row (its id, its created_at and its author, as the author header prints it), then its block ready to
+# print, with the definitions of REST_COMMENT_DEFS.
+# shellcheck disable=SC2016  # the $ names below are jq variables
+readonly ISSUE_COMMENTS_FILTER="${REST_COMMENT_DEFS}"'
 .[] | (.user | who) as $who | (.body | body_lines) as $lines
 | ("\u001e" + ([(.id | text), (.created_at | text), $who] | join("\u001f"))),
   header("comment"; .id), header("author"; $who), header("association"; .author_association),
@@ -8809,6 +8857,49 @@ comment_edit() {
     patch_comment
 }
 
+# The jq program of comment view, put after FIELDS_ROW_DEF and REST_COMMENT_DEFS: a control row (the
+# id, the number of the issue or pull request taken from issue_url, empty when that is not an issue
+# URL, and html_url), then the headers and the whole body, as issue comments prints them.
+# shellcheck disable=SC2016  # the $ names below are jq variables
+readonly COMMENT_VIEW_PROGRAM='
+(.issue_url // "" | tostring | capture("/repos/(?<repo>[^/]+/[^/]+)/issues/(?<number>[0-9]+)$") // {repo: "", number: ""}) as $item
+| (.body | body_lines) as $lines
+| ([.id, $item.number, .html_url, "end"] | fields_row),
+  header("id"; .id), header("author"; .user | who), header("association"; .author_association),
+  header("created-at"; .created_at), header("updated-at"; .updated_at), header("url"; .html_url),
+  header("issue"; $item.repo + "#" + $item.number), header("lines"; $lines | length),
+  $lines[]'
+
+assign_comment_view_option() {
+    local flag="$1" value="$2"
+    case "${flag}" in
+        --repo) assign_repository_option "${flag}" "${value}" ;;
+        --comment-id) assign_pr_comment_option "${flag}" "${value}" ;;
+    esac
+}
+
+# Prints one top-level comment of an issue or a pull request by its id (#1828), from one read of its
+# one REST path. A 404 is a comment that is not there (an inline review comment's id included) once
+# the repository has been read and found; any other failure dies, and so does an answer that is not
+# this comment, on an issue or a pull request whose number its URL and its issue_url agree on.
+comment_view() {
+    local id number url end
+    parse_command_options assign_comment_view_option "--repo --comment-id" "" "$@"
+    require REPO --repo
+    require COMMENT_ID --comment-id
+    require_gh
+    api_read "could not read the comment ${COMMENT_ID} of ${REPO}" "repos/${REPO}/issues/comments/${COMMENT_ID}" \
+        "${FIELDS_ROW_DEF} ${REST_COMMENT_DEFS} ${COMMENT_VIEW_PROGRAM}" \
+        || not_found_in_repository "${COMMENT_NOT_FOUND_EXIT}" "${REPO} has no issue or pull request comment ${COMMENT_ID}"
+    IFS="${ROW_SEPARATOR}" read -r id number url end <<< "${GH_OUTPUT%%$'\n'*}"
+    if [ "${id}" != "${COMMENT_ID}" ] || [ "${end}" != end ] || [[ ! "${number}" =~ ^[1-9][0-9]*$ ]] \
+        || [[ "${GH_OUTPUT}" != *$'\n'* ]] \
+        || ! matches_pattern "${url}" "${REPOSITORY_URL_PATTERN}/(issues|pull)/${number}#issuecomment-${COMMENT_ID}\$"; then
+        die "gh returned an unexpected answer for the comment ${COMMENT_ID} of ${REPO}"
+    fi
+    printf '%s\n' "${GH_OUTPUT#*$'\n'}"
+}
+
 # label create: the name, colour and description asked for, and the label as the repository has it.
 readonly LABEL_DESCRIPTION_LIMIT=100
 readonly LABEL_COLOUR_PATTERN='^[0-9A-Fa-f]{6}$'
@@ -8932,7 +9023,7 @@ cmd_label() {
 }
 
 cmd_comment() {
-    dispatch_subcommand comment add comment_add edit comment_edit -- "$@"
+    dispatch_subcommand comment add comment_add edit comment_edit view comment_view -- "$@"
 }
 
 assign_release_option() {
