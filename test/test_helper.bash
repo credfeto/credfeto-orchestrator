@@ -81,7 +81,7 @@ setup_isolated_env() {
     # it sets core.hooksPath, so every git commit in a fixture would otherwise run the host's
     # shared hooks instead of the fixture's own .git/hooks.
     export GIT_CONFIG_NOSYSTEM=1
-    unset GH_HOST GH_ENTERPRISE_TOKEN GH_TOKEN
+    unset GH_HOST GH_ENTERPRISE_TOKEN GH_TOKEN KB_MCP_TOKEN
     unset CLAUDECODE CLAUDE_CODE_OAUTH_TOKEN ORCHESTRATOR_IMAGE
     unset DISCORD_WEBHOOK_URL
     unset DISCORD_WEBHOOK_URL_BLOCKED DISCORD_WEBHOOK_URL_AWAITING_APPROVAL DISCORD_WEBHOOK_URL_PERMISSIONS DISCORD_WEBHOOK_URL_SLOW_PULL
