@@ -54,13 +54,17 @@ On top of all of that, this final image:
    is missing, any removed tool is somehow still reachable, or the entrypoint itself is broken —
    catching a broken image at build time, not three hours into an unattended overnight run.
 
-Claude Code can reach exactly two MCP servers, pinned by `development-full` in a root-owned
+Claude Code can reach exactly three MCP servers, pinned by `development-full` in a root-owned
 `/etc/claude-code/managed-mcp.json`, so the agent cannot add a server or point one anywhere else:
 
 - `cfwf`, the workflow MCP server at `https://workflow-mcp.markridgwell.com/mcp`. The file holds
   no token. A root-owned helper hands Claude Code's MCP client the GitHub token the container
   already has, at connect time, so the token is never written to the image or to disk. Nothing
   routes work to the server yet.
+- `kb`, the knowledge-base MCP server at `https://memory.markridgwell.com/dev/mcp`. Its token is
+  the optional `KB_MCP_TOKEN` in `orchestrator/.env`, which `oneshot` passes in as a per-container
+  Podman secret and removes on exit; a root-owned helper hands it to the MCP client at connect
+  time. Without it, the session starts with `kb` shown as failed to connect.
 - `build-dotnet`, the .NET build, test and coverage server (`credfeto-build-dotnet`, a local stdio
   process), working on the repository at `/workspace/repo` (#1818). It is registered for every
   session, whatever the repository's language.

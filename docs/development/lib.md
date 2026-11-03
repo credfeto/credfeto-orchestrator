@@ -99,7 +99,7 @@ Things that have caught us out in the unit text:
 - The repository path is unquoted in both `ExecStart=` lines, and systemd splits them on whitespace, so a path containing spaces would make the unit fail. The `ExecStartPre` lines do quote it.
 - A re-run issues `daemon-reload`, `enable` and `start`, never `restart`.
 
-`lib/discord` and `lib/podman` each declare a few plain top-level variables of their own (`DISCORD_RESOLVED_WEBHOOK_URL`, and `CLAUDE_MD_TMPFILE`, `CLAUDE_PROMPT`, `GPG_PUBKEY_TMPDIR`, `PODMAN_SECRET_NAME`, `GH_ENTERPRISE_SECRET_NAME`, `CLAUDE_SCRATCH_TMPDIR`). They are invocation-scoped scratch values assigned to `""`, so they are an existing exception to the "globals live in `lib/globals`" rule below rather than a pattern to copy.
+`lib/discord` and `lib/podman` each declare a few plain top-level variables of their own (`DISCORD_RESOLVED_WEBHOOK_URL`, and `CLAUDE_MD_TMPFILE`, `CLAUDE_PROMPT`, `GPG_PUBKEY_TMPDIR`, `PODMAN_SECRET_NAME`, `GH_ENTERPRISE_SECRET_NAME`, `KB_MCP_SECRET_NAME`, `CLAUDE_SCRATCH_TMPDIR`). They are invocation-scoped scratch values assigned to `""`, so they are an existing exception to the "globals live in `lib/globals`" rule below rather than a pattern to copy.
 
 ## Adding to a module
 
