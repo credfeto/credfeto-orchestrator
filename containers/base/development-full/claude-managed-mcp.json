@@ -11,6 +11,15 @@
       "env": {
         "BUILD_MCP_REPO_ROOT": "/workspace/repo"
       }
+    },
+    "rider": {
+      "url": "http://127.0.0.1:64482/stream",
+      "type": "http"
+    },
+    "webstorm": {
+      "url": "http://127.0.0.1:64542/stream",
+      "type": "http"
     }
+
   }
 }
