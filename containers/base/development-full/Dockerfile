@@ -222,19 +222,22 @@ RUN mkdir -p /home/developer/.claude/agents \
 # link step above). oneshot does not (and must not) bind-mount over these
 # paths - see containers/agent/Dockerfile.
 # managed-mcp.json pins the only MCP servers Claude Code loads and is
-# world-readable, so it holds no token. The sanity check requires the two the
-# image depends on: cfwf, whose Authorization header comes at connect time
-# from the root-owned headersHelper, mcp/cfwf-mcp-headers, which reads the
-# GitHub token from the environment, and build-dotnet, the .NET
+# world-readable, so it holds no token. The sanity check requires the three the
+# image depends on: cfwf and kb, whose Authorization headers come at connect
+# time from their own root-owned headersHelpers (mcp/cfwf-mcp-headers, which
+# reads the GitHub token from the environment, and mcp/kb-mcp-headers, which
+# reads KB_MCP_TOKEN, a podman secret oneshot passes in when orchestrator/.env
+# sets it), and build-dotnet, the .NET
 # build/test/coverage server installed by development-credfeto-tools, started
 # by its absolute path with one fixed, non-secret env value: the repo mount.
-# A kb server, when present, must follow cfwf's pattern. Any other server
-# (such as the JetBrains IDEs' rider and webstorm) is allowed and not checked.
+# Any other server (such as the JetBrains IDEs' rider and webstorm) is allowed
+# and not checked.
 COPY --chown=root:root --chmod=0444 claude-user-settings.json /home/developer/.claude/settings.json
 COPY --chown=root:root --chmod=0444 claude-policy-limits.json /home/developer/.claude/policy-limits.json
 COPY --chown=root:root --chmod=0444 claude-managed-settings.json /etc/claude-code/managed-settings.json
 COPY --chown=root:root --chmod=0444 claude-managed-mcp.json /etc/claude-code/managed-mcp.json
 COPY --chown=root:root --chmod=0755 claude-mcp/cfwf-mcp-headers /etc/claude-code/mcp/cfwf-mcp-headers
+COPY --chown=root:root --chmod=0755 claude-mcp/kb-mcp-headers /etc/claude-code/mcp/kb-mcp-headers
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-dash-c /etc/claude-code/hooks/enforce-git-dash-c
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-identity /etc/claude-code/hooks/enforce-git-identity
 COPY --chown=root:root --chmod=0755 claude-hooks/reject-obfuscated-commands /etc/claude-code/hooks/reject-obfuscated-commands
@@ -445,22 +448,28 @@ RUN set -e; \
     done; \
     jq -e '.mcpServers.cfwf.type == "http" and .mcpServers.cfwf.url == "https://workflow-mcp.markridgwell.com/mcp" and .mcpServers.cfwf.headersHelper == "/etc/claude-code/mcp/cfwf-mcp-headers"' /etc/claude-code/managed-mcp.json >/dev/null \
         || { echo "FATAL sanity: managed-mcp.json must hold the required cfwf server, type http at its https URL, with its headers from /etc/claude-code/mcp/cfwf-mcp-headers" >&2; exit 1; }; \
+    jq -e '.mcpServers.kb.type == "http" and .mcpServers.kb.url == "https://memory.markridgwell.com/dev/mcp" and .mcpServers.kb.headersHelper == "/etc/claude-code/mcp/kb-mcp-headers"' /etc/claude-code/managed-mcp.json >/dev/null \
+        || { echo "FATAL sanity: managed-mcp.json must hold the required kb server, type http at its https URL, with its headers from /etc/claude-code/mcp/kb-mcp-headers" >&2; exit 1; }; \
     jq -e '.mcpServers["build-dotnet"] == {"type": "stdio", "command": "/home/developer/.dotnet/tools/credfeto-build-dotnet", "env": {"BUILD_MCP_REPO_ROOT": "/workspace/repo"}}' /etc/claude-code/managed-mcp.json >/dev/null \
         || { echo "FATAL sanity: managed-mcp.json must hold the required build-dotnet server, and as the file is world-readable it must be exactly the stdio credfeto-build-dotnet tool by its absolute path, with BUILD_MCP_REPO_ROOT=/workspace/repo as its only env value" >&2; exit 1; }; \
-    jq -e 'if .mcpServers | has("kb") then .mcpServers.kb | type == "object" and .type == "http" and (.url | tostring | startswith("https://")) and (.headersHelper | tostring | startswith("/etc/claude-code/mcp/")) and (has("headers") or has("env") | not) else true end' /etc/claude-code/managed-mcp.json >/dev/null \
-        || { echo "FATAL sanity: managed-mcp.json is world-readable, so a kb server, when present, must be type http on an https URL with its headers from a helper under /etc/claude-code/mcp/, and no literal headers or env" >&2; exit 1; }; \
     [ -x /home/developer/.dotnet/tools/credfeto-build-dotnet ] \
         || { echo "FATAL sanity: /home/developer/.dotnet/tools/credfeto-build-dotnet, the build-dotnet MCP server, is missing or not executable" >&2; exit 1; }; \
     jq -e '.mcpServers.cfwf | has("headers") or has("env") | not' /etc/claude-code/managed-mcp.json >/dev/null \
         || { echo "FATAL sanity: managed-mcp.json is world-readable, so the cfwf server must not carry literal headers or env (its Authorization comes from the headersHelper)" >&2; exit 1; }; \
+    jq -e '.mcpServers.kb | has("headers") or has("env") | not' /etc/claude-code/managed-mcp.json >/dev/null \
+        || { echo "FATAL sanity: managed-mcp.json is world-readable, so the kb server must not carry literal headers or env (its Authorization comes from the headersHelper)" >&2; exit 1; }; \
     ! grep -qi 'authorization' /etc/claude-code/managed-mcp.json \
         || { echo "FATAL sanity: managed-mcp.json holds a literal Authorization header" >&2; exit 1; }; \
     [ "$(stat -c '%U:%G %a' /etc/claude-code/mcp/cfwf-mcp-headers)" = "root:root 755" ] \
         || { echo "FATAL sanity: cfwf-mcp-headers missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
+    [ "$(stat -c '%U:%G %a' /etc/claude-code/mcp/kb-mcp-headers)" = "root:root 755" ] \
+        || { echo "FATAL sanity: kb-mcp-headers missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
     jq -e '.permissions.allow | index("mcp__cfwf__*")' /etc/claude-code/managed-settings.json >/dev/null \
         || { echo "FATAL sanity: managed-settings.json does not allow the cfwf MCP tools (mcp__cfwf__*)" >&2; exit 1; }; \
     jq -e '.permissions.allow | index("mcp__build-dotnet__*")' /etc/claude-code/managed-settings.json >/dev/null \
         || { echo "FATAL sanity: managed-settings.json does not allow the build-dotnet MCP tools (mcp__build-dotnet__*)" >&2; exit 1; }; \
+    jq -e '.permissions.allow | index("mcp__kb__*")' /etc/claude-code/managed-settings.json >/dev/null \
+        || { echo "FATAL sanity: managed-settings.json does not allow the kb MCP tools (mcp__kb__*)" >&2; exit 1; }; \
     jq -e '(.permissions.deny | index("Bash(gh)") and index("Bash(gh *)")) and (.permissions.allow | index("Bash(cfwf *)")) and ([.permissions.allow[] | select(test("^Bash\\(([^ )]*/)?gh([ )*]|$)"))] | length == 0)' /etc/claude-code/managed-settings.json >/dev/null \
         || { echo "FATAL sanity: managed-settings.json must deny raw gh (Bash(gh) and Bash(gh *)), allow no gh entry, and keep Bash(cfwf *) (#1805)" >&2; exit 1; }; \
     cut -f1 /etc/claude-code/hooks/command-blocklist | grep -qxF gh \

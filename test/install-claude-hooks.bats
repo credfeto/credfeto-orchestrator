@@ -183,6 +183,7 @@ teardown() {
 # --- managed MCP servers: cfwf merged with the host's ~/.claude.json -----------
 
 CFWF_URL='https://workflow-mcp.markridgwell.com/mcp'
+KB_URL='https://memory.markridgwell.com/dev/mcp'
 
 # Writes the given JSON as the host's ~/.claude.json.
 write_host_claude_json() {
@@ -201,15 +202,18 @@ expected_mcp_names() {
         | sed '/^$/d' | LC_ALL=C sort -u | paste -sd ' ' -
 }
 
-@test "the headers helper and managed-mcp.json are installed via sudo, 0755 and 0444" {
+@test "the headers helpers and managed-mcp.json are installed via sudo, 0755 and 0444" {
     allow_sudo
     main
 
-    diff "${SOURCE_MCP_HEADERS}" "${CLAUDE_MANAGED_DIR}/mcp/cfwf-mcp-headers"
+    diff "${SOURCE_CFWF_MCP_HEADERS}" "${CLAUDE_MANAGED_DIR}/mcp/cfwf-mcp-headers"
     [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/mcp/cfwf-mcp-headers")" = "755" ]
+    diff "${SOURCE_KB_MCP_HEADERS}" "${CLAUDE_MANAGED_DIR}/mcp/kb-mcp-headers"
+    [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/mcp/kb-mcp-headers")" = "755" ]
+    grep -qxF "install -o root -g root -m 0755 ${SOURCE_KB_MCP_HEADERS} ${CLAUDE_MANAGED_DIR}/mcp/kb-mcp-headers" "${SUDO_LOG}"
     [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "444" ]
     [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/mcp")" = "755" ]
-    grep -qxF "install -o root -g root -m 0755 ${SOURCE_MCP_HEADERS} ${CLAUDE_MANAGED_DIR}/mcp/cfwf-mcp-headers" "${SUDO_LOG}"
+    grep -qxF "install -o root -g root -m 0755 ${SOURCE_CFWF_MCP_HEADERS} ${CLAUDE_MANAGED_DIR}/mcp/cfwf-mcp-headers" "${SUDO_LOG}"
     grep -qxF "install -o root -g root -m 0444 ${HOME}/.claude/managed-mcp.merged.json ${CLAUDE_MANAGED_DIR}/managed-mcp.json" "${SUDO_LOG}"
 }
 
@@ -245,6 +249,7 @@ expected_mcp_names() {
     main
 
     [ "$(installed_mcp_names)" = "$(expected_mcp_names host-ide tool-a tool-b)" ]
+    [ "$(jq -c '.mcpServers.kb' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "$(jq -c '.mcpServers.kb' "${SOURCE_MANAGED_MCP}")" ]
     [ "$(jq -r '.mcpServers["tool-a"].args[0]' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "--serve" ]
     [ "$(jq -c '.mcpServers.cfwf' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "$(jq -c '.mcpServers.cfwf' "${SOURCE_MANAGED_MCP}")" ]
     [ "$(jq -c '.mcpServers["build-dotnet"]' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "$(jq -c '.mcpServers["build-dotnet"]' "${SOURCE_MANAGED_MCP}")" ]
@@ -444,10 +449,71 @@ expected_mcp_names() {
     [[ "${output}" == *"Source managed MCP servers not found"* ]]
 
     SOURCE_MANAGED_MCP="${SOURCE_DIR}/claude-managed-mcp.json"
-    SOURCE_MCP_HEADERS="${TEST_TMP}/does-not-exist"
+    SOURCE_CFWF_MCP_HEADERS="${TEST_TMP}/does-not-exist"
     run main
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"Source MCP headers helper not found"* ]]
+    [[ "${output}" == *"Source MCP headers helper not found: ${TEST_TMP}/does-not-exist"* ]]
+}
+
+@test "dies when the kb headers helper is missing, before anything is installed" {
+    allow_sudo
+    SOURCE_KB_MCP_HEADERS="${TEST_TMP}/kb-does-not-exist"
+    run main
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"Source MCP headers helper not found: ${TEST_TMP}/kb-does-not-exist"* ]]
+    [ ! -e "${CLAUDE_MANAGED_DIR}" ]
+}
+
+@test "the installed managed-mcp.json holds kb at its URL with its helper, and no Authorization text" {
+    allow_sudo
+    main
+    [ "$(jq -c '.mcpServers.kb' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "{\"type\":\"http\",\"url\":\"${KB_URL}\",\"headersHelper\":\"/etc/claude-code/mcp/kb-mcp-headers\"}" ]
+    [ "$(grep -ci 'authorization' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" -eq 0 ]
+}
+
+@test "with no kb token in the environment or the token file, a one-line note says how to set one" {
+    allow_sudo
+    unset KB_MCP_TOKEN
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(grep -c 'No kb MCP token found' <<<"${output}")" -eq 1 ]
+    [[ "${output}" == *"export KB_MCP_TOKEN where claude runs, or write the token to ${XDG_CONFIG_HOME}/kb-mcp/token (chmod 600)"* ]]
+}
+
+@test "no kb token note when KB_MCP_TOKEN is set, and the token is never printed" {
+    allow_sudo
+    export KB_MCP_TOKEN=kb_env_secret
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *'No kb MCP token found'* ]]
+    [[ "${output}" != *'kb_env_secret'* ]]
+    [ "$(grep -rl 'kb_env_secret' "${CLAUDE_MANAGED_DIR}" "${HOME}/.claude" | wc -l)" -eq 0 ]
+}
+
+@test "no kb token note when the token file exists, and it is neither read nor changed" {
+    allow_sudo
+    unset KB_MCP_TOKEN
+    mkdir -p "${XDG_CONFIG_HOME}/kb-mcp"
+    printf 'kb_file_secret\n' > "${XDG_CONFIG_HOME}/kb-mcp/token"
+    chmod 600 "${XDG_CONFIG_HOME}/kb-mcp/token"
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *'No kb MCP token found'* ]]
+    [[ "${output}" != *'kb_file_secret'* ]]
+    [ "$(cat "${XDG_CONFIG_HOME}/kb-mcp/token")" = 'kb_file_secret' ]
+    [ "$(stat -c '%a' "${XDG_CONFIG_HOME}/kb-mcp/token")" = "600" ]
+}
+
+@test "the kb token file is looked for under HOME/.config when XDG_CONFIG_HOME is unset" {
+    allow_sudo
+    unset KB_MCP_TOKEN XDG_CONFIG_HOME
+    run main
+    [[ "${output}" == *"write the token to ${HOME}/.config/kb-mcp/token (chmod 600)"* ]]
+    mkdir -p "${HOME}/.config/kb-mcp"
+    printf 'kb_file_secret\n' > "${HOME}/.config/kb-mcp/token"
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *'No kb MCP token found'* ]]
 }
 
 @test "when sudo is declined, the printed managed-mcp.json install command names a merged file that still exists" {
@@ -455,7 +521,7 @@ expected_mcp_names() {
     run main
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"sudo install -o root -g root -m 0444 ${HOME}/.claude/managed-mcp.merged.json ${CLAUDE_MANAGED_DIR}/managed-mcp.json"* ]]
-    [[ "${output}" == *"sudo install -o root -g root -m 0755 ${SOURCE_MCP_HEADERS} ${CLAUDE_MANAGED_DIR}/mcp/cfwf-mcp-headers"* ]]
+    [[ "${output}" == *"sudo install -o root -g root -m 0755 ${SOURCE_CFWF_MCP_HEADERS} ${CLAUDE_MANAGED_DIR}/mcp/cfwf-mcp-headers"* ]]
     [ "$(jq -r '.mcpServers | keys | join(" ")' "${HOME}/.claude/managed-mcp.merged.json")" = "$(expected_mcp_names host-ide)" ]
 }
 
@@ -491,7 +557,7 @@ expected_mcp_names() {
     [ "${output}" = "{\"type\":\"http\",\"url\":\"${CFWF_URL}\",\"headersHelper\":\"/etc/claude-code/mcp/cfwf-mcp-headers\"}" ]
 }
 
-# The shipped file may list servers beyond the required two, so this uses a copy with an extra one
+# The shipped file may list servers beyond the required ones, so this uses a copy with an extra one
 # rather than pinning a real name such as rider.
 @test "a host server with an extra shipped server's name and definition is installed once, and with another definition is fatal (#1850)" {
     allow_sudo
@@ -509,6 +575,12 @@ expected_mcp_names() {
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"used for two different servers"*": shipped-ide."* ]]
     [ ! -e "${CLAUDE_MANAGED_DIR}" ]
+}
+
+@test "the shipped kb server is over https with its header from the root-owned helper, and no headers or env" {
+    run jq -c '.mcpServers.kb' "${SOURCE_MANAGED_MCP}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "{\"type\":\"http\",\"url\":\"${KB_URL}\",\"headersHelper\":\"/etc/claude-code/mcp/kb-mcp-headers\"}" ]
 }
 
 @test "the shipped build-dotnet server is the stdio credfeto-build-dotnet tool by absolute path, with only the repo mount as env (#1818)" {
@@ -532,14 +604,18 @@ expected_mcp_names() {
     jq -r '.permissions.allow[]' "${SOURCE_MANAGED_SETTINGS}" | grep -qxF 'mcp__cfwf__*'
 }
 
+@test "the managed settings allow every kb MCP tool and deny none of them" {
+    jq -r '.permissions.allow[]' "${SOURCE_MANAGED_SETTINGS}" | grep -qxF 'mcp__kb__*'
+    [ "$(jq -r '.permissions.deny[]' "${SOURCE_MANAGED_SETTINGS}" | grep -c '^mcp__kb__')" -eq 0 ]
+}
+
 @test "the managed settings allow every build-dotnet MCP tool (#1818)" {
     jq -r '.permissions.allow[]' "${SOURCE_MANAGED_SETTINGS}" | grep -qxF 'mcp__build-dotnet__*'
 }
 
-@test "the Dockerfile sanity block requires the cfwf and build-dotnet servers, the build-dotnet env, executable and allow rule, checks kb only when present, and pins no server set (#1818, #1850)" {
+@test "the Dockerfile sanity block requires the cfwf and build-dotnet servers, the build-dotnet env, executable and allow rule, and pins no server set (#1818, #1850)" {
     local dockerfile="${SOURCE_DIR}/Dockerfile"
     grep -qF "jq -e '.mcpServers.cfwf.type == \"http\" and .mcpServers.cfwf.url == \"${CFWF_URL}\" and .mcpServers.cfwf.headersHelper == \"/etc/claude-code/mcp/cfwf-mcp-headers\"' /etc/claude-code/managed-mcp.json" "${dockerfile}"
-    grep -qF "jq -e 'if .mcpServers | has(\"kb\") then .mcpServers.kb | " "${dockerfile}"
     [ "$(grep -cF '.mcpServers | keys' "${dockerfile}")" -eq 0 ]
     grep -qF "! grep -qi 'authorization' /etc/claude-code/managed-mcp.json" "${dockerfile}"
     grep -qF "jq -e '.mcpServers[\"build-dotnet\"] == {\"type\": \"stdio\", \"command\": \"/home/developer/.dotnet/tools/credfeto-build-dotnet\", \"env\": {\"BUILD_MCP_REPO_ROOT\": \"/workspace/repo\"}}' /etc/claude-code/managed-mcp.json" "${dockerfile}"
@@ -563,29 +639,28 @@ run_dockerfile_mcp_checks() {
     done < <(dockerfile_mcp_programs)
 }
 
-@test "the Dockerfile managed-mcp.json checks pass the shipped file, a copy with extra servers and one with a well-formed kb (#1850)" {
+@test "the Dockerfile managed-mcp.json checks pass the shipped file and a copy with extra servers (#1850)" {
     [ "$(dockerfile_mcp_programs | wc -l)" -ge 4 ]
     run_dockerfile_mcp_checks "${SOURCE_MANAGED_MCP}"
 
     jq '.mcpServers += {"extra-ide": {"type": "http", "url": "http://127.0.0.1:65000/stream"}, "extra-tool": {"type": "stdio", "command": "/usr/bin/extra-tool", "env": {"MODE": "serve"}}}' "${SOURCE_MANAGED_MCP}" > "${TEST_TMP}/extra.json"
     run_dockerfile_mcp_checks "${TEST_TMP}/extra.json"
-
-    jq '.mcpServers.kb = {"type": "http", "url": "https://kb.example.com/mcp", "headersHelper": "/etc/claude-code/mcp/kb-mcp-headers"}' "${SOURCE_MANAGED_MCP}" > "${TEST_TMP}/kb.json"
-    run_dockerfile_mcp_checks "${TEST_TMP}/kb.json"
 }
 
-@test "the Dockerfile managed-mcp.json checks fail without cfwf or build-dotnet, with a wrong cfwf URL, or with a kb that breaks cfwf's pattern (#1850)" {
+@test "the Dockerfile managed-mcp.json checks fail without cfwf, kb or build-dotnet, or with any of them changed (#1850)" {
     local filter
     for filter in \
         'del(.mcpServers.cfwf)' \
         '.mcpServers.cfwf.url = "https://elsewhere.example.com/mcp"' \
         'del(.mcpServers.cfwf.headersHelper)' \
+        '.mcpServers.cfwf.headers = {"X-Key": "literal"}' \
+        'del(.mcpServers.kb)' \
+        '.mcpServers.kb.url = "https://kb.example.com/mcp"' \
+        'del(.mcpServers.kb.headersHelper)' \
+        '.mcpServers.kb.headers = {"X-Key": "literal"}' \
+        '.mcpServers.kb = {"type": "stdio", "command": "/usr/bin/kb"}' \
         'del(.mcpServers["build-dotnet"])' \
-        '.mcpServers["build-dotnet"].env.EXTRA = "x"' \
-        '.mcpServers.kb = {"type": "http", "url": "http://kb.example.com/mcp", "headersHelper": "/etc/claude-code/mcp/kb-mcp-headers"}' \
-        '.mcpServers.kb = {"type": "http", "url": "https://kb.example.com/mcp"}' \
-        '.mcpServers.kb = {"type": "http", "url": "https://kb.example.com/mcp", "headersHelper": "/etc/claude-code/mcp/kb-mcp-headers", "headers": {"X-Key": "literal"}}' \
-        '.mcpServers.kb = {"type": "stdio", "command": "/usr/bin/kb"}'; do
+        '.mcpServers["build-dotnet"].env.EXTRA = "x"'; do
         jq "${filter}" "${SOURCE_MANAGED_MCP}" > "${TEST_TMP}/broken.json"
         if run_dockerfile_mcp_checks "${TEST_TMP}/broken.json"; then
             echo "the Dockerfile checks accepted: ${filter}" >&2
@@ -607,6 +682,14 @@ run_dockerfile_mcp_checks() {
     grep -qxF '            Credfeto.Build.Dotnet.Server' "${REPO_ROOT}/.github/workflows/check-credfeto-tools-updates.yml"
 }
 
+@test "the Dockerfile sanity block pins the kb server, its helper's owner and mode, and its allow rule" {
+    local dockerfile="${SOURCE_DIR}/Dockerfile"
+    grep -qF "jq -e '.mcpServers.kb.type == \"http\" and .mcpServers.kb.url == \"${KB_URL}\" and .mcpServers.kb.headersHelper == \"/etc/claude-code/mcp/kb-mcp-headers\"' /etc/claude-code/managed-mcp.json" "${dockerfile}"
+    grep -qF "jq -e '.mcpServers.kb | has(\"headers\") or has(\"env\") | not' /etc/claude-code/managed-mcp.json" "${dockerfile}"
+    grep -qF "[ \"\$(stat -c '%U:%G %a' /etc/claude-code/mcp/kb-mcp-headers)\" = \"root:root 755\" ]" "${dockerfile}"
+    grep -qF "jq -e '.permissions.allow | index(\"mcp__kb__*\")' /etc/claude-code/managed-settings.json" "${dockerfile}"
+}
+
 @test "the Dockerfile sanity block fails the build unless raw gh is denied by both layers and cfwf stays allowed (#1805)" {
     local dockerfile="${SOURCE_DIR}/Dockerfile"
     grep -qF 'jq -e '"'"'(.permissions.deny | index("Bash(gh)") and index("Bash(gh *)")) and (.permissions.allow | index("Bash(cfwf *)"))' "${dockerfile}"
@@ -620,7 +703,9 @@ run_dockerfile_mcp_checks() {
     local dockerfile="${SOURCE_DIR}/Dockerfile"
     grep -qxF 'COPY --chown=root:root --chmod=0444 claude-managed-mcp.json /etc/claude-code/managed-mcp.json' "${dockerfile}"
     grep -qxF 'COPY --chown=root:root --chmod=0755 claude-mcp/cfwf-mcp-headers /etc/claude-code/mcp/cfwf-mcp-headers' "${dockerfile}"
-    [ -x "${SOURCE_MCP_HEADERS}" ]
+    grep -qxF 'COPY --chown=root:root --chmod=0755 claude-mcp/kb-mcp-headers /etc/claude-code/mcp/kb-mcp-headers' "${dockerfile}"
+    [ -x "${SOURCE_CFWF_MCP_HEADERS}" ]
+    [ -x "${SOURCE_KB_MCP_HEADERS}" ]
 }
 
 # --- legacy ~/.claude/hooks symlinks -------------------------------------------
