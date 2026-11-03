@@ -497,7 +497,7 @@ installed_mcp_names() {
     [ "$(grep -rl 'kb_env_secret' "${CLAUDE_MANAGED_DIR}" "${HOME}/.claude" | wc -l)" -eq 0 ]
 }
 
-@test "no kb token note when the token file exists, and it is neither read nor changed" {
+@test "no kb token note when a private token file you own exists, and it is neither read nor changed" {
     allow_sudo
     unset KB_MCP_TOKEN
     mkdir -p "${XDG_CONFIG_HOME}/kb-mcp"
@@ -506,6 +506,7 @@ installed_mcp_names() {
     run main
     [ "${status}" -eq 0 ]
     [[ "${output}" != *'No kb MCP token found'* ]]
+    [[ "${output}" != *'is not private'* ]]
     [[ "${output}" != *'kb_file_secret'* ]]
     [ "$(cat "${XDG_CONFIG_HOME}/kb-mcp/token")" = 'kb_file_secret' ]
     [ "$(stat -c '%a' "${XDG_CONFIG_HOME}/kb-mcp/token")" = "600" ]
@@ -518,9 +519,41 @@ installed_mcp_names() {
     [[ "${output}" == *"write the token to ${HOME}/.config/kb-mcp/token (chmod 600)"* ]]
     mkdir -p "${HOME}/.config/kb-mcp"
     printf 'kb_file_secret\n' > "${HOME}/.config/kb-mcp/token"
+    chmod 600 "${HOME}/.config/kb-mcp/token"
     run main
     [ "${status}" -eq 0 ]
     [[ "${output}" != *'No kb MCP token found'* ]]
+    [[ "${output}" != *'is not private'* ]]
+}
+
+@test "a kb token file others can read gives a one-line not-private note, and it is neither read nor changed" {
+    allow_sudo
+    unset KB_MCP_TOKEN
+    mkdir -p "${XDG_CONFIG_HOME}/kb-mcp"
+    printf 'kb_file_secret\n' > "${XDG_CONFIG_HOME}/kb-mcp/token"
+    chmod 644 "${XDG_CONFIG_HOME}/kb-mcp/token"
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(grep -c 'is not private' <<<"${output}")" -eq 1 ]
+    [[ "${output}" == *"kb MCP token file ${XDG_CONFIG_HOME}/kb-mcp/token is not private - kb-mcp-headers refuses it until it is a regular file owned by you with mode 0600"* ]]
+    [[ "${output}" != *'No kb MCP token found'* ]]
+    [[ "${output}" != *'kb_file_secret'* ]]
+    [ "$(cat "${XDG_CONFIG_HOME}/kb-mcp/token")" = 'kb_file_secret' ]
+    [ "$(stat -c '%a' "${XDG_CONFIG_HOME}/kb-mcp/token")" = "644" ]
+}
+
+@test "a kb token file that is a symlink to a private file gives the not-private note" {
+    allow_sudo
+    unset KB_MCP_TOKEN
+    mkdir -p "${XDG_CONFIG_HOME}/kb-mcp"
+    printf 'kb_file_secret\n' > "${TEST_TMP}/real-token"
+    chmod 600 "${TEST_TMP}/real-token"
+    ln -s "${TEST_TMP}/real-token" "${XDG_CONFIG_HOME}/kb-mcp/token"
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(grep -c "kb MCP token file ${XDG_CONFIG_HOME}/kb-mcp/token is not private" <<<"${output}")" -eq 1 ]
+    [[ "${output}" != *'No kb MCP token found'* ]]
+    [[ "${output}" != *'kb_file_secret'* ]]
 }
 
 @test "when sudo is declined, the printed managed-mcp.json install command names a merged file that still exists" {
