@@ -77,7 +77,8 @@ SOURCE_USER_SETTINGS="${SOURCE_DIR}/claude-user-settings.json"
 SOURCE_HOOKS_DIR="${SOURCE_DIR}/claude-hooks"
 SOURCE_CFWF="${SOURCE_DIR}/scripts/cfwf"
 SOURCE_MANAGED_MCP="${SOURCE_DIR}/claude-managed-mcp.json"
-SOURCE_MCP_HEADERS="${SOURCE_DIR}/claude-mcp/cfwf-mcp-headers"
+SOURCE_CFWF_MCP_HEADERS="${SOURCE_DIR}/claude-mcp/cfwf-mcp-headers"
+SOURCE_KB_MCP_HEADERS="${SOURCE_DIR}/claude-mcp/kb-mcp-headers"
 CFWF_BIN_DIR="${CFWF_BIN_DIR:-/usr/local/bin}"
 CLAUDE_MANAGED_DIR="${CLAUDE_MANAGED_DIR:-/etc/claude-code}"
 
@@ -159,7 +160,8 @@ install_managed_files() {
         root_install -m "${mode}" "${src}" "${hooks_dir}/$(basename "${src}")"
     done < <(find "${SOURCE_HOOKS_DIR}" -mindepth 1 -maxdepth 1 -type f ! -name allowed-dirs.local ! -name secret-files.local | sort)
     root_install -m 0444 "${SOURCE_MANAGED_SETTINGS}" "${CLAUDE_MANAGED_DIR}/managed-settings.json"
-    root_install -m 0755 "${SOURCE_MCP_HEADERS}" "${mcp_dir}/$(basename "${SOURCE_MCP_HEADERS}")"
+    root_install -m 0755 "${SOURCE_CFWF_MCP_HEADERS}" "${mcp_dir}/$(basename "${SOURCE_CFWF_MCP_HEADERS}")"
+    root_install -m 0755 "${SOURCE_KB_MCP_HEADERS}" "${mcp_dir}/$(basename "${SOURCE_KB_MCP_HEADERS}")"
     root_install -m 0444 "${merged_mcp_file}" "${CLAUDE_MANAGED_DIR}/managed-mcp.json"
     [ -n "${allowed_dirs_file}" ] && root_install -m 0444 "${allowed_dirs_file}" "${hooks_dir}/allowed-dirs.local"
 
@@ -173,7 +175,7 @@ install_managed_files() {
     return 1
 }
 
-# Prints a JSON report of merging the shipped servers (cfwf and build-dotnet,
+# Prints a JSON report of merging the shipped servers (cfwf, kb and build-dotnet,
 # copied as they are: they are reviewed here, so none of the checks below
 # apply to them) with the host's own MCP servers from the given ~/.claude.json
 # (a missing or empty file has none):
@@ -338,6 +340,17 @@ warn_if_no_allowed_dirs_override() {
     info "No ${CLAUDE_MANAGED_DIR}/hooks/allowed-dirs.local found - enforce-allowed-dirs will block every directory-taking command on this host until one exists. Write a file with one allowed root per line (e.g. '~/work' and '\$TMPDIR') and re-run: ${BASH_SOURCE[0]} <file>"
 }
 
+# kb-mcp-headers reads the kb server's token at connect time, from KB_MCP_TOKEN
+# or from a token file only its owner can read. This script never reads,
+# prompts for or stores the token; it only says how to supply one when it
+# finds neither.
+warn_if_no_kb_token() {
+    local token_file="${XDG_CONFIG_HOME:-${HOME}/.config}/kb-mcp/token"
+    [ -n "${KB_MCP_TOKEN:-}" ] && return 0
+    [ -f "${token_file}" ] && return 0
+    info "No kb MCP token found - the kb server will fail to connect until you export KB_MCP_TOKEN where claude runs, or write the token to ${token_file} (chmod 600)"
+}
+
 main() {
     is_ai_agent && die "install-claude-hooks must not be run inside a Claude Code session"
 
@@ -348,7 +361,8 @@ main() {
     [ -d "${SOURCE_HOOKS_DIR}" ] || die "Source hooks directory not found: ${SOURCE_HOOKS_DIR}"
     [ -f "${SOURCE_CFWF}" ] || die "Source cfwf script not found: ${SOURCE_CFWF}"
     [ -f "${SOURCE_MANAGED_MCP}" ] || die "Source managed MCP servers not found: ${SOURCE_MANAGED_MCP}"
-    [ -f "${SOURCE_MCP_HEADERS}" ] || die "Source MCP headers helper not found: ${SOURCE_MCP_HEADERS}"
+    [ -f "${SOURCE_CFWF_MCP_HEADERS}" ] || die "Source MCP headers helper not found: ${SOURCE_CFWF_MCP_HEADERS}"
+    [ -f "${SOURCE_KB_MCP_HEADERS}" ] || die "Source MCP headers helper not found: ${SOURCE_KB_MCP_HEADERS}"
     if [ -n "${allowed_dirs_file}" ] && { [ ! -f "${allowed_dirs_file}" ] || [ ! -r "${allowed_dirs_file}" ]; }; then
         die "Allowed directories file not found or not readable: ${allowed_dirs_file}"
     fi
@@ -385,6 +399,7 @@ main() {
     install_user_files "${target_claude_dir}" "${managed_installed}"
     install_cfwf
     warn_if_no_allowed_dirs_override "${allowed_dirs_file}"
+    warn_if_no_kb_token
 
     success "Claude Code settings/hooks installed for local testing outside the container"
 }
