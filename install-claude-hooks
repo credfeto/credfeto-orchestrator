@@ -244,14 +244,21 @@ merge_host_mcp_servers() {
         | [($host | objects | .mcpServers // {} | objects | to_entries[]),
            ($host | objects | .projects // {} | objects | .[] | objects | .mcpServers // {} | objects | to_entries[])]
         | map(select(.value | type == "object")) as $hosted
-        | ($hosted | map((.value.url // "" | tostring) as $url | select(any($shipped_http[]; same_url($url; .value.url))))) as $duplicates
+        # Matched by URL once, so the servers left out and the servers named
+        # in the report cannot drift apart; a host server matching no shipped
+        # server yields nothing from first() and so drops out of the list.
+        | ($hosted
+            | map((.value.url // "" | tostring) as $url
+                | first($shipped_http[] | select(same_url($url; .value.url)) | .key) as $replaced_by
+                | . + {replaced_by: $replaced_by})) as $replaced
+        | ($replaced | map(del(.replaced_by))) as $duplicates
         | ($hosted - $duplicates | map(select(.value | holds_literal_secret))) as $refused
         | (($shipped + ($hosted - $duplicates - $refused)) | unique) as $kept
         | {
             merged: {mcpServers: ($kept | from_entries)},
             duplicates: ($shipped_http
-                | map(.value.url as $url
-                    | {key, value: ($duplicates | map(select(same_url(.value.url // "" | tostring; $url)) | .key) | unique)})
+                | map(.key as $name
+                    | {key, value: ($replaced | map(select(.replaced_by == $name) | .key) | unique)})
                 | map(select(.value | length > 0))
                 | from_entries),
             refused: ($refused | map(.key) | unique),
