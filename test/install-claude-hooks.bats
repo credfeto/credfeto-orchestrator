@@ -513,12 +513,14 @@ installed_mcp_names() {
     jq -r '.permissions.allow[]' "${SOURCE_MANAGED_SETTINGS}" | grep -qxF 'mcp__build-dotnet__*'
 }
 
-@test "the Dockerfile sanity block pins the build-dotnet server, its env and its allow rule (#1818)" {
+@test "the Dockerfile sanity block pins the build-dotnet server, its env, its executable and its allow rule (#1818)" {
     local dockerfile="${SOURCE_DIR}/Dockerfile"
     grep -qF "jq -e '(.mcpServers | keys) == [\"build-dotnet\", \"cfwf\"] and .mcpServers.cfwf.type == \"http\"" "${dockerfile}"
     grep -qF "jq -e '.mcpServers[\"build-dotnet\"] == {\"type\": \"stdio\", \"command\": \"/home/developer/.dotnet/tools/credfeto-build-dotnet\", \"env\": {\"BUILD_MCP_REPO_ROOT\": \"/workspace/repo\"}}' /etc/claude-code/managed-mcp.json" "${dockerfile}"
     grep -qF "jq -e '.mcpServers.cfwf | has(\"headers\") or has(\"env\") | not' /etc/claude-code/managed-mcp.json" "${dockerfile}"
+    grep -qF '[ -x /home/developer/.dotnet/tools/credfeto-build-dotnet ]' "${dockerfile}"
     grep -qF "jq -e '.permissions.allow | index(\"mcp__build-dotnet__*\")' /etc/claude-code/managed-settings.json" "${dockerfile}"
+    grep -qE 'for tool in .* credfeto\.build\.dotnet\.server; do' "${dockerfile}"
 }
 
 @test "development-credfeto-tools installs Credfeto.Build.Dotnet.Server behind the cache bust and its sanity check requires it (#1818)" {
