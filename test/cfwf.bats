@@ -238,7 +238,7 @@ gh_line_of() {
 
     run "${SCRIPT}" help comment
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"cfwf comment add --repo <owner/repo> (--pr <n> | --issue <n>) (--body <text> | --body-file <file|->)"* ]]
+    [[ "${output}" == *"cfwf comment add --repo <owner/repo> (--pr <n> | --issue <n>) --body-file <file|->"* ]]
     [[ "${output}" == *"cfwf comment edit --repo <owner/repo> --comment-id <id> (--issue-comment | --review-comment) --body-file <file|->"* ]]
 }
 
@@ -6371,7 +6371,7 @@ run_comment_add() {
 
     run_comment_add --pr 1
     [ "${status}" -eq 2 ]
-    [[ "${stderr}" == *"missing required option --body or --body-file"* ]]
+    [[ "${stderr}" == *"missing required option --body-file"* ]]
 
     run_comment_add --pr 1 --body-file "${body}" --body-file "${body}"
     [ "${status}" -eq 2 ]
@@ -6386,7 +6386,7 @@ run_comment_add() {
     [[ "${stderr}" == *"missing required option --repo"* ]]
 
     local flag
-    for flag in -b --edit-last --json --jq --title --status; do
+    for flag in --edit-last --json --jq --title --status; do
         run_comment_add --pr 1 --body-file "${body}" "${flag}" value
         [ "${status}" -eq 2 ]
         [ "${stderr%%$'\n'*}" = "cfwf: unknown option (argument 9; its value is not shown)" ]
@@ -6556,6 +6556,8 @@ run_comment_add() {
         [[ "${output}" == "Usage: cfwf comment add"* ]]
         [[ "${output}" == *"two plan-approval keywords"* ]]
         [[ "${output}" == *'with "(line <n>)" where there is one'* ]]
+        [[ "${output}" == *"inline text would be shell-expanded and checked by the command"$'\n'"hooks."* ]]
+        [[ "${output}" == *$'\n'"  cfwf comment add --repo <owner/repo> --pr <n> --body-file - <<'EOF'"$'\n'"  <the comment>"$'\n'"  EOF"$'\n'* ]]
     done
 
     run --separate-stderr "${SCRIPT}" comment
@@ -6589,8 +6591,8 @@ run_comment_add() {
 
 # --- pr comment and issue comment (#1820) ----------------------------------------
 
-PR_COMMENT_USAGE="Usage: cfwf pr comment --repo <owner/repo> --pr <n> (--body <text> | --body-file <file|->)"
-ISSUE_COMMENT_USAGE="Usage: cfwf issue comment --repo <owner/repo> --issue <n> (--body <text> | --body-file <file|->)"
+PR_COMMENT_USAGE="Usage: cfwf pr comment --repo <owner/repo> --pr <n> --body-file <file|->"
+ISSUE_COMMENT_USAGE="Usage: cfwf issue comment --repo <owner/repo> --issue <n> --body-file <file|->"
 
 # Runs pr comment ($1 pr) or issue comment ($1 issue) on REPO with the remaining arguments.
 run_item_comment() {
@@ -6688,7 +6690,7 @@ run_item_comment() {
     done
 }
 
-@test "pr comment and issue comment refuse gh's positional number, -b and --body=<text> with exit 2, naming the option to use and never the value, before any gh call" {
+@test "pr comment and issue comment refuse gh's positional number and --body or -b with exit 2, naming the option to use and never the value, before any gh call" {
     prepare_comment
     local body="${TEST_TMP}/comment.md" kind usage
     for kind in pr issue; do
@@ -6705,15 +6707,18 @@ run_item_comment() {
         [ "${status}" -eq 2 ]
         [ "${stderr%%$'\n'*}" = "cfwf: the number is given with --${kind} <n>, not as a positional argument (argument 7)" ]
 
-        run_item_comment "${kind}" "--${kind}" 1 -b "secret words here"
-        [ "${status}" -eq 2 ]
-        [ -z "${output}" ]
-        [ "${stderr%%$'\n'*}" = "cfwf: there is no -b or --body=<text>: give the comment with --body <text> or --body-file <file|-> (argument 7; its value is not shown)" ]
-        [[ "${stderr}" == *$'\n\n'"${usage}"$'\n'* ]]
-        [[ "${stderr}" != *"secret words"* ]]
+        local flag
+        for flag in --body -b; do
+            run_item_comment "${kind}" "--${kind}" 1 "${flag}" "secret words here"
+            [ "${status}" -eq 2 ]
+            [ -z "${output}" ]
+            [ "${stderr%%$'\n'*}" = "cfwf: ${flag} is not an option: put the comment in --body-file, or read it from stdin with a quoted heredoc: cfwf ${kind} comment --repo <owner/repo> --${kind} <n> --body-file - <<'EOF' ... EOF (inline text would be shell-expanded and checked by the command hooks; argument 7, its value is not shown)" ]
+            [[ "${stderr}" == *$'\n\n'"${usage}"$'\n'* ]]
+            [[ "${stderr}" != *"secret words"* ]]
+        done
         run_item_comment "${kind}" "--${kind}" 1 "--body=secret words here"
         [ "${status}" -eq 2 ]
-        [[ "${stderr}" == "cfwf: there is no -b or --body=<text>: give the comment with --body <text> or --body-file"* ]]
+        [[ "${stderr}" == "cfwf: --body is not an option: put the comment in --body-file, or read it from stdin with a quoted heredoc:"* ]]
         [[ "${stderr}" != *"secret words"* ]]
     done
     [ ! -f "${GH_LOG}" ]
@@ -6728,14 +6733,69 @@ run_item_comment() {
     run_item_comment pr --pr 1623 --body-file -b
     [ "${status}" -eq 0 ]
     cmp "${body}" "${GH_FIXTURES}/comment-body.txt"
+}
 
-    # Nor is the value of --body: a comment of 12 or -b is text.
-    local text
-    for text in 12 -b; do
-        run_item_comment issue --issue 1623 --body "${text}"
-        [ "${status}" -eq 0 ]
-        [ "$(cat "${GH_FIXTURES}/comment-body.txt")" = "${text}" ]
+# Checks that a run was the refusal of an inline body, given its status, stdout and stderr as $1 to
+# $3: $4 the command (comment add, pr comment or issue comment), $5 the selector shown in the hint,
+# $6 the flag given and $7 its argument number.
+assert_inline_body_refused() {
+    [ "$1" -eq 2 ]
+    [ -z "$2" ]
+    [ "${3%%$'\n'*}" = "cfwf: $6 is not an option: put the comment in --body-file, or read it from stdin with a quoted heredoc: cfwf $4 --repo <owner/repo> $5 --body-file - <<'EOF' ... EOF (inline text would be shell-expanded and checked by the command hooks; argument $7, its value is not shown)" ]
+    [[ "$3" == *"--body-file -"* ]]
+    [[ "$3" == *"cfwf $4 --repo <owner/repo> $5 --body-file - <<'EOF'"* ]]
+    [[ "$3" == *$'\n\n'"Usage: cfwf $4 --repo <owner/repo> "* ]]
+    [[ "$3" != *"secret words"* ]]
+}
+
+@test "comment add, pr comment and issue comment refuse --body, --body=<text> and -b with exit 2 and no gh call, pointing at --body-file - with a quoted heredoc for the command and selector called" {
+    prepare_comment
+    local entry command selector
+    for entry in "comment add|--pr" "comment add|--issue" "pr comment|--pr" "issue comment|--issue"; do
+        command="${entry%|*}"
+        selector="${entry#*|}"
+        # shellcheck disable=SC2086,SC2016  # the command is split into its two words on purpose; the $( is literal
+        run --separate-stderr "${SCRIPT}" ${command} --repo "${REPO}" "${selector}" 1 --body 'secret words here $(touch pwned)'
+        assert_inline_body_refused "${status}" "${output}" "${stderr}" "${command}" "${selector} <n>" --body 7
+        # shellcheck disable=SC2086
+        run --separate-stderr "${SCRIPT}" ${command} --repo "${REPO}" "${selector}" 1 "--body=secret words here"
+        assert_inline_body_refused "${status}" "${output}" "${stderr}" "${command}" "${selector} <n>" --body 7
+        # shellcheck disable=SC2086
+        run --separate-stderr "${SCRIPT}" ${command} --repo "${REPO}" "${selector}" 1 -b "secret words here"
+        assert_inline_body_refused "${status}" "${output}" "${stderr}" "${command}" "${selector} <n>" -b 7
+        # Even beside a --body-file, the inline body is refused rather than ignored.
+        # shellcheck disable=SC2086
+        run --separate-stderr "${SCRIPT}" ${command} --repo "${REPO}" "${selector}" 1 --body-file "${TEST_TMP}/comment.md" --body x
+        [ "${status}" -eq 2 ]
+        [[ "${stderr}" == "cfwf: --body is not an option:"* ]]
     done
+
+    # comment add without a selector shows both; one given after --body is still the one shown.
+    run_comment_add --body "secret words here"
+    assert_inline_body_refused "${status}" "${output}" "${stderr}" "comment add" "(--pr <n> | --issue <n>)" --body 5
+    run_comment_add -b "secret words here" --issue 3
+    assert_inline_body_refused "${status}" "${output}" "${stderr}" "comment add" "--issue <n>" -b 5
+    [ ! -f "${GH_LOG}" ]
+    [ ! -e pwned ] && [ ! -e "${TEST_TMP}/pwned" ]
+
+    # --body-file still posts, from a file and from stdin as the hint shows.
+    run_comment_add --pr 1623 --body-file "${TEST_TMP}/comment.md"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${COMMENT_PR_URL}" ]
+    run_item_comment pr --pr 1623 --body-file - < "${TEST_TMP}/comment.md"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${COMMENT_PR_URL}" ]
+    cmp "${TEST_TMP}/comment.md" "${GH_FIXTURES}/comment-body.txt"
+    prepare_comment "${COMMENT_ISSUE_URL}"
+    run_item_comment issue --issue 1585 --body-file - << 'EOF'
+A comment with $(no expansion) and `none` here.
+EOF
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${COMMENT_ISSUE_URL}" ]
+    # shellcheck disable=SC2016  # literal characters: proving the quoted heredoc expands nothing
+    [ "$(cat "${GH_FIXTURES}/comment-body.txt")" = 'A comment with $(no expansion) and `none` here.' ]
+    issue_create_called_with "issue comment 1585 --repo ${REPO} --body-file BODY"
+    [ "$(gh_call_count "pr comment 1623 --repo ${REPO}")" -eq 2 ]
 }
 
 @test "pr comment and issue comment usage errors for a missing, repeated or other option exit 2 with their usage on stderr and never call gh" {
@@ -6761,7 +6821,7 @@ run_item_comment() {
 
         run_item_comment "${kind}" "--${kind}" 1
         [ "${status}" -eq 2 ]
-        [ "${stderr%%$'\n'*}" = "cfwf: missing required option --body or --body-file" ]
+        [ "${stderr%%$'\n'*}" = "cfwf: missing required option --body-file" ]
 
         run_item_comment "${kind}" "--${kind}" 1 --body-file
         [ "${status}" -eq 2 ]
@@ -6801,8 +6861,10 @@ run_item_comment() {
             [ "${status}" -eq 0 ]
             [ -z "${stderr}" ]
             [[ "${output}" == "${usage}"$'\n'* ]]
-            [[ "${output}" == *"The same command as 'cfwf comment add --repo <owner/repo> --${kind} <n>', with --body or --body-file,"$'\n'* ]]
-            [[ "${output}" == *"the number is not a positional"$'\n'"argument (give --${kind} <n>), and there is no -b or --body=<text> (give --body <text>)."* ]]
+            [[ "${output}" == *"The same command as 'cfwf comment add --repo <owner/repo> --${kind} <n> --body-file <file|->',"* ]]
+            [[ "${output}" == *"the number is not a positional"$'\n'"argument (give --${kind} <n>), and there is no --body or -b (give --body-file)."* ]]
+            [[ "${output}" == *"Inline text would be shell-expanded"$'\n'"and checked by the command hooks"* ]]
+            [[ "${output}" == *$'\n'"  cfwf ${kind} comment --repo <owner/repo> --${kind} <n> --body-file - <<'EOF'"$'\n'"  <the comment>"$'\n'"  EOF"$'\n'* ]]
             [[ "${output}" == *"Exit codes: 0 posted; 8 the body was refused; 1 a runtime failure; 2 a usage error."* ]]
             [[ "${output}" != *"usage_"* ]]
         done
@@ -6828,187 +6890,6 @@ run_item_comment() {
     [[ "${output}" == *$'\n'"  issue comment            Post a comment on an issue and print its URL, the same as comment add --issue (exit 8 when refused)"$'\n'* ]]
     [[ "${output}" == *$'\n'"  pr comment               Post a comment on a PR and print its URL, the same as comment add --pr (exit 8 when refused)"$'\n'* ]]
     [[ "${output}" == *$'\n'"  comment add              Post a comment on a PR or an issue and print its URL (also as pr comment and issue comment)"$'\n'* ]]
-    [ ! -f "${GH_LOG}" ]
-}
-
-# --- an inline --body on comment add, pr comment and issue comment (#1827) ---------
-
-# The commands that take --body, each as its words and the target option: comment add with --pr
-# and with --issue, then its two aliases.
-INLINE_BODY_COMMANDS=("comment add --pr" "comment add --issue" "pr comment --pr" "issue comment --issue")
-
-# Runs the command of INLINE_BODY_COMMANDS $1 on REPO and the target $2 with the remaining arguments.
-run_inline_body_command() {
-    local -a words
-    read -ra words <<< "$1"
-    local target="$2"
-    shift 2
-    run --separate-stderr "${SCRIPT}" "${words[0]}" "${words[1]}" --repo "${REPO}" "${words[2]}" "${target}" "$@"
-}
-
-# The gh log with the private copy's path, which mktemp names, written as BODY.
-gh_log_with_body_placeholder() {
-    sed -E 's/ --body-file [^ ]+( |$)/ --body-file BODY\1/' "${GH_LOG}"
-}
-
-@test "comment add, pr comment and issue comment post a --body exactly as the same text in a --body-file: the same gh call, body and output, stdin closed" {
-    local text=$'An inline comment, with `code` and a $HOME that is not expanded.\n\nA second paragraph.'
-    printf '%s\n' "${text}" > "${TEST_TMP}/inline.md"
-    local command url target via_file
-    for command in "${INLINE_BODY_COMMANDS[@]}"; do
-        url="${COMMENT_PR_URL}"
-        target=1623
-        if [[ "${command}" == *--issue ]]; then
-            url="${COMMENT_ISSUE_URL}"
-            target=1585
-        fi
-        prepare_comment "${url}"
-
-        rm -f "${GH_LOG}" "${GH_FIXTURES}/comment-body.txt"
-        run_inline_body_command "${command}" "${target}" --body-file "${TEST_TMP}/inline.md"
-        [ "${status}" -eq 0 ]
-        [ "${output}" = "${url}" ]
-        via_file=$(gh_log_with_body_placeholder)
-        cp "${GH_FIXTURES}/comment-body.txt" "${TEST_TMP}/posted-from-file.md"
-
-        rm -f "${GH_LOG}" "${GH_FIXTURES}/comment-body.txt"
-        run_inline_body_command "${command}" "${target}" --body "${text}" <<< "stray stdin"
-        [ "${status}" -eq 0 ]
-        [ "${output}" = "${url}" ]
-        [ -z "${stderr}" ]
-        [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
-        [ "$(gh_log_with_body_placeholder)" = "${via_file}" ]
-        cmp "${TEST_TMP}/posted-from-file.md" "${GH_FIXTURES}/comment-body.txt"
-        cmp "${TEST_TMP}/inline.md" "${GH_FIXTURES}/comment-body.txt"
-        [ "$(cat "${GH_FIXTURES}/comment-stdin.txt")" = /dev/null ]
-        [ "$(gh_call_count "An inline comment")" -eq 0 ]
-    done
-    issue_create_called_with "issue comment 1585 --repo ${REPO} --body-file BODY"
-}
-
-@test "comment add, pr comment and issue comment refuse a --body with a plan-approval keyword outside a quote, or a leak, with exit 8 as for a --body-file, and post nothing" {
-    prepare_comment
-    local secret="gh""p_LEAKMARKER0123456789" command line
-    for command in "${INLINE_BODY_COMMANDS[@]}"; do
-        for line in "lgtm" "This is APPROVED." "    > approved"; do
-            run_inline_body_command "${command}" 1623 --body $'A clean first line.\n\n'"${line}"$'\nA clean last line.'
-            assert_refused "${status}" "${output}" "${stderr}" "approval keyword" "${line}"
-        done
-        run_inline_body_command "${command}" 1623 --body $'A clean first line.\n\nthe value is '"${secret}"$' here\nA clean last line.'
-        assert_refused "${status}" "${output}" "${stderr}" token "${secret}"
-        run_inline_body_command "${command}" 1623 --body $'A clean first line.\n\nsee /home/someone/notes\nA clean last line.'
-        assert_refused "${status}" "${output}" "${stderr}" "host path" "/home/someone"
-    done
-    [ ! -f "${GH_LOG}" ]
-
-    # A keyword on a quote line is posted, as it is from a file.
-    run_inline_body_command "pr comment --pr" 1623 --body "> approved"
-    [ "${status}" -eq 0 ]
-    [ "${output}" = "${COMMENT_PR_URL}" ]
-    [ "$(cat "${GH_FIXTURES}/comment-body.txt")" = "> approved" ]
-}
-
-@test "comment add refuses a --body of only invisible characters as an empty body (exit 1), as for a --body-file, without calling gh" {
-    prepare_comment
-    write_invisible_bodies
-    local name
-    for name in "${INVISIBLE_BODIES[@]}"; do
-        run_inline_body_command "comment add --pr" 1623 --body "$(cat "${TEST_TMP}/invisible-${name}.md")"
-        [ "${status}" -eq 1 ]
-        [ -z "${output}" ]
-        [ "${stderr}" = "cfwf: the body is empty" ]
-    done
-    [ ! -f "${GH_LOG}" ]
-}
-
-@test "comment add, pr comment and issue comment refuse both --body and --body-file, neither, a repeated --body, or an empty or blank one with exit 2 and their usage, never showing the text or calling gh" {
-    prepare_comment
-    local body="${TEST_TMP}/comment.md" command usage value
-    for command in "${INLINE_BODY_COMMANDS[@]}"; do
-        usage="Usage: cfwf ${command% *} --repo <owner/repo> "
-
-        run_inline_body_command "${command}" 1 --body "secret words here" --body-file "${body}"
-        [ "${status}" -eq 2 ]
-        [ -z "${output}" ]
-        [ "${stderr%%$'\n'*}" = "cfwf: give exactly one of --body and --body-file, not both" ]
-        [[ "${stderr}" == *$'\n\n'"${usage}"* ]]
-        [[ "${stderr}" != *"secret words"* ]]
-
-        run_inline_body_command "${command}" 1 --body-file "${body}" --body "secret words here"
-        [ "${status}" -eq 2 ]
-        [ "${stderr%%$'\n'*}" = "cfwf: give exactly one of --body and --body-file, not both" ]
-
-        run_inline_body_command "${command}" 1
-        [ "${status}" -eq 2 ]
-        [ "${stderr%%$'\n'*}" = "cfwf: missing required option --body or --body-file" ]
-        [[ "${stderr}" == *$'\n\n'"${usage}"* ]]
-
-        run_inline_body_command "${command}" 1 --body "secret words here" --body "more secret words"
-        [ "${status}" -eq 2 ]
-        [ "${stderr%%$'\n'*}" = "cfwf: --body can only be given once" ]
-        [[ "${stderr}" != *"secret words"* ]]
-
-        for value in "" " " $' \t\n ' $'\r\n'; do
-            run_inline_body_command "${command}" 1 --body "${value}"
-            [ "${status}" -eq 2 ]
-            [ -z "${output}" ]
-            [ "${stderr%%$'\n'*}" = "cfwf: invalid value for --body: it must not be empty or blank" ]
-            [[ "${stderr}" == *$'\n\n'"${usage}"* ]]
-        done
-
-        run_inline_body_command "${command}" 1 --body
-        [ "${status}" -eq 2 ]
-        [ "${stderr%%$'\n'*}" = "cfwf: --body needs a value" ]
-    done
-    [ ! -f "${GH_LOG}" ]
-}
-
-@test "--body is only for comment add, pr comment and issue comment: other commands that post a body still refuse it as an unknown option, before any gh call" {
-    prepare_comment
-    run --separate-stderr "${SCRIPT}" issue block --repo "${REPO}" --issue 1 --body "secret words here"
-    [ "${status}" -eq 2 ]
-    [ "${stderr%%$'\n'*}" = "cfwf: unknown option (argument 7; its value is not shown)" ]
-    [[ "${stderr}" != *"secret words"* ]]
-
-    run --separate-stderr "${SCRIPT}" pr block --repo "${REPO}" --pr 1 --body "secret words here"
-    [ "${status}" -eq 2 ]
-    [ "${stderr%%$'\n'*}" = "cfwf: unknown option (argument 7; its value is not shown)" ]
-
-    run --separate-stderr "${SCRIPT}" comment edit --repo "${REPO}" --comment-id 1 --issue-comment --body "secret words here"
-    [ "${status}" -eq 2 ]
-    [ "${stderr%%$'\n'*}" = "cfwf: unknown option (argument 8; its value is not shown)" ]
-
-    run --separate-stderr "${SCRIPT}" pr reply --repo "${REPO}" --pr 1 --comment-id 2 --body "secret words here"
-    [ "${status}" -eq 2 ]
-    [ "${stderr%%$'\n'*}" = "cfwf: unknown option (argument 9; its value is not shown)" ]
-
-    run --separate-stderr "${SCRIPT}" issue post-plan --repo "${REPO}" --issue 1 --body "secret words here"
-    [ "${status}" -eq 2 ]
-    [ "${stderr%%$'\n'*}" = "cfwf: unknown option (argument 7; its value is not shown)" ]
-    [ ! -f "${GH_LOG}" ]
-}
-
-@test "comment add, pr comment and issue comment help shows --body beside --body-file, says which commands take it, and no longer says there is no --body; none calls gh" {
-    run --separate-stderr "${SCRIPT}" comment add --help
-    [ "${status}" -eq 0 ]
-    [ -z "${stderr}" ]
-    [[ "${output}" == "Usage: cfwf comment add --repo <owner/repo> (--pr <n> | --issue <n>) (--body <text> | --body-file <file|->)"$'\n'* ]]
-    [[ "${output}" == *$'\n'"--body       The comment, given inline as one argument. It can be given once and must not be"$'\n'* ]]
-    [[ "${output}" == *"(<<'EOF')."$'\n'"--body-file  The comment: a regular file"* ]]
-    [[ "${output}" == *$'\n'"Exactly one of --body and --body-file is required. --body is only for comment add, pr comment"$'\n'"and issue comment. There is no -b,"* ]]
-    [[ "${output}" != *"There is no --body"* ]]
-
-    local kind
-    for kind in pr issue; do
-        run --separate-stderr "${SCRIPT}" "${kind}" comment --help
-        [ "${status}" -eq 0 ]
-        [ -z "${stderr}" ]
-        [[ "${output}" == "Usage: cfwf ${kind} comment --repo <owner/repo> --${kind} <n> (--body <text> | --body-file <file|->)"$'\n'* ]]
-        [[ "${output}" == *$'\n'"--body       The comment, given inline as one argument, once, and not empty or blank. It is"$'\n'* ]]
-        [[ "${output}" == *$'\n\n'"Exactly one of --body and --body-file is required."$'\n\n'* ]]
-        [[ "${output}" != *"no --body or -b"* ]]
-        [[ "${output}" != *"There is no --body"* ]]
-    done
     [ ! -f "${GH_LOG}" ]
 }
 
