@@ -358,6 +358,9 @@ cleanup() {
     if [ "${exit_status}" -ne 0 ] && [ -n "${POST_PLAN_DONE:-}" ]; then
         printf 'cfwf: post-plan steps done before the failure: %s\n' "${POST_PLAN_DONE}" >&2
     fi
+    if [ "${exit_status}" -ne 0 ] && [ -n "${APPROVE_DONE:-}" ]; then
+        printf 'cfwf: approve steps done before the failure: %s\n' "${APPROVE_DONE}" >&2
+    fi
     rm -f "${GH_ERR_FILE}" "${BODY_PATH_TMP}" "${DESCRIPTION_PATH_TMP}" "${SCAN_TMP}" "${VALUE_TMP}" "${HAND_OFF_RECORD_TMP:-}" "${LOG_TMP}" "${LOG_OUT_TMP}" "${REPO_FILE_TMP}"
 }
 
@@ -393,6 +396,7 @@ Commands:
   issue post-plan          Post an issue's implementation plan, add Blocked, then move the board to Planning (exit 8 when refused)
   issue block              Post a question on an issue, then add Blocked, leaving the board as it is (exit 8 when refused)
   issue unblock            Humans only: post a comment, then remove Blocked, once the board is Approved or later (exit 8 refused, 10 agent)
+  issue approve            Humans only: post the plan approval, set the board to Approved, then remove Blocked (exit 8 refused, 10 agent)
   issue comments           Print an issue's or PR's top-level comments with their bodies, oldest first (exit 9 when not found)
   issue comment            Post a comment on an issue and print its URL, the same as comment add --issue (exit 8 when refused)
   issue add-sub-issue      Link an issue to a parent issue as its sub-issue (exit 8 when refused, 9 when not found)
@@ -1023,6 +1027,50 @@ usage_pr_unblock() {
     usage_item_unblock pr
 }
 
+usage_issue_approve() {
+    cat << USAGE
+Usage: cfwf issue approve --repo <owner/repo> --issue <n> --body-file <file|-> [--keep-blocked]
+
+For humans only. In an AI agent session (CLAUDECODE=1) it is refused with exit ${NOT_ALLOWED_FOR_AGENTS_EXIT} (not allowed
+for agents; a human must run it) before its options are read or any gh call is made, and nothing is
+written, -h and --help included: read this help with 'cfwf help issue approve'.
+
+Approves an issue's implementation plan in one command, always in this order: posts the body as a
+comment, sets the issue's status on the Workflow board to Approved (as workflow-status --set does,
+with no read-back), then removes the Blocked label unless --keep-blocked is given. On Hold is never
+removed, and the assignees and every other label are left as they are.
+
+--repo          Always required; never taken from the current directory.
+--issue         Always required: the issue's number, above 0.
+--body-file     Always required: the approval comment, a regular file, or - to read it from stdin. It
+                is read once, into a private copy that is both checked and posted. There is no --body.
+--keep-blocked  Leaves Blocked on the issue.
+--json and --jq are not options.
+
+Everything is checked before anything is written, and a refusal writes nothing:
+  the body   is checked for leaks (see 'cfwf help body'). The plan-approval keywords are allowed:
+             this comment is the approval.
+  the issue  must be an open issue, not a pull request, with a comment that has a line that is
+             exactly ${PLAN_HEADING}, as issue plan-status finds a plan.
+  the board  when the repository has a Workflow board, its Approved option is looked up. A
+             repository with no Workflow board is not refused: the board is not set, and a warning
+             on stderr says so.
+A refusal exits ${POLICY_REFUSED_EXIT} with "cfwf: approve refused: <rule>" (or "cfwf: body refused: <rule>") on
+stderr. A number that is no issue exits ${ISSUE_NOT_FOUND_EXIT}.
+
+When the comment cannot be posted, nothing else is written. When a later step fails, the message
+names the steps already done, the comment URL included.
+
+Output, one line a step:
+  <comment URL>
+  Approved <url>                the issue's URL; "Approved <url> (Blocked kept)" with --keep-blocked
+
+Exit codes: 0 posted and approved; 1 a runtime failure, such as a gh or network error, prefixed
+"cfwf:"; 2 a usage error; ${POLICY_REFUSED_EXIT} refused, nothing written; ${ISSUE_NOT_FOUND_EXIT} not found, nothing written;
+${NOT_ALLOWED_FOR_AGENTS_EXIT} not allowed for agents, nothing called or written.
+USAGE
+}
+
 usage_issue_comments() {
     cat << USAGE
 Usage: cfwf issue comments --repo <owner/repo> --issue <n> [--since <time>] [--author <login>]
@@ -1131,6 +1179,8 @@ usage_issue() {
     usage_issue_block
     printf '\n'
     usage_issue_unblock
+    printf '\n'
+    usage_issue_approve
     printf '\n'
     usage_issue_comments
     printf '\n'
@@ -3118,6 +3168,7 @@ usage_for() {
         "issue post-plan") usage_issue_post_plan ;;
         "issue block") usage_issue_block ;;
         "issue unblock") usage_issue_unblock ;;
+        "issue approve") usage_issue_approve ;;
         "issue comments") usage_issue_comments ;;
         "issue comment") usage_issue_comment ;;
         body | "body check") usage_body ;;
@@ -4309,20 +4360,29 @@ readonly PLAN_APPROVAL_DEF='def loose_plan: (.body // "") | test("'"${LOOSE_PLAN
 # substitution drops every newline at the end of what it captures, and none before this.
 readonly OUTPUT_END=$'\x1f'
 
+# A jq definition, put before a filter that uses it: is_plan is whether the comment it is given has
+# a line that is exactly PLAN_HEADING (a CR before the line end left out, as GitHub keeps one from a
+# browser): the plan issue plan-status reports and issue approve requires.
+readonly PLAN_COMMENT_DEF="def is_plan: (.body // \"\") | split(\"\\n\") | any(.[]; rtrimstr(\"\\r\") == \"${PLAN_HEADING}\");"
+
 # Reads the issue ISSUE of REPO with one gh issue view: the fields $1 (comma separated, on top of
 # url) through the jq filter $2, which brings any definition it uses with it and whose output is
 # left in GH_OUTPUT. gh issue view answers a pull request's number with the pull request, so the
 # url is read to tell the two apart, and the first line of the answer says which it is. A number
-# that is no issue exits ISSUE_NOT_FOUND_EXIT; any other failed read dies with gh's error, so a
-# transport error is never read as a missing issue.
+# that is no issue exits ISSUE_NOT_FOUND_EXIT, and so does a pull request's, unless $3 names a
+# subject to refuse it under (exit POLICY_REFUSED_EXIT); any other failed read dies with gh's
+# error, so a transport error is never read as a missing issue.
 read_issue() {
-    local fields="$1" filter="$2" kind
+    local fields="$1" filter="$2" pull_subject="${3:-}" kind
     if ! gh_capture issue view "${ISSUE}" --repo "${REPO}" --json "url,${fields}" \
         --jq "(if (.url | test(\"/pull/[0-9]+\$\")) then \"pull\" else \"issue\" end), (${filter})"; then
         [[ "${GH_ERROR}${GH_OUTPUT}" != *"${ISSUE_NOT_FOUND_TEXT}"* ]] || issue_not_found "${REPO}#${ISSUE} was not found"
         die "could not read ${REPO}#${ISSUE}: $(gh_failure_text)"
     fi
     kind="${GH_OUTPUT%%$'\n'*}"
+    if [ "${kind}" = pull ] && [ -n "${pull_subject}" ]; then
+        refuse_policy "${pull_subject}" "${REPO}#${ISSUE} is a pull request, not an issue"
+    fi
     [ "${kind}" != pull ] || issue_not_found "${REPO}#${ISSUE} is a pull request, not an issue"
     [[ "${GH_OUTPUT}" == issue$'\n'* ]] || unexpected_issue_result
     GH_OUTPUT="${GH_OUTPUT#*$'\n'}"
@@ -4419,8 +4479,8 @@ issue_plan_status() {
     require_gh
     # $comments and $plan below are jq variables, not shell ones.
     # shellcheck disable=SC2016
-    program="${PRINTABLE_DEF} ${SIGNS_OFF_DEF} ${HOLD_LABELS_DEF} ${PLAN_APPROVAL_DEF}"' (.comments // []) as $comments
-         | ([$comments | to_entries[] | select(.value.body // "" | split("\n") | any(rtrimstr("\r") == "## Implementation Plan")) | .key] | last) as $plan
+    program="${PRINTABLE_DEF} ${SIGNS_OFF_DEF} ${HOLD_LABELS_DEF} ${PLAN_APPROVAL_DEF} ${PLAN_COMMENT_DEF}"' (.comments // []) as $comments
+         | ([$comments | to_entries[] | select(.value | is_plan) | .key] | last) as $plan
          | ("plan\t" + (if $plan == null then "no" else "yes" end)),
            ("blocked\t" + (if is_blocked then "yes" else "no" end)),
            (select($plan != null)
@@ -4976,6 +5036,88 @@ pr_unblock() {
     item_unblock pr "$@"
 }
 
+# issue approve: whether --keep-blocked was given, and the steps written so far, for the EXIT trap
+# to name if a later one fails.
+APPROVE_KEEP_BLOCKED=false
+APPROVE_DONE=""
+
+assign_issue_approve_option() {
+    case "$1" in
+        --keep-blocked)
+            [ "${APPROVE_KEEP_BLOCKED}" = false ] || usage_error "--keep-blocked was given more than once"
+            APPROVE_KEEP_BLOCKED=true
+            ;;
+        *) assign_issue_edit_option "$@" ;;
+    esac
+}
+
+# issue approve, for humans only (#1607): posts the approval in BODY_FILE on ISSUE of REPO as a
+# comment, then sets the issue to Approved on the Workflow board (resolve_status and
+# put_item_on_board, as workflow-status --set does, with no read-back), then removes Blocked unless
+# --keep-blocked is given. In an AI agent session it is refused with NOT_ALLOWED_FOR_AGENTS_EXIT
+# first, before the options are read or gh is called. Everything else is checked before the comment
+# is posted: the options, the body (resolve_body: the leak check and the not-blank check; the
+# plan-approval keywords are not refused, because this comment is the approval), then the issue,
+# read once with read_issue (a pull request's number, a closed issue or one with no plan comment
+# is refused), then the board's Approved option. On Hold is never removed. A comment that fails
+# writes nothing else; a later failure names the steps done, the comment URL included (the EXIT
+# trap). A repository with no Workflow board is not a failure: the board is not set, and a warning
+# says so.
+issue_approve() {
+    local url state has_plan
+    local -a lines
+    if is_agent_session; then
+        printf 'cfwf: issue approve refused: not allowed for agents; a human must run it\n' >&2
+        exit "${NOT_ALLOWED_FOR_AGENTS_EXIT}"
+    fi
+    parse_command_options assign_issue_approve_option "--repo --issue --body-file" "--keep-blocked" "$@"
+    require REPO --repo
+    require ISSUE --issue
+    require BODY_FILE --body-file
+    require_target
+    require_gh
+    resolve_body
+
+    read_issue state,comments "${PLAN_COMMENT_DEF}"' .url, .state, (if any((.comments // [])[]; is_plan) then "yes" else "no" end)' approve
+    mapfile -t lines <<< "${GH_OUTPUT}"
+    [ "${#lines[@]}" -eq 3 ] || unexpected_issue_result
+    url="${lines[0]}"
+    state="${lines[1]}"
+    has_plan="${lines[2]}"
+    [[ "${url}" =~ ${REPOSITORY_URL_PATTERN}/issues/${ISSUE}$ ]] || unexpected_issue_result
+    is_one_of "${has_plan}" yes no || unexpected_issue_result
+    case "${state}" in
+        OPEN) ;;
+        CLOSED) refuse_policy approve "the issue is closed" ;;
+        *) unexpected_issue_result ;;
+    esac
+    [ "${has_plan}" = yes ] || refuse_policy approve "the issue has no comment with a line that is exactly ${PLAN_HEADING}; there is nothing to approve"
+    resolve_project optional
+    if [ -n "${PROJECT_ID}" ]; then
+        STATUS="Approved"
+        resolve_status
+    fi
+
+    post_added_comment
+    APPROVE_DONE="comment ${POSTED_COMMENT_URL}"
+    if [ -n "${PROJECT_ID}" ]; then
+        put_item_on_board "${url}"
+        APPROVE_DONE+=", board Approved"
+    else
+        printf 'cfwf: warning: no project titled Workflow is linked to %s, so the board was not set\n' "${REPO}" >&2
+    fi
+    if [ "${APPROVE_KEEP_BLOCKED}" = false ]; then
+        gh_capture issue edit "${ISSUE}" --repo "${REPO}" --remove-label Blocked < /dev/null \
+            || die "could not remove the label Blocked from ${REPO}#${ISSUE}: $(gh_failure_text)"
+    fi
+    APPROVE_DONE=""
+    if [ "${APPROVE_KEEP_BLOCKED}" = true ]; then
+        printf 'Approved %s (Blocked kept)\n' "${url}"
+    else
+        printf 'Approved %s\n' "${url}"
+    fi
+}
+
 # pr close and pr reopen: the state of the pull request as read before any write, open or closed,
 # and whether it is merged.
 PR_STATE=""
@@ -5282,7 +5424,7 @@ cmd_issue() {
     dispatch_subcommand issue create issue_create edit issue_edit view issue_view plan-status issue_plan_status \
         list issue_list search issue_search \
         label-history issue_label_history reopen issue_reopen close issue_close post-plan issue_post_plan block issue_block \
-        unblock issue_unblock comments issue_comments add-sub-issue issue_add_sub_issue comment issue_comment -- "$@"
+        unblock issue_unblock approve issue_approve comments issue_comments add-sub-issue issue_add_sub_issue comment issue_comment -- "$@"
 }
 
 # label add and label remove: the item as read before any write, its URL and the labels it carries,
@@ -8399,7 +8541,7 @@ comment_add() {
 # Posts the comment of comment add once the options are parsed and REPO and the target are set:
 # the body is required, checked for leaks and for the plan-approval keywords, then posted, and its
 # URL printed. comment add, pr comment, issue comment, issue unblock and pr unblock all run its two
-# halves, so they cannot drift apart.
+# halves, so they cannot drift apart; issue approve posts with the second half.
 add_comment() {
     check_add_comment_body
     post_added_comment
