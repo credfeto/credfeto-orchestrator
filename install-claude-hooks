@@ -351,11 +351,16 @@ warn_if_no_allowed_dirs_override() {
 # kb-mcp-headers reads the kb server's token at connect time, from KB_MCP_TOKEN
 # or from a token file only its owner can read. This script never reads,
 # prompts for or stores the token; it only says how to supply one when it
-# finds neither.
+# finds neither, or that the file is not private when kb-mcp-headers would
+# refuse it. The privacy test is kb-mcp-headers' own, so the two always agree.
 warn_if_no_kb_token() {
     local token_file="${XDG_CONFIG_HOME:-${HOME}/.config}/kb-mcp/token"
     [ -n "${KB_MCP_TOKEN:-}" ] && return 0
-    [ -f "${token_file}" ] && return 0
+    if [ -e "${token_file}" ]; then
+        [ -n "$(find "${token_file}" -prune -type f -user "$(id -u)" -perm 600 2>/dev/null)" ] && return 0
+        info "kb MCP token file ${token_file} is not private - kb-mcp-headers refuses it until it is a regular file owned by you with mode 0600"
+        return 0
+    fi
     info "No kb MCP token found - the kb server will fail to connect until you export KB_MCP_TOKEN where claude runs, or write the token to ${token_file} (chmod 600)"
 }
 
