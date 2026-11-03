@@ -39,6 +39,7 @@ blob sizes manageable and to avoid cascading cache invalidation.
 | `FunFair.BuildCheck` | `buildcheck`, `dotnet-buildcheck` |
 | `FunFair.BuildVersion` | `buildversion`, `dotnet-buildversion` |
 | `Credfeto.DotNet.Repo.Formatter` | `cscleanup`, `dotnet-cscleanup` |
+| `Credfeto.Build.Dotnet.Server` | `credfeto-build-dotnet` (the `build-dotnet` MCP server, which `development-full` starts by its absolute path, `/home/developer/.dotnet/tools/credfeto-build-dotnet`) |
 
 `dotnet <name>` subcommand aliases (e.g. `dotnet-buildcheck`) are created via `ln -sf` so the
 dotnet CLI can locate tools invoked through subcommand syntax.
@@ -49,7 +50,7 @@ dotnet CLI can locate tools invoked through subcommand syntax.
 the `.github/actions/nuget-latest-versions` composite action: it queries the NuGet flat-container
 API for the latest published version of every package this image installs (`Credfeto.Changelog.Cmd`,
 `Credfeto.DotNet.Code.Analysis.Overrides.Cmd`, `FunFair.BuildCheck`, `FunFair.BuildVersion`,
-`Credfeto.DotNet.Repo.Formatter`) and hashes them together. The value only changes when one of
+`Credfeto.DotNet.Repo.Formatter`, `Credfeto.Build.Dotnet.Server`) and hashes them together. The value only changes when one of
 those packages actually ships a new release, so an unchanged run is a full build-cache hit
 rather than a blind reinstall.
 
@@ -58,7 +59,8 @@ rather than a blind reinstall.
 The build-time sanity `RUN` step verifies everything this stage adds and fails the build (not
 the container at runtime) if anything is missing:
 
-- Each of the five .NET tools above is present in `dotnet tool list -g`.
+- Each of the six .NET tools above is present in `dotnet tool list -g`.
+- `/home/developer/.dotnet/tools/credfeto-build-dotnet` is executable and `credfeto-build-dotnet` resolves on `PATH`.
 - Each of the five `dotnet-*` subcommand aliases resolves on `PATH`.
 
 `development-full`'s own build-time sanity check still probes the full inherited toolchain
