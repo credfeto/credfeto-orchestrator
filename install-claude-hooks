@@ -358,7 +358,8 @@ warn_if_no_allowed_dirs_override() {
 # or from a token file only its owner can read. This script never reads,
 # prompts for or stores the token; it only says how to supply one when it
 # finds neither, or that the file is not private when kb-mcp-headers would
-# refuse it. The privacy test is kb-mcp-headers' own, so the two always agree.
+# refuse it. The privacy test is a copy of kb-mcp-headers' token_file_is_private,
+# and test/install-claude-hooks.bats fails if the two copies drift apart.
 warn_if_no_kb_token() {
     local token_file="${XDG_CONFIG_HOME:-${HOME}/.config}/kb-mcp/token"
     [ -n "${KB_MCP_TOKEN:-}" ] && return 0

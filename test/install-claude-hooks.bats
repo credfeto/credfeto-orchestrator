@@ -556,6 +556,22 @@ installed_mcp_names() {
     [[ "${output}" != *'kb_file_secret'* ]]
 }
 
+# Prints the find predicate (everything after the "${token_file}" argument) from each code line
+# of the given file that tests the kb token file's privacy, skipping comment lines so prose that
+# quotes the test cannot stand in for the code.
+kb_token_privacy_predicates() {
+    grep -v '^[[:space:]]*#' "$1" | grep -F -- '-prune -type f -user' | sed -nE 's/.*\$\(find "\$\{token_file\}" (.*)\)" \].*/\1/p'
+}
+
+@test "warn_if_no_kb_token's token file privacy test is a word-for-word copy of kb-mcp-headers' token_file_is_private" {
+    local helper_predicate installer_predicate
+    helper_predicate="$(kb_token_privacy_predicates "${REPO_ROOT}/containers/base/development-full/claude-mcp/kb-mcp-headers")"
+    installer_predicate="$(kb_token_privacy_predicates "${REPO_ROOT}/install-claude-hooks")"
+    [ "$(grep -c . <<<"${helper_predicate}")" -eq 1 ]
+    [ "$(grep -c . <<<"${installer_predicate}")" -eq 1 ]
+    [ "${installer_predicate}" = "${helper_predicate}" ]
+}
+
 @test "when sudo is declined, the printed managed-mcp.json install command names a merged file that still exists" {
     write_host_claude_json '{"mcpServers": {"rider": {"type": "sse", "url": "http://localhost:64342/sse"}}}'
     run main
