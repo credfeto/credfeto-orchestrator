@@ -23,9 +23,9 @@
 # as settings.json.bak.
 #
 # It also installs /etc/claude-code/managed-mcp.json, which takes exclusive
-# control of the MCP servers Claude Code loads, and the cfwf-mcp-headers
-# helper it names. The installed file is the container's cfwf and build-dotnet
-# servers merged with the MCP servers in ~/.claude.json (user scope and every
+# control of the MCP servers Claude Code loads, and the cfwf-mcp-headers and
+# kb-mcp-headers helpers it names. The installed file is the container's cfwf,
+# kb and build-dotnet servers merged with the MCP servers in ~/.claude.json (user scope and every
 # project scope), so a host keeps its own servers; see merge_host_mcp_servers
 # for what is left out. The merge is a snapshot: a server added to
 # ~/.claude.json later only takes effect once this script is run again.
@@ -181,8 +181,9 @@ install_managed_files() {
 # (a missing or empty file has none):
 #
 #   merged      the managed-mcp.json to install
-#   duplicates  host servers left out because their URL is cfwf's, which
-#               replaces them
+#   duplicates  host servers left out because their URL is a shipped http
+#               server's, which replaces them, keyed by that shipped server's
+#               name
 #   refused     host servers left out because they may hold a secret: a headers
 #               or env value holds literal text rather than only ${VAR}
 #               references (an optional Bearer/Basic/Token scheme word is
@@ -237,17 +238,21 @@ merge_host_mcp_servers() {
             or command_has_credentials;
 
         ($hosts[0] // {}) as $host
-        | (.mcpServers.cfwf.url) as $cfwf_url
         | (.mcpServers | to_entries) as $shipped
+        | ($shipped | map(select(.value.type == "http" and (.value.url | type == "string")))) as $shipped_http
         | [($host | objects | .mcpServers // {} | objects | to_entries[]),
            ($host | objects | .projects // {} | objects | .[] | objects | .mcpServers // {} | objects | to_entries[])]
         | map(select(.value | type == "object")) as $hosted
-        | ($hosted | map(select(same_url(.value.url // "" | tostring; $cfwf_url)))) as $duplicates
+        | ($hosted | map((.value.url // "" | tostring) as $url | select(any($shipped_http[]; same_url($url; .value.url))))) as $duplicates
         | ($hosted - $duplicates | map(select(.value | holds_literal_secret))) as $refused
         | (($shipped + ($hosted - $duplicates - $refused)) | unique) as $kept
         | {
             merged: {mcpServers: ($kept | from_entries)},
-            duplicates: ($duplicates | map(.key) | unique),
+            duplicates: ($shipped_http
+                | map(.value.url as $url
+                    | {key, value: ($duplicates | map(select(same_url(.value.url // "" | tostring; $url)) | .key) | unique)})
+                | map(select(.value | length > 0))
+                | from_entries),
             refused: ($refused | map(.key) | unique),
             collisions: ($kept | group_by(.key) | map(select(length > 1) | .[0].key))
           }
@@ -261,8 +266,10 @@ write_merged_mcp() {
     local report="$1" merged_mcp_file="$2" host_claude_json="$3"
     local names
 
-    names=$(jq -r '.duplicates | join(", ")' <<<"${report}")
-    [ -z "${names}" ] || info "Left out ${names} from ${host_claude_json}: same URL as cfwf, which replaces them. Remove them from ${host_claude_json}, as they are no longer used."
+    local shipped
+    while IFS=$'\t' read -r shipped names; do
+        info "Left out ${names} from ${host_claude_json}: same URL as ${shipped}, which replaces them. Remove them from ${host_claude_json}, as they are no longer used."
+    done < <(jq -r '.duplicates | to_entries[] | [.key, (.value | join(", "))] | @tsv' <<<"${report}")
     names=$(jq -r '.refused | join(", ")' <<<"${report}")
     [ -z "${names}" ] || info "WARNING: did not copy ${names} from ${host_claude_json}: a headers or env value holds literal text, the url carries userinfo or a query string, or the command or args look like a credential, and ${CLAUDE_MANAGED_DIR}/managed-mcp.json is readable by every user. Supply the secret through a headersHelper or a \${VAR} reference instead, then re-run."
 
