@@ -578,6 +578,88 @@ STUBEOF
     grep -q "Failed to create Podman secret for GH_ENTERPRISE_TOKEN" "${notify_log}"
 }
 
+# A podman stub that logs each secret call's arguments to secret_log, the stdin of each
+# `secret create` to secret_stdin, and the run arguments to args_log.
+make_secret_logging_podman_stub() {
+    cat > "${STUB_BIN}/podman" << STUBEOF
+#!/usr/bin/env bash
+if [ "\$1" = "secret" ]; then
+    printf "%s\n" "\$@" >> "${TEST_TMP}/podman_secret"
+    [ "\$2" = "create" ] && { cat >> "${TEST_TMP}/podman_secret_stdin"; printf '\n' >> "${TEST_TMP}/podman_secret_stdin"; }
+    exit 0
+fi
+[ "\$1" = "pull" ] && exit 0
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${TEST_TMP}/podman_args"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+}
+
+@test "invoke_claude passes KB_MCP_TOKEN via a per-container Podman secret created from stdin" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    KB_MCP_TOKEN="kb-secret-token"
+    make_secret_logging_podman_stub
+
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
+    [ "$(grep -A2 -x 'create' "${TEST_TMP}/podman_secret" | grep -cx 'kb-mcp-token-orchestrator-credfeto')" -eq 1 ]
+    grep -qx -- '-' "${TEST_TMP}/podman_secret"
+    grep -qx 'kb-secret-token' "${TEST_TMP}/podman_secret_stdin"
+    # The token itself is never a podman argument, as --env or otherwise.
+    [ "$(cat "${TEST_TMP}/podman_args" "${TEST_TMP}/podman_secret" | grep -c 'kb-secret-token')" -eq 0 ]
+    grep -qx 'kb-mcp-token-orchestrator-credfeto,type=env,target=KB_MCP_TOKEN' "${TEST_TMP}/podman_args"
+    # Removed again on the way out.
+    [ "$(grep -A1 -x 'rm' "${TEST_TMP}/podman_secret" | grep -cx 'kb-mcp-token-orchestrator-credfeto')" -ge 2 ]
+    [ -z "${KB_MCP_SECRET_NAME}" ]
+}
+
+@test "invoke_claude passes no kb secret when KB_MCP_TOKEN is unset or empty" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    local value
+    for value in unset empty; do
+        rm -f "${TEST_TMP}/podman_secret" "${TEST_TMP}/podman_args"
+        if [ "${value}" = unset ]; then unset KB_MCP_TOKEN; else KB_MCP_TOKEN=""; fi
+        make_secret_logging_podman_stub
+
+        invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
+        [ "$(grep -c 'KB_MCP_TOKEN' "${TEST_TMP}/podman_args")" -eq 0 ]
+        [ "$(cat "${TEST_TMP}/podman_secret" 2>/dev/null | grep -c 'kb-mcp-token')" -eq 0 ]
+    done
+}
+
+@test "invoke_claude notifies Discord before dying when creating the KB_MCP_TOKEN Podman secret fails" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    KB_MCP_TOKEN="kb-secret-token"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "secret" ] && [ "$2" = "create" ] && [ "$3" != "${3#kb-mcp-token-}" ] && exit 1
+[ "$1" = "secret" ] && exit 0
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    local notify_log="${TEST_TMP}/notify.log"
+    notify_discord_claude_error() { printf '%s\n' "$*" >> "${notify_log}"; }
+
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Failed to create Podman secret for KB_MCP_TOKEN"* ]]
+    [[ "${output}" != *"kb-secret-token"* ]]
+    grep -q "Failed to create Podman secret for KB_MCP_TOKEN" "${notify_log}"
+}
+
+@test "cleanup_claude_invocation_tmpfiles removes the kb Podman secret and clears its name" {
+    local secret_log="${TEST_TMP}/podman_secret"
+    make_stub podman "printf '%s\n' \"\$*\" >> '${secret_log}'"
+    KB_MCP_SECRET_NAME="kb-mcp-token-orchestrator-credfeto"
+
+    cleanup_claude_invocation_tmpfiles
+    [ "$(cat "${secret_log}")" = 'secret rm kb-mcp-token-orchestrator-credfeto' ]
+    [ -z "${KB_MCP_SECRET_NAME}" ]
+}
+
 @test "invoke_claude never passes --resume (every run is a fresh session)" {
     local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"

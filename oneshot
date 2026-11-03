@@ -135,7 +135,7 @@ source "${ONESHOT_DIR}/lib/podman" \
 # summarise_precheck_log, precheck_log_tail, run_precommit_precheck, ensure_precheck_result,
 # prepare_precheck_section, and current_agent_image_sha (plus the invocation-scoped globals
 # CLAUDE_MD_TMPFILE, CLAUDE_PROMPT, GPG_PUBKEY_TMPDIR, PODMAN_SECRET_NAME,
-# GH_ENTERPRISE_SECRET_NAME, PRECHECK_SECTION, PRECHECK_SESSION_LOG) are declared in lib/podman.
+# GH_ENTERPRISE_SECRET_NAME, KB_MCP_SECRET_NAME, PRECHECK_SECTION, PRECHECK_SESSION_LOG) are declared in lib/podman.
 
 # sync_pr_labels_from_linked_issues is declared in lib/github.
 

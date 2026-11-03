@@ -112,7 +112,9 @@ normalize_gh_host() {
 
 # Reads DISCORD_WEBHOOK, DISCORD_WEBHOOK_BLOCKED, DISCORD_WEBHOOK_AWAITING_APPROVAL,
 # DISCORD_WEBHOOK_PERMISSIONS, DISCORD_WEBHOOK_SLOW_PULL, GH_TOKEN, GH_HOST, GIT_USER_NAME,
-# GIT_USER_EMAIL, and GIT_SIGNING_KEY from orchestrator/.env.
+# GIT_USER_EMAIL, GIT_SIGNING_KEY, and the optional KB_MCP_TOKEN from orchestrator/.env.
+# KB_MCP_TOKEN is not exported: prepare_claude_container_args hands it to the container as a
+# podman secret, and no host-side command needs it.
 # Sets DISCORD_WEBHOOK_URL and the four DISCORD_WEBHOOK_URL_<CATEGORY> vars lib/discord's
 # _discord_webhook_for reads (#1456; same "_URL" naming split as the base DISCORD_WEBHOOK/
 # DISCORD_WEBHOOK_URL pair, so all five follow one convention in .env); exports GH_HOST
@@ -133,12 +135,13 @@ load_env_config() {
     GIT_USER_EMAIL=""
     GIT_SIGNING_KEY=""
     WHITELISTED_USERS=""
+    KB_MCP_TOKEN=""
     local env_file="${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/.env"
     [ -f "${env_file}" ] || return 0
     local line val gh_token="" gh_host=""
     while IFS= read -r line || [ -n "${line}" ]; do
         case "${line}" in
-            DISCORD_WEBHOOK=*|DISCORD_WEBHOOK_BLOCKED=*|DISCORD_WEBHOOK_AWAITING_APPROVAL=*|DISCORD_WEBHOOK_PERMISSIONS=*|DISCORD_WEBHOOK_SLOW_PULL=*|GH_TOKEN=*|GH_HOST=*|GIT_USER_NAME=*|GIT_USER_EMAIL=*|GIT_SIGNING_KEY=*|WHITELISTED_USERS=*|CI_CHECK_TIMEOUT_MINUTES=*)
+            DISCORD_WEBHOOK=*|DISCORD_WEBHOOK_BLOCKED=*|DISCORD_WEBHOOK_AWAITING_APPROVAL=*|DISCORD_WEBHOOK_PERMISSIONS=*|DISCORD_WEBHOOK_SLOW_PULL=*|GH_TOKEN=*|GH_HOST=*|GIT_USER_NAME=*|GIT_USER_EMAIL=*|GIT_SIGNING_KEY=*|WHITELISTED_USERS=*|CI_CHECK_TIMEOUT_MINUTES=*|KB_MCP_TOKEN=*)
                 val="${line#*=}"
                 val="${val%$'\r'}"
                 case "${val}" in
@@ -172,6 +175,9 @@ load_env_config() {
                     CI_CHECK_TIMEOUT_MINUTES=*)
                         # shellcheck disable=SC2034  # read by lib/fingerprints and lib/github-status after sourcing
                         if [[ "${val}" =~ ^[1-9][0-9]*$ ]]; then CI_CHECK_TIMEOUT_MINUTES="${val}"; else warn "CI_CHECK_TIMEOUT_MINUTES must be a positive integer; ignoring '${val}'"; fi ;;
+                    KB_MCP_TOKEN=*)
+                        # shellcheck disable=SC2034  # read by lib/podman after sourcing
+                        KB_MCP_TOKEN="${val}" ;;
                 esac
                 ;;
         esac

@@ -807,6 +807,23 @@ ENVEOF
     [ -z "${WHITELISTED_USERS}" ]
 }
 
+@test "load_env_config reads KB_MCP_TOKEN from env file, stripping quotes, without exporting it" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'KB_MCP_TOKEN="kb-token-123"\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    unset KB_MCP_TOKEN
+    load_env_config
+    [ "${KB_MCP_TOKEN}" = "kb-token-123" ]
+    [ "$(env | grep -c '^KB_MCP_TOKEN=')" -eq 0 ]
+}
+
+@test "load_env_config clears KB_MCP_TOKEN when the key is absent from env file" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'DISCORD_WEBHOOK=https://hook.example.com/1\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    KB_MCP_TOKEN="stale-token"
+    load_env_config
+    [ -z "${KB_MCP_TOKEN}" ]
+}
+
 @test "CI_CHECK_TIMEOUT_MINUTES defaults to 1440 minutes when it is not set (#1504)" {
     unset CI_CHECK_TIMEOUT_MINUTES
     source_oneshot
