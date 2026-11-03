@@ -392,6 +392,7 @@ Commands:
   issue close              Close an issue with a reason, with an optional comment first (exit 8 when refused, 9 when not found)
   issue post-plan          Post an issue's implementation plan, add Blocked, then move the board to Planning (exit 8 when refused)
   issue block              Post a question on an issue, then add Blocked, leaving the board as it is (exit 8 when refused)
+  issue unblock            Humans only: post a comment, then remove Blocked, once the board is Approved or later (exit 8 refused, 10 agent)
   issue comments           Print an issue's or PR's top-level comments with their bodies, oldest first (exit 9 when not found)
   issue comment            Post a comment on an issue and print its URL, the same as comment add --issue (exit 8 when refused)
   issue add-sub-issue      Link an issue to a parent issue as its sub-issue (exit 8 when refused, 9 when not found)
@@ -432,6 +433,7 @@ Commands:
   pr close                 Close the agent's own PR without merging it, with an optional comment first (exit 8 refused, 9 not found)
   pr reopen                Reopen the agent's own closed PR, with an optional comment first (exit 8 refused, 9 not found)
   pr block                 Post a question on a PR, then add Blocked, leaving the board as it is (exit 8 when refused)
+  pr unblock               Humans only: post a comment, then remove Blocked, once the board is Approved or later (exit 8 refused, 10 agent)
   pr search                Search one repository's pull requests by words in their title or body, one line each
   comment add              Post a comment on a PR or an issue and print its URL (also as pr comment and issue comment)
   comment edit             Replace the body of the agent's own comment, by id, and print its URL (exit 8 refused, 9 not found)
@@ -964,6 +966,63 @@ usage_pr_block() {
     usage_item_block pr
 }
 
+# The help of issue unblock ($1 issue) and pr unblock ($1 pr).
+usage_item_unblock() {
+    local kind="$1" noun="issue" item="an issue" flag="--issue" option="--issue    "
+    if [ "${kind}" = pr ]; then
+        noun="pull request"
+        item="a pull request"
+        flag="--pr"
+        option="--pr       "
+    fi
+    cat << USAGE
+Usage: cfwf ${kind} unblock --repo <owner/repo> ${flag} <n> --body-file <file|->
+
+For humans only. In an AI agent session (CLAUDECODE=1) it is refused with exit ${NOT_ALLOWED_FOR_AGENTS_EXIT} (not allowed
+for agents; a human must run it) before its options are read or any gh call is made, and nothing is
+written, -h and --help included: read this help with 'cfwf help ${kind} unblock'.
+
+Unblocks ${item} in one command, always in this order: posts the body as a comment, then removes
+the Blocked label, so Blocked is never lifted without a comment that says why. On Hold is never
+removed, and the board status, the assignees and every other label are left as they are.
+
+--repo       Always required; never taken from the current directory.
+${option}  Always required: the ${noun}'s number, above 0.
+--body-file  Always required: the comment, a regular file, or - to read it from stdin. It is read
+             once, into a private copy that is both checked and posted. There is no --body.
+--json and --jq are not options.
+
+Everything is checked before anything is written, and a refusal writes nothing:
+  the body   is checked for leaks (see 'cfwf help body') and for the plan-approval keywords, as
+             for comment add (a keyword inside a Markdown quote is allowed)
+  the board  when the repository has a Workflow board, the ${noun} must be on it at Approved or a
+             later state; before Approved (Not Started or Planning), unset or not on the board is
+             refused. This command never sets the board: the item must be approved first. A
+             repository with no Workflow board has no such check.
+A refusal exits ${POLICY_REFUSED_EXIT} with "cfwf: unblock refused: <rule>" (or "cfwf: body refused: <rule>") on
+stderr.
+
+When the comment cannot be posted, nothing else is written. When removing Blocked fails after the
+comment was posted, the message names the comment URL.
+
+Output, one line a step:
+  <comment URL>
+  <url> unblocked       the ${noun}'s URL, as GitHub gives it with the comment
+
+Exit codes: 0 posted and unblocked; 1 a runtime failure, such as a gh or network error, prefixed
+"cfwf:", naming the comment URL when removing Blocked fails after it; 2 a usage error;
+${POLICY_REFUSED_EXIT} refused, nothing written; ${NOT_ALLOWED_FOR_AGENTS_EXIT} not allowed for agents, nothing called or written.
+USAGE
+}
+
+usage_issue_unblock() {
+    usage_item_unblock issue
+}
+
+usage_pr_unblock() {
+    usage_item_unblock pr
+}
+
 usage_issue_comments() {
     cat << USAGE
 Usage: cfwf issue comments --repo <owner/repo> --issue <n> [--since <time>] [--author <login>]
@@ -1070,6 +1129,8 @@ usage_issue() {
     usage_issue_post_plan
     printf '\n'
     usage_issue_block
+    printf '\n'
+    usage_issue_unblock
     printf '\n'
     usage_issue_comments
     printf '\n'
@@ -1795,6 +1856,8 @@ Run 'cfwf pr edit --help' for pr edit, which changes a pull request's title, bod
 Run 'cfwf pr close --help' for pr close, which closes the agent's own pull request without merging it.
 Run 'cfwf pr reopen --help' for pr reopen, which reopens the agent's own closed pull request.
 Run 'cfwf pr block --help' for pr block, which posts a question on a pull request and adds Blocked.
+Run 'cfwf help pr unblock' for pr unblock, for humans only, which posts a comment on a pull request
+and removes Blocked.
 Run 'cfwf branch required-checks --help' for branch required-checks, which lists the checks a branch
 requires without judging them.
 USAGE
@@ -3054,6 +3117,7 @@ usage_for() {
         "issue close") usage_issue_close ;;
         "issue post-plan") usage_issue_post_plan ;;
         "issue block") usage_issue_block ;;
+        "issue unblock") usage_issue_unblock ;;
         "issue comments") usage_issue_comments ;;
         "issue comment") usage_issue_comment ;;
         body | "body check") usage_body ;;
@@ -3082,6 +3146,7 @@ usage_for() {
         "pr close") usage_pr_close ;;
         "pr reopen") usage_pr_reopen ;;
         "pr block") usage_pr_block ;;
+        "pr unblock") usage_pr_unblock ;;
         "pr hand-off") usage_pr_hand_off ;;
         "pr finalise-dependency") usage_pr_finalise_dependency ;;
         "pr take-back") usage_pr_take_back ;;
@@ -4846,6 +4911,71 @@ pr_block() {
     item_block pr "$@"
 }
 
+# Refuses (exit 8) an unblock unless the target is on the Workflow board at Approved or a later
+# state (WORKFLOW_STATES is in board order), read with read_target_status as workflow-status --check
+# reads it. A repository with no Workflow board has no such check. Only reads: the board is never
+# set here.
+require_unblock_board_state() {
+    local state index=-1 approved=-1 i=0
+    resolve_project optional
+    [ -n "${PROJECT_ID}" ] || return 0
+    read_target_status \
+        || die "could not read the status of ${REPO}#${TARGET_NUMBER}: both the direct query and the listing of project ${PROJECT_NUMBER} failed"
+    [ -n "${ITEM_STATUS}" ] || refuse_policy unblock "${REPO}#${TARGET_NUMBER} is not on the Workflow board; it must be Approved or later"
+    for state in "${WORKFLOW_STATES[@]}"; do
+        [ "${state}" != Approved ] || approved="${i}"
+        [ "${state}" != "${ITEM_STATUS}" ] || index="${i}"
+        i=$((i + 1))
+    done
+    [ "${index}" -ge "${approved}" ] \
+        || refuse_policy unblock "the board status is ${ITEM_STATUS}, not Approved or later; it must be approved first"
+}
+
+# issue unblock ($1 issue) and pr unblock ($1 pr), for humans only (#1600): posts the body in
+# BODY_FILE on the item as a comment, then removes Blocked, so Blocked is never lifted without a
+# comment that says why. In an AI agent session it is refused with NOT_ALLOWED_FOR_AGENTS_EXIT
+# first, before the options are read or gh is called. Everything else is checked before the comment
+# is posted: the options, the body (as comment add checks it, the plan-approval keywords included)
+# and the board (require_unblock_board_state). Only Blocked is removed, never On Hold, and the board
+# is never set. A comment that fails writes nothing else; when removing Blocked fails after it, the
+# EXIT trap names the comment URL (CREATED_URL).
+item_unblock() {
+    local kind="$1"
+    shift
+    if is_agent_session; then
+        printf 'cfwf: %s unblock refused: not allowed for agents; a human must run it\n' "${kind}" >&2
+        exit "${NOT_ALLOWED_FOR_AGENTS_EXIT}"
+    fi
+    if [ "${kind}" = pr ]; then
+        parse_command_options assign_pr_edit_option "--repo --pr --body-file" "" "$@"
+        require REPO --repo
+        require PR --pr
+    else
+        parse_command_options assign_issue_edit_option "--repo --issue --body-file" "" "$@"
+        require REPO --repo
+        require ISSUE --issue
+    fi
+    require_target
+    check_add_comment_body
+    require_unblock_board_state
+
+    post_added_comment
+    CREATED_NOTE="the comment was already posted"
+    CREATED_URL="${POSTED_COMMENT_URL}"
+    gh_capture "${kind}" edit "${TARGET_NUMBER}" --repo "${REPO}" --remove-label Blocked < /dev/null \
+        || die "could not remove the label Blocked from ${REPO}#${TARGET_NUMBER}: $(gh_failure_text)"
+    CREATED_URL=""
+    printf '%s unblocked\n' "${POSTED_COMMENT_URL%%#*}"
+}
+
+issue_unblock() {
+    item_unblock issue "$@"
+}
+
+pr_unblock() {
+    item_unblock pr "$@"
+}
+
 # pr close and pr reopen: the state of the pull request as read before any write, open or closed,
 # and whether it is merged.
 PR_STATE=""
@@ -5152,7 +5282,7 @@ cmd_issue() {
     dispatch_subcommand issue create issue_create edit issue_edit view issue_view plan-status issue_plan_status \
         list issue_list search issue_search \
         label-history issue_label_history reopen issue_reopen close issue_close post-plan issue_post_plan block issue_block \
-        comments issue_comments add-sub-issue issue_add_sub_issue comment issue_comment -- "$@"
+        unblock issue_unblock comments issue_comments add-sub-issue issue_add_sub_issue comment issue_comment -- "$@"
 }
 
 # label add and label remove: the item as read before any write, its URL and the labels it carries,
@@ -8245,7 +8375,7 @@ pr_take_back() {
 cmd_pr() {
     dispatch_subcommand pr checks pr_checks checks-wait pr_checks_wait view pr_view list pr_list comments pr_comments reply pr_reply create pr_create \
         ready-at pr_ready_at status pr_status auto-merge-at pr_auto_merge_at diff pr_diff edit pr_edit hand-off pr_hand_off finalise-dependency pr_finalise_dependency take-back pr_take_back \
-        close pr_close reopen pr_reopen block pr_block search pr_search post-merge-runs pr_post_merge_runs sync-labels pr_sync_labels \
+        close pr_close reopen pr_reopen block pr_block unblock pr_unblock search pr_search post-merge-runs pr_post_merge_runs sync-labels pr_sync_labels \
         review-comment pr_review_comment comment pr_comment -- "$@"
 }
 
@@ -8268,13 +8398,24 @@ comment_add() {
 
 # Posts the comment of comment add once the options are parsed and REPO and the target are set:
 # the body is required, checked for leaks and for the plan-approval keywords, then posted, and its
-# URL printed. comment add, pr comment and issue comment all run it, so they cannot drift apart.
+# URL printed. comment add, pr comment, issue comment, issue unblock and pr unblock all run its two
+# halves, so they cannot drift apart.
 add_comment() {
+    check_add_comment_body
+    post_added_comment
+}
+
+# The checks of add_comment, before anything is written: the body is required, then checked for
+# leaks (resolve_body) and for the plan-approval keywords.
+check_add_comment_body() {
     require BODY_FILE --body-file
     require_gh
     resolve_body
     check_comment_for_approval_keywords "${BODY_FILE}"
+}
 
+# The write of add_comment: posts the checked body on the target and prints the comment's URL.
+post_added_comment() {
     local kind="issue"
     [ -z "${PR}" ] || kind="pr"
     post_comment "${kind}" "${TARGET_NUMBER}"
