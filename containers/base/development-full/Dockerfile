@@ -374,7 +374,7 @@ RUN set -e; \
     claude --version >/dev/null 2>&1 || claude --help >/dev/null 2>&1 \
         || { echo "FATAL sanity: 'claude' is not functional" >&2; exit 1; }; \
     echo "== dotnet tools =="; \
-    for tool in credfeto.changelog.cmd credfeto.dotnet.code.analysis.overrides.cmd tsqllint funfair.buildcheck funfair.buildversion cwm.roslynnavigator dotnet-ef ilspycmd microsoft.sqlpackage powershell credfeto.dotnet.repo.formatter dotnet-script dotnet-reportgenerator-globaltool; do \
+    for tool in credfeto.changelog.cmd credfeto.dotnet.code.analysis.overrides.cmd tsqllint funfair.buildcheck funfair.buildversion cwm.roslynnavigator dotnet-ef ilspycmd microsoft.sqlpackage powershell credfeto.dotnet.repo.formatter dotnet-script dotnet-reportgenerator-globaltool credfeto.build.dotnet.server; do \
         if ! su developer -c "dotnet tool list -g" | awk '{print tolower($1)}' | grep -Fxq "$tool"; then \
             echo "FATAL sanity: dotnet tool '$tool' is missing" >&2; exit 1; \
         fi; \
@@ -444,6 +444,8 @@ RUN set -e; \
         || { echo "FATAL sanity: managed-mcp.json must hold exactly the build-dotnet and cfwf servers, cfwf at its https URL, with its headers from /etc/claude-code/mcp/cfwf-mcp-headers" >&2; exit 1; }; \
     jq -e '.mcpServers["build-dotnet"] == {"type": "stdio", "command": "/home/developer/.dotnet/tools/credfeto-build-dotnet", "env": {"BUILD_MCP_REPO_ROOT": "/workspace/repo"}}' /etc/claude-code/managed-mcp.json >/dev/null \
         || { echo "FATAL sanity: managed-mcp.json is world-readable, so the build-dotnet server must be exactly the stdio credfeto-build-dotnet tool by its absolute path, with BUILD_MCP_REPO_ROOT=/workspace/repo as its only env value" >&2; exit 1; }; \
+    [ -x /home/developer/.dotnet/tools/credfeto-build-dotnet ] \
+        || { echo "FATAL sanity: /home/developer/.dotnet/tools/credfeto-build-dotnet, the build-dotnet MCP server, is missing or not executable" >&2; exit 1; }; \
     jq -e '.mcpServers.cfwf | has("headers") or has("env") | not' /etc/claude-code/managed-mcp.json >/dev/null \
         || { echo "FATAL sanity: managed-mcp.json is world-readable, so the cfwf server must not carry literal headers or env (its Authorization comes from the headersHelper)" >&2; exit 1; }; \
     ! grep -qi 'authorization' /etc/claude-code/managed-mcp.json \
