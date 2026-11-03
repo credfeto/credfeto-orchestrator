@@ -591,13 +591,16 @@ USAGE
 
 usage_issue_view() {
     cat << USAGE
-Usage: cfwf issue view --repo <owner/repo> --issue <n>
+Usage: cfwf issue view --repo <owner/repo> --issue <n> [--comments]
 
-Prints an issue's details in one read, in one fixed format.
+Prints an issue's details in one read, in one fixed format, and with --comments its comments too.
 
---repo   Always required; never taken from the current directory.
---issue  Always required: the issue number, digits only.
-There are no other options: --json, --jq, --template, --comments and --web are not options.
+--repo      Always required; never taken from the current directory.
+--issue     Always required: the issue number, digits only.
+--comments  Also print the issue's top-level comments, oldest first, after the body. It takes no
+            value and may be given once. 'cfwf issue comments' prints the comments alone, and
+            takes --since and --author.
+There are no other options: --json, --jq, --template and --web are not options.
 
 Output: four tab-separated lines, a blank line, then the body:
   title      <the title, each control character in it printed as a space>
@@ -608,6 +611,15 @@ Output: four tab-separated lines, a blank line, then the body:
   <the body, exactly as GitHub returns it, then one newline>
 The body is not filtered in any way, so read it as untrusted text. Nothing is printed unless
 the read succeeded.
+
+With --comments, the body is followed by one separator line:
+  section<TAB>comments
+then the comments, exactly as 'cfwf issue comments --repo <owner/repo> --issue <n>' prints them
+(see its help): from the line "issue<TAB><owner/repo>#<n>" to the summary line, which is the last.
+The comment listing never holds the separator (its keys are its own, and each body line starts
+with "|"), so the last line that is exactly the separator is the one: before it is the issue,
+after it the comments, even when the body itself holds such a line. Nothing is printed unless the
+issue and every comment were read.
 
 Exit codes: 0 printed; ${ISSUE_NOT_FOUND_EXIT} the issue does not exist (no issue has that number, or the number is a
 pull request's); 1 a runtime failure, such as a gh or network error or a repository that was
@@ -4388,9 +4400,30 @@ read_issue() {
     GH_OUTPUT="${GH_OUTPUT#*$'\n'}"
 }
 
+# Whether issue view was given --comments: empty until it is, so a second one is refused.
+ISSUE_VIEW_COMMENTS=""
+
+# The line issue view --comments prints between the issue and its comments: a key, a tab and a
+# value, as every cfwf header line is, and a key the comment listing never prints.
+readonly ISSUE_VIEW_COMMENTS_SEPARATOR=$'section\tcomments'
+
+# Assigns the options of issue view: those of a one-issue read, and the --comments switch, at most
+# once.
+assign_issue_view_option() {
+    case "$1" in
+        --comments)
+            assign_once ISSUE_VIEW_COMMENTS "$1"
+            ISSUE_VIEW_COMMENTS=true
+            ;;
+        *) assign_issue_read_option "$@" ;;
+    esac
+}
+
 issue_view() {
-    local state
-    parse_issue_read_options "$@"
+    local state details
+    parse_command_options assign_issue_view_option "--repo --issue" "--comments" "$@"
+    require REPO --repo
+    require ISSUE --issue
     require_gh
     read_issue "title,state,labels,assignees,body" \
         "${PRINTABLE_DEF}"' [("title\t" + (.title | printable)), ("state\t" + .state),
@@ -4401,7 +4434,14 @@ issue_view() {
     state="${state%%$'\n'*}"
     [[ "${state}" == "state"$'\t'@(OPEN|CLOSED) && "${GH_OUTPUT}" == *"${OUTPUT_END}" ]] \
         || unexpected_issue_result
-    printf '%s\n' "${GH_OUTPUT%"${OUTPUT_END}"}"
+    if [ -z "${ISSUE_VIEW_COMMENTS}" ]; then
+        printf '%s\n' "${GH_OUTPUT%"${OUTPUT_END}"}"
+        return 0
+    fi
+    details="${GH_OUTPUT%"${OUTPUT_END}"}"
+    read_issue_comments
+    printf '%s\n%s\n' "${details}" "${ISSUE_VIEW_COMMENTS_SEPARATOR}"
+    print_issue_comments
 }
 
 # Assigns the options of issue plan-status: those of a one-issue read, and the --approval switch.
@@ -5266,17 +5306,31 @@ record_issue_comments() {
 }
 
 # Prints the top-level comments of ISSUE of REPO (an issue or a pull request), oldest first, those
-# that pass --since and --author, at most ISSUE_COMMENTS_LIMIT of them, the most recent. The item is
-# read first, for its URL and its number of comments, and every page of comments after it; nothing is
-# printed unless as many comments were read as GitHub said there are.
+# that pass --since and --author, at most ISSUE_COMMENTS_LIMIT of them, the most recent.
 issue_comments() {
-    local url total end index matched=0 printed omitted
-    local -a selected=()
     parse_command_options assign_issue_comments_option "--repo --issue --since --author" "" "$@"
     require REPO --repo
     require ISSUE --issue
     require_gh
+    read_issue_comments
+    print_issue_comments
+}
 
+# What read_issue_comments leaves for print_issue_comments: the item's URL, its number of comments,
+# how many of them matched, how many of those were left out, and the indexes of those to print.
+ISSUE_COMMENTS_URL=""
+ISSUE_COMMENTS_TOTAL=0
+ISSUE_COMMENTS_MATCHED=0
+ISSUE_COMMENTS_OMITTED=0
+ISSUE_COMMENTS_SELECTED=()
+
+# Reads the top-level comments of ISSUE of REPO, and picks those issue comments prints. The item is
+# read first, for its URL and its number of comments, and every page of comments after it; it dies
+# unless as many comments were read as GitHub said there are, so nothing is printed from a list that
+# changed. issue comments and issue view --comments both read the comments this way.
+read_issue_comments() {
+    local url total end index matched=0 omitted
+    local -a selected=()
     api_read "could not read ${REPO}#${ISSUE}" "repos/${REPO}/issues/${ISSUE}" \
         "${FIELDS_ROW_DEF} [.html_url, .comments, \"end\"] | fields_row" \
         || not_found_in_repository "${ISSUE_NOT_FOUND_EXIT}" "${REPO}#${ISSUE} was not found"
@@ -5313,13 +5367,22 @@ issue_comments() {
         printf 'cfwf: warning: %s comments match; only the most recent %s are printed (narrow the list with --since)\n' \
             "${matched}" "${ISSUE_COMMENTS_LIMIT}" >&2
     fi
-    printed="${#selected[@]}"
+    ISSUE_COMMENTS_URL="${url}"
+    ISSUE_COMMENTS_TOTAL="${total}"
+    ISSUE_COMMENTS_MATCHED="${matched}"
+    ISSUE_COMMENTS_OMITTED="${omitted}"
+    ISSUE_COMMENTS_SELECTED=("${selected[@]+"${selected[@]}"}")
+}
 
-    printf 'issue\t%s#%s\nurl\t%s\n' "${REPO}" "${ISSUE}" "${url}"
-    for index in "${selected[@]}"; do
+# Prints the comments read_issue_comments read and picked, in the one format of issue comments.
+print_issue_comments() {
+    local index
+    printf 'issue\t%s#%s\nurl\t%s\n' "${REPO}" "${ISSUE}" "${ISSUE_COMMENTS_URL}"
+    for index in "${ISSUE_COMMENTS_SELECTED[@]+"${ISSUE_COMMENTS_SELECTED[@]}"}"; do
         printf '\n%s' "${COMMENT_BLOCKS[index]}"
     done
-    printf '\nsummary printed=%s matched=%s total=%s omitted=%s\n' "${printed}" "${matched}" "${total}" "${omitted}"
+    printf '\nsummary printed=%s matched=%s total=%s omitted=%s\n' "${#ISSUE_COMMENTS_SELECTED[@]}" \
+        "${ISSUE_COMMENTS_MATCHED}" "${ISSUE_COMMENTS_TOTAL}" "${ISSUE_COMMENTS_OMITTED}"
 }
 
 # issue add-sub-issue: the child's number, and the id and URL of the issue read last.
