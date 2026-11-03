@@ -24,11 +24,11 @@
 #
 # It also installs /etc/claude-code/managed-mcp.json, which takes exclusive
 # control of the MCP servers Claude Code loads, and the cfwf-mcp-headers
-# helper it names. The installed file is the container's cfwf server merged
-# with the MCP servers in ~/.claude.json (user scope and every project scope),
-# so a host keeps its own servers; see merge_host_mcp_servers for what is left
-# out. The merge is a snapshot: a server added to ~/.claude.json later only
-# takes effect once this script is run again.
+# helper it names. The installed file is the container's cfwf and build-dotnet
+# servers merged with the MCP servers in ~/.claude.json (user scope and every
+# project scope), so a host keeps its own servers; see merge_host_mcp_servers
+# for what is left out. The merge is a snapshot: a server added to
+# ~/.claude.json later only takes effect once this script is run again.
 #
 # The first argument, when given, is a file of allowed directory roots for
 # this host; it is installed as the root-owned allowed-dirs.local next to the
@@ -173,8 +173,10 @@ install_managed_files() {
     return 1
 }
 
-# Prints a JSON report of merging the shipped cfwf server with the host's own
-# MCP servers from the given ~/.claude.json (a missing or empty file has none):
+# Prints a JSON report of merging the shipped servers (cfwf and build-dotnet,
+# copied as they are: they are reviewed here, so none of the checks below
+# apply to them) with the host's own MCP servers from the given ~/.claude.json
+# (a missing or empty file has none):
 #
 #   merged      the managed-mcp.json to install
 #   duplicates  host servers left out because their URL is cfwf's, which

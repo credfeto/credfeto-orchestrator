@@ -157,8 +157,8 @@ per-work-item transcript directory (`projects/`) are mounted per invocation.
 
 `claude-managed-mcp.json` is copied to `/etc/claude-code/managed-mcp.json` (root:root 0444) and
 `claude-mcp/cfwf-mcp-headers` to `/etc/claude-code/mcp/cfwf-mcp-headers` (root:root 0755). The file defines
-the only MCP server Claude Code loads in the container, `cfwf`, an HTTP server at
-`https://workflow-mcp.markridgwell.com/mcp`. While the file exists it has exclusive control, so no user,
+the only MCP servers Claude Code loads in the container: `cfwf`, an HTTP server at
+`https://workflow-mcp.markridgwell.com/mcp`, and `build-dotnet` (described below). While the file exists it has exclusive control, so no user,
 project, plugin or `--mcp-config` server can be added. `mcp__cfwf__*` in `permissions.allow` lets every
 agent use all of its tools. The file is world-readable, so it holds no token. Its `headersHelper`, the
 root-owned `cfwf-mcp-headers`, runs at connect time and prints `{"Authorization":"Bearer <token>"}`. The
@@ -168,6 +168,14 @@ and the token is never written to stderr, a file or the image. `enforce-curl-hos
 agent cannot send that token to the server with `curl`; only the MCP client talks to it. No prompt routes
 work to the server yet. See
 [docs/development/claude-hooks.md](../../../docs/development/claude-hooks.md#the-cfwf-mcp-server).
+
+`build-dotnet` is the .NET build, test and coverage MCP server (#1818), `credfeto-build-dotnet` from the
+`Credfeto.Build.Dotnet.Server` package that `development-credfeto-tools` installs. It is a stdio server
+started by its absolute path, `/home/developer/.dotnet/tools/credfeto-build-dotnet`, with
+`BUILD_MCP_REPO_ROOT=/workspace/repo` as its only `env` value, and `mcp__build-dotnet__*` in
+`permissions.allow` allows all of its tools. It is registered for every session, whatever the repository's language.
+The sanity block pins that exact entry, so no other literal `env` value can be added. See
+[docs/development/claude-hooks.md](../../../docs/development/claude-hooks.md#the-build-dotnet-mcp-server).
 
 The repo-root `install-claude-hooks` script installs this same layout onto the current host, so the
 hooks can be exercised directly outside the container: the managed settings and every hook/data file are
@@ -251,7 +259,7 @@ Paths locked down by this image. NuGet.Config and the .NET tool paths are locked
 | `/home/developer/.claude/policy-limits.json` | root:root | 0444 | Baked-in Claude Code policy limits (from `claude-policy-limits.json`); read-only for all users |
 | `/etc/claude-code/` | root:root | 0755 | Claude Code managed settings directory; agent can read but not modify |
 | `/etc/claude-code/managed-settings.json` | root:root | 0444 | Baked-in Claude Code managed settings: permissions, hooks, sandbox (from `claude-managed-settings.json`); read-only for all users |
-| `/etc/claude-code/managed-mcp.json` | root:root | 0444 | Baked-in MCP server list, the `cfwf` server alone, with no token (from `claude-managed-mcp.json`); read-only for all users |
+| `/etc/claude-code/managed-mcp.json` | root:root | 0444 | Baked-in MCP server list, the `cfwf` and `build-dotnet` servers alone, with no token (from `claude-managed-mcp.json`); read-only for all users |
 | `/etc/claude-code/mcp/` | root:root | 0755 | MCP headers helper directory; agent can read/execute but not modify |
 | `/etc/claude-code/mcp/cfwf-mcp-headers` | root:root | 0755 | `headersHelper` printing the `cfwf` server's `Authorization` header from the GitHub token in the environment (from `claude-mcp/cfwf-mcp-headers`); read/execute only |
 | `/etc/claude-code/hooks/` | root:root | 0755 | Baked-in Claude Code hooks directory; agent can read/execute but not modify |
@@ -308,7 +316,7 @@ Executed as root. Fails the build immediately if anything is missing or broken.
 
 **dotnet global tool verification** — `dotnet tool list -g` is run as `developer` and each of the following package IDs must appear (case-insensitive):
 
-`credfeto.changelog.cmd`, `credfeto.dotnet.code.analysis.overrides.cmd`, `tsqllint`, `funfair.buildcheck`, `funfair.buildversion`, `cwm.roslynnavigator`, `dotnet-ef`, `ilspycmd`, `microsoft.sqlpackage`, `powershell`, `credfeto.dotnet.repo.formatter`, `dotnet-script`, `dotnet-reportgenerator-globaltool`
+`credfeto.changelog.cmd`, `credfeto.dotnet.code.analysis.overrides.cmd`, `tsqllint`, `funfair.buildcheck`, `funfair.buildversion`, `cwm.roslynnavigator`, `dotnet-ef`, `ilspycmd`, `microsoft.sqlpackage`, `powershell`, `credfeto.dotnet.repo.formatter`, `dotnet-script`, `dotnet-reportgenerator-globaltool`, `credfeto.build.dotnet.server`
 
 **cwm-roslyn-navigator functional probe** — `cwm-roslyn-navigator --help` is run as `developer` and must exit 0.
 

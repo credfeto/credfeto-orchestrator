@@ -1,7 +1,7 @@
 ---
 name: "Check development-credfeto-tools NuGet updates"
 
-# Lightweight poller for the 5 first-party Credfeto.*/FunFair.* NuGet packages
+# Lightweight poller for the 6 first-party Credfeto.*/FunFair.* NuGet packages
 # development-credfeto-tools installs. build-development-credfeto-tools.yml has no
 # schedule of its own: #1401 removed its old per-stage hourly cron because that
 # rebuilt and pushed the image unconditionally on every tick, regardless of whether
@@ -51,6 +51,7 @@ jobs:
             FunFair.BuildCheck
             FunFair.BuildVersion
             Credfeto.DotNet.Repo.Formatter
+            Credfeto.Build.Dotnet.Server
 
       - name: "Log in to GHCR"
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0

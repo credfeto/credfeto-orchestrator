@@ -205,24 +205,24 @@ installed_mcp_names() {
     grep -qxF "install -o root -g root -m 0444 ${HOME}/.claude/managed-mcp.merged.json ${CLAUDE_MANAGED_DIR}/managed-mcp.json" "${SUDO_LOG}"
 }
 
-@test "with no ~/.claude.json, managed-mcp.json holds the shipped cfwf server alone" {
+@test "with no ~/.claude.json, managed-mcp.json holds the shipped cfwf and build-dotnet servers alone, unchanged" {
     allow_sudo
     run main
     [ "${status}" -eq 0 ]
-    [ "$(installed_mcp_names)" = "cfwf" ]
+    [ "$(installed_mcp_names)" = "build-dotnet cfwf" ]
     [ "$(jq -S . "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "$(jq -S . "${SOURCE_MANAGED_MCP}")" ]
     [[ "${output}" == *"re-run this script after adding an MCP server there"* ]]
 }
 
-@test "an empty ~/.claude.json, or one with no MCP servers, installs cfwf alone" {
+@test "an empty ~/.claude.json, or one with no MCP servers, installs the shipped servers alone" {
     allow_sudo
     : > "${HOME}/.claude.json"
     main
-    [ "$(installed_mcp_names)" = "cfwf" ]
+    [ "$(installed_mcp_names)" = "build-dotnet cfwf" ]
 
     write_host_claude_json '{"projects": {"/x": {"allowedTools": []}}, "theme": "dark"}'
     main
-    [ "$(installed_mcp_names)" = "cfwf" ]
+    [ "$(installed_mcp_names)" = "build-dotnet cfwf" ]
 }
 
 @test "user-scope and every project's MCP servers are merged in beside cfwf" {
@@ -236,9 +236,10 @@ installed_mcp_names() {
     }'
     main
 
-    [ "$(installed_mcp_names)" = "cfwf rider tool-a tool-b" ]
+    [ "$(installed_mcp_names)" = "build-dotnet cfwf rider tool-a tool-b" ]
     [ "$(jq -r '.mcpServers["tool-a"].args[0]' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "--serve" ]
     [ "$(jq -c '.mcpServers.cfwf' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "$(jq -c '.mcpServers.cfwf' "${SOURCE_MANAGED_MCP}")" ]
+    [ "$(jq -c '.mcpServers["build-dotnet"]' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "$(jq -c '.mcpServers["build-dotnet"]' "${SOURCE_MANAGED_MCP}")" ]
 }
 
 @test "a host server at cfwf's URL is left out as a duplicate, and its removal is suggested" {
@@ -246,7 +247,7 @@ installed_mcp_names() {
     write_host_claude_json "{\"projects\": {\"${HOME}\": {\"mcpServers\": {\"secure-api\": {\"type\": \"http\", \"url\": \"${CFWF_URL}/\", \"headers\": {\"Authorization\": \"Bearer ghp_hostsecret\"}}}}}}"
     run main
     [ "${status}" -eq 0 ]
-    [ "$(installed_mcp_names)" = "cfwf" ]
+    [ "$(installed_mcp_names)" = "build-dotnet cfwf" ]
     [[ "${output}" == *"Left out secure-api from ${HOME}/.claude.json: same URL as cfwf"* ]]
     [[ "${output}" == *"Remove them from ${HOME}/.claude.json"* ]]
     [ "$(grep -c 'ghp_hostsecret' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" -eq 0 ]
@@ -264,7 +265,7 @@ installed_mcp_names() {
     }'
     run main
     [ "${status}" -eq 0 ]
-    [ "$(installed_mcp_names)" = "cfwf" ]
+    [ "$(installed_mcp_names)" = "build-dotnet cfwf" ]
     [[ "${output}" == *"WARNING: did not copy leaky-bearer, leaky-env, leaky-header from ${HOME}/.claude.json"* ]]
     [ "$(grep -c 'sk-literal' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" -eq 0 ]
     [ "$(grep -c 'sk-literal' "${HOME}/.claude/managed-mcp.merged.json")" -eq 0 ]
@@ -277,7 +278,7 @@ installed_mcp_names() {
     write_host_claude_json '{"mcpServers": {"by-ref": {"type": "http", "url": "https://r.example.com/mcp", "headers": {"Authorization": "Bearer ${R_TOKEN}", "X-Key": "${R_KEY}"}, "env": {"A": "${A}"}}}}'
     run main
     [ "${status}" -eq 0 ]
-    [ "$(installed_mcp_names)" = "by-ref cfwf" ]
+    [ "$(installed_mcp_names)" = "build-dotnet by-ref cfwf" ]
     # shellcheck disable=SC2016
     [ "$(jq -r '.mcpServers["by-ref"].headers.Authorization' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = 'Bearer ${R_TOKEN}' ]
     [[ "${output}" != *'did not copy'* ]]
@@ -294,7 +295,7 @@ installed_mcp_names() {
     }'
     run main
     [ "${status}" -eq 0 ]
-    [ "$(installed_mcp_names)" = "cfwf" ]
+    [ "$(installed_mcp_names)" = "build-dotnet cfwf" ]
     [[ "${output}" == *"WARNING: did not copy url-query, url-user-only, url-userinfo from ${HOME}/.claude.json"* ]]
     [ "$(grep -c -- '-literal-' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" -eq 0 ]
     [ "$(grep -c -- '-literal-' "${HOME}/.claude/managed-mcp.merged.json")" -eq 0 ]
@@ -319,7 +320,7 @@ installed_mcp_names() {
     }"
     run main
     [ "${status}" -eq 0 ]
-    [ "$(installed_mcp_names)" = "cfwf" ]
+    [ "$(installed_mcp_names)" = "build-dotnet cfwf" ]
     [[ "${output}" == *"WARNING: did not copy args-aws, args-env-style, args-flag-equals, args-flag-value, args-prefix, command-prefix from ${HOME}/.claude.json"* ]]
     [ "$(grep -c -e 'literalarg' -e 'LITERALARG' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" -eq 0 ]
     [ "$(grep -c -e 'literalarg' -e 'LITERALARG' "${HOME}/.claude/managed-mcp.merged.json")" -eq 0 ]
@@ -337,7 +338,7 @@ installed_mcp_names() {
     }}'
     run main
     [ "${status}" -eq 0 ]
-    [ "$(installed_mcp_names)" = "cfwf clean-args clean-url ref-args" ]
+    [ "$(installed_mcp_names)" = "build-dotnet cfwf clean-args clean-url ref-args" ]
     # shellcheck disable=SC2016
     [ "$(jq -r '.mcpServers["ref-args"].args[1]' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = '${S_TOKEN}' ]
     [[ "${output}" != *'did not copy'* ]]
@@ -351,7 +352,7 @@ installed_mcp_names() {
     [ "$(stat -c '%s' "${HOME}/.claude.json")" -gt 131072 ]
     run main
     [ "${status}" -eq 0 ]
-    [ "$(installed_mcp_names)" = "cfwf rider" ]
+    [ "$(installed_mcp_names)" = "build-dotnet cfwf rider" ]
 }
 
 @test "the same server repeated in several scopes is installed once" {
@@ -362,7 +363,7 @@ installed_mcp_names() {
     }'
     run main
     [ "${status}" -eq 0 ]
-    [ "$(installed_mcp_names)" = "cfwf rider" ]
+    [ "$(installed_mcp_names)" = "build-dotnet cfwf rider" ]
 }
 
 @test "one name for two different host servers is fatal before anything is installed" {
@@ -385,6 +386,26 @@ installed_mcp_names() {
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"used for two different servers"*": cfwf."* ]]
     [ ! -e "${CLAUDE_MANAGED_DIR}" ]
+}
+
+@test "a host server named build-dotnet with another definition collides with the shipped one and is fatal (#1818)" {
+    allow_sudo
+    write_host_claude_json '{"mcpServers": {"build-dotnet": {"type": "stdio", "command": "/usr/bin/other-build"}}}'
+    run main
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"used for two different servers"*": build-dotnet."* ]]
+    [ ! -e "${CLAUDE_MANAGED_DIR}" ]
+}
+
+# The shipped build-dotnet server's fixed env value is trusted because it is reviewed in this
+# repository, not because of its key or value: the same literal on a host server is still refused.
+@test "a host server with build-dotnet's literal env value is still refused, so the shipped exception does not loosen the merge (#1818)" {
+    allow_sudo
+    write_host_claude_json '{"mcpServers": {"host-build": {"type": "stdio", "command": "/usr/bin/host-build", "env": {"BUILD_MCP_REPO_ROOT": "/workspace/repo"}}}}'
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(installed_mcp_names)" = "build-dotnet cfwf" ]
+    [[ "${output}" == *"WARNING: did not copy host-build from ${HOME}/.claude.json"* ]]
 }
 
 @test "an invalid ~/.claude.json is fatal before anything is installed" {
@@ -427,7 +448,7 @@ installed_mcp_names() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"sudo install -o root -g root -m 0444 ${HOME}/.claude/managed-mcp.merged.json ${CLAUDE_MANAGED_DIR}/managed-mcp.json"* ]]
     [[ "${output}" == *"sudo install -o root -g root -m 0755 ${SOURCE_MCP_HEADERS} ${CLAUDE_MANAGED_DIR}/mcp/cfwf-mcp-headers"* ]]
-    [ "$(jq -r '.mcpServers | keys | join(" ")' "${HOME}/.claude/managed-mcp.merged.json")" = "cfwf rider" ]
+    [ "$(jq -r '.mcpServers | keys | join(" ")' "${HOME}/.claude/managed-mcp.merged.json")" = "build-dotnet cfwf rider" ]
 }
 
 @test "a merged MCP file that cannot be written is fatal before anything is installed" {
@@ -456,10 +477,26 @@ installed_mcp_names() {
 
 # --- the shipped managed MCP servers ------------------------------------------------
 
-@test "the shipped managed-mcp.json holds only cfwf, over https, with its header from the root-owned helper" {
-    run jq -c '.' "${SOURCE_MANAGED_MCP}"
+@test "the shipped managed-mcp.json holds only cfwf and build-dotnet, cfwf over https with its header from the root-owned helper" {
+    run jq -c '.mcpServers | keys' "${SOURCE_MANAGED_MCP}"
     [ "${status}" -eq 0 ]
-    [ "${output}" = "{\"mcpServers\":{\"cfwf\":{\"type\":\"http\",\"url\":\"${CFWF_URL}\",\"headersHelper\":\"/etc/claude-code/mcp/cfwf-mcp-headers\"}}}" ]
+    [ "${output}" = '["build-dotnet","cfwf"]' ]
+    run jq -c '.mcpServers.cfwf' "${SOURCE_MANAGED_MCP}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "{\"type\":\"http\",\"url\":\"${CFWF_URL}\",\"headersHelper\":\"/etc/claude-code/mcp/cfwf-mcp-headers\"}" ]
+}
+
+@test "the shipped build-dotnet server is the stdio credfeto-build-dotnet tool by absolute path, with only the repo mount as env (#1818)" {
+    run jq -c '.mcpServers["build-dotnet"]' "${SOURCE_MANAGED_MCP}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = '{"type":"stdio","command":"/home/developer/.dotnet/tools/credfeto-build-dotnet","env":{"BUILD_MCP_REPO_ROOT":"/workspace/repo"}}' ]
+}
+
+@test "only build-dotnet carries env in the shipped managed-mcp.json, and no server carries headers (#1818)" {
+    run jq -c '[.mcpServers | to_entries[] | select(.value | has("env")) | .key]' "${SOURCE_MANAGED_MCP}"
+    [ "${output}" = '["build-dotnet"]' ]
+    run jq -c '[.mcpServers | to_entries[] | select(.value | has("headers")) | .key]' "${SOURCE_MANAGED_MCP}"
+    [ "${output}" = '[]' ]
 }
 
 @test "the shipped managed-mcp.json carries no literal Authorization header and no \${VAR} expansion" {
@@ -470,6 +507,33 @@ installed_mcp_names() {
 
 @test "the managed settings allow every cfwf MCP tool" {
     jq -r '.permissions.allow[]' "${SOURCE_MANAGED_SETTINGS}" | grep -qxF 'mcp__cfwf__*'
+}
+
+@test "the managed settings allow every build-dotnet MCP tool (#1818)" {
+    jq -r '.permissions.allow[]' "${SOURCE_MANAGED_SETTINGS}" | grep -qxF 'mcp__build-dotnet__*'
+}
+
+@test "the Dockerfile sanity block pins the build-dotnet server, its env, its executable and its allow rule (#1818)" {
+    local dockerfile="${SOURCE_DIR}/Dockerfile"
+    grep -qF "jq -e '(.mcpServers | keys) == [\"build-dotnet\", \"cfwf\"] and .mcpServers.cfwf.type == \"http\"" "${dockerfile}"
+    grep -qF "jq -e '.mcpServers[\"build-dotnet\"] == {\"type\": \"stdio\", \"command\": \"/home/developer/.dotnet/tools/credfeto-build-dotnet\", \"env\": {\"BUILD_MCP_REPO_ROOT\": \"/workspace/repo\"}}' /etc/claude-code/managed-mcp.json" "${dockerfile}"
+    grep -qF "jq -e '.mcpServers.cfwf | has(\"headers\") or has(\"env\") | not' /etc/claude-code/managed-mcp.json" "${dockerfile}"
+    grep -qF '[ -x /home/developer/.dotnet/tools/credfeto-build-dotnet ]' "${dockerfile}"
+    grep -qF "jq -e '.permissions.allow | index(\"mcp__build-dotnet__*\")' /etc/claude-code/managed-settings.json" "${dockerfile}"
+    grep -qE 'for tool in .* credfeto\.build\.dotnet\.server; do' "${dockerfile}"
+}
+
+@test "development-credfeto-tools installs Credfeto.Build.Dotnet.Server behind the cache bust and its sanity check requires it (#1818)" {
+    local dockerfile="${REPO_ROOT}/containers/base/development-credfeto-tools/Dockerfile"
+    # shellcheck disable=SC2016  # the literal ${...} of the Dockerfile's ARG substitution
+    grep -qxF 'RUN su developer -c ": ${CREDFETO_FUNFAIR_TOOLS_CACHE_BUST}; dotnet tool install -g Credfeto.Build.Dotnet.Server"' "${dockerfile}"
+    # Both the installed-versions report and the sanity check list the package.
+    [ "$(grep -cE 'for tool in .* credfeto\.build\.dotnet\.server; do' "${dockerfile}")" -eq 2 ]
+    grep -qF '[ -x /home/developer/.dotnet/tools/credfeto-build-dotnet ]' "${dockerfile}"
+    grep -qF 'su developer -c "command -v credfeto-build-dotnet >/dev/null 2>&1"' "${dockerfile}"
+    # The cache bust hashes the package's latest version, so a new release rebuilds the layer.
+    grep -qxF '            Credfeto.Build.Dotnet.Server' "${REPO_ROOT}/.github/workflows/build-development-credfeto-tools.yml"
+    grep -qxF '            Credfeto.Build.Dotnet.Server' "${REPO_ROOT}/.github/workflows/check-credfeto-tools-updates.yml"
 }
 
 @test "the Dockerfile sanity block fails the build unless raw gh is denied by both layers and cfwf stays allowed (#1805)" {
