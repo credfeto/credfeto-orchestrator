@@ -155,10 +155,11 @@ paths at runtime (see `containers/agent/Dockerfile` for the full mount contract)
 the persistent state subdirectories (`sessions/`, `session-env/`, `plans/`, `cache/`, `backups/`) and the
 per-work-item transcript directory (`projects/`) are mounted per invocation.
 
-`claude-managed-mcp.json` is copied to `/etc/claude-code/managed-mcp.json` (root:root 0444) and
-`claude-mcp/cfwf-mcp-headers` to `/etc/claude-code/mcp/cfwf-mcp-headers` (root:root 0755). The file defines
+`claude-managed-mcp.json` is copied to `/etc/claude-code/managed-mcp.json` (root:root 0444), and
+`claude-mcp/cfwf-mcp-headers` and `claude-mcp/kb-mcp-headers` to `/etc/claude-code/mcp/` (root:root 0755). The file defines
 the only MCP servers Claude Code loads in the container: `cfwf`, an HTTP server at
-`https://workflow-mcp.markridgwell.com/mcp`, and `build-dotnet` (described below). While the file exists it has exclusive control, so no user,
+`https://workflow-mcp.markridgwell.com/mcp`, `kb`, an HTTP server at `https://memory.markridgwell.com/dev/mcp`
+(described below), and `build-dotnet` (also described below). While the file exists it has exclusive control, so no user,
 project, plugin or `--mcp-config` server can be added. `mcp__cfwf__*` in `permissions.allow` lets every
 agent use all of its tools. The file is world-readable, so it holds no token. Its `headersHelper`, the
 root-owned `cfwf-mcp-headers`, runs at connect time and prints `{"Authorization":"Bearer <token>"}`. The
@@ -168,6 +169,16 @@ and the token is never written to stderr, a file or the image. `enforce-curl-hos
 agent cannot send that token to the server with `curl`; only the MCP client talks to it. No prompt routes
 work to the server yet. See
 [docs/development/claude-hooks.md](../../../docs/development/claude-hooks.md#the-cfwf-mcp-server).
+
+`kb` is the knowledge-base MCP server, and `mcp__kb__*` in `permissions.allow` allows all of its tools, with
+no deny entries. Its `headersHelper`, the root-owned `kb-mcp-headers`, prints
+`{"Authorization":"Bearer <token>"}` from `KB_MCP_TOKEN` or, when that is unset, from the first line of
+`${XDG_CONFIG_HOME:-$HOME/.config}/kb-mcp/token`, read only when that file is a regular file owned by the
+user with mode 0600. In the container the token arrives as `KB_MCP_TOKEN`: `oneshot` turns an optional
+`KB_MCP_TOKEN=` line in `orchestrator/.env` into a per-container Podman secret, `kb-mcp-token-<container>`,
+and removes it on exit. With no token the helper exits non-zero and prints nothing, so the session starts
+with `kb` shown as failed to connect. See
+[docs/development/claude-hooks.md](../../../docs/development/claude-hooks.md#the-kb-mcp-server).
 
 `build-dotnet` is the .NET build, test and coverage MCP server (#1818), `credfeto-build-dotnet` from the
 `Credfeto.Build.Dotnet.Server` package that `development-credfeto-tools` installs. It is a stdio server
@@ -184,8 +195,8 @@ changes; `CLAUDE_MANAGED_DIR` overrides the directory for tests only), the prefe
 `claude-user-settings.json` are copied to `~/.claude/settings.json` (keeping the previous file as
 `settings.json.bak`), and any `~/.claude/hooks` symlinks left pointing into this checkout are removed. An
 optional first argument names a file of host directory roots, installed as the root-owned
-`/etc/claude-code/hooks/allowed-dirs.local`. It installs `cfwf-mcp-headers` and a `managed-mcp.json` that
-merges `cfwf` with the host's own MCP servers from `~/.claude.json` (user scope and every project scope).
+`/etc/claude-code/hooks/allowed-dirs.local`. It installs `cfwf-mcp-headers`, `kb-mcp-headers` and a `managed-mcp.json` that
+merges the shipped servers with the host's own MCP servers from `~/.claude.json` (user scope and every project scope).
 A server at `cfwf`'s URL is left out as a duplicate, with a suggestion to remove it. A server with a
 literal `headers` or `env` value, a `url` carrying userinfo or a query string, or a credential-like `command` or
 `args` word is refused with a warning naming it, because the file is world-readable.
@@ -259,9 +270,10 @@ Paths locked down by this image. NuGet.Config and the .NET tool paths are locked
 | `/home/developer/.claude/policy-limits.json` | root:root | 0444 | Baked-in Claude Code policy limits (from `claude-policy-limits.json`); read-only for all users |
 | `/etc/claude-code/` | root:root | 0755 | Claude Code managed settings directory; agent can read but not modify |
 | `/etc/claude-code/managed-settings.json` | root:root | 0444 | Baked-in Claude Code managed settings: permissions, hooks, sandbox (from `claude-managed-settings.json`); read-only for all users |
-| `/etc/claude-code/managed-mcp.json` | root:root | 0444 | Baked-in MCP server list, the `cfwf` and `build-dotnet` servers alone, with no token (from `claude-managed-mcp.json`); read-only for all users |
+| `/etc/claude-code/managed-mcp.json` | root:root | 0444 | Baked-in MCP server list, the `cfwf`, `kb` and `build-dotnet` servers alone, with no token (from `claude-managed-mcp.json`); read-only for all users |
 | `/etc/claude-code/mcp/` | root:root | 0755 | MCP headers helper directory; agent can read/execute but not modify |
 | `/etc/claude-code/mcp/cfwf-mcp-headers` | root:root | 0755 | `headersHelper` printing the `cfwf` server's `Authorization` header from the GitHub token in the environment (from `claude-mcp/cfwf-mcp-headers`); read/execute only |
+| `/etc/claude-code/mcp/kb-mcp-headers` | root:root | 0755 | `headersHelper` printing the `kb` server's `Authorization` header from `KB_MCP_TOKEN` or the user's 0600 token file (from `claude-mcp/kb-mcp-headers`); read/execute only |
 | `/etc/claude-code/hooks/` | root:root | 0755 | Baked-in Claude Code hooks directory; agent can read/execute but not modify |
 | `/etc/claude-code/hooks/reject-obfuscated-commands` | root:root | 0755 | Baked-in hook script (from `claude-hooks/reject-obfuscated-commands`); read/execute only |
 | `/etc/claude-code/hooks/enforce-allowed-dirs` | root:root | 0755 | Baked-in hook script (from `claude-hooks/enforce-allowed-dirs`); read/execute only |
@@ -338,10 +350,12 @@ Executed as root. Fails the build immediately if anything is missing or broken.
 `/home/developer/.claude/policy-limits.json`, `/etc/claude-code/managed-settings.json` and
 `/etc/claude-code/managed-mcp.json` must be root:root 0444, and `/etc/claude-code`, `/etc/claude-code/hooks`
 and `/etc/claude-code/mcp` root:root 0755; `managed-settings.json` must set
-the `allowManaged*Only` locks, disable bypass-permissions mode and allow `mcp__cfwf__*`;
-`managed-mcp.json` must hold exactly the `cfwf` server, `type` `http`, at
+the `allowManaged*Only` locks, disable bypass-permissions mode and allow `mcp__cfwf__*`, `mcp__kb__*` and `mcp__build-dotnet__*`;
+`managed-mcp.json` must hold exactly the `build-dotnet`, `cfwf` and `kb` servers: `cfwf`, `type` `http`, at
 `https://workflow-mcp.markridgwell.com/mcp`, with `headersHelper` `/etc/claude-code/mcp/cfwf-mcp-headers`,
-no `headers` or `env` and no `Authorization` text, and that helper must be root:root 0755; `~/.claude/settings.json` must hold no
+and `kb`, `type` `http`, at `https://memory.markridgwell.com/dev/mcp`, with `headersHelper`
+`/etc/claude-code/mcp/kb-mcp-headers`, neither with `headers` or `env`, no `Authorization` text in the file,
+and both helpers must be root:root 0755; `~/.claude/settings.json` must hold no
 permissions, hooks, sandbox or MCP configuration, and every `PreToolUse` hook command must be
 under `/etc/claude-code/hooks/`; `/etc/claude-code/hooks/reject-obfuscated-commands`,
 `.../enforce-allowed-dirs`, `.../block-config-skills`, `.../enforce-git-identity`, `.../enforce-git-dash-c`,
