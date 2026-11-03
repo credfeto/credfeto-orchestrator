@@ -2065,7 +2065,7 @@ assert_nothing_created() {
 @test "issue needs a subcommand, and an unknown one is refused" {
     run "${SCRIPT}" issue
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"issue needs a subcommand (create, edit, view, plan-status, list, search, label-history, reopen, close, post-plan, block, unblock, comments, add-sub-issue, comment)"* ]]
+    [[ "${output}" == *"issue needs a subcommand (create, edit, view, plan-status, list, search, label-history, reopen, close, post-plan, block, unblock, approve, comments, add-sub-issue, comment)"* ]]
 
     run "${SCRIPT}" issue frobnicate
     [ "${status}" -eq 2 ]
@@ -16957,6 +16957,362 @@ $(unblock_item_url "${kind}") unblocked" ]
     [[ "${output}" == *$'\n'"  issue block              Post a question on an issue, then add Blocked, leaving the board as it is (exit 8 when refused)"$'\n'"  issue unblock            Humans only: post a comment, then remove Blocked, once the board is Approved or later (exit 8 refused, 10 agent)"$'\n'* ]]
     [[ "${output}" == *$'\n'"  pr block                 Post a question on a PR, then add Blocked, leaving the board as it is (exit 8 when refused)"$'\n'"  pr unblock               Humans only: post a comment, then remove Blocked, once the board is Approved or later (exit 8 refused, 10 agent)"$'\n'* ]]
     [ ! -f "${GH_LOG}" ]
+}
+
+# --- issue approve (#1607) -------------------------------------------------------
+
+APPROVE_ISSUE=1607
+APPROVE_ISSUE_URL="https://github.com/${REPO}/issues/${APPROVE_ISSUE}"
+APPROVE_COMMENT_URL="${APPROVE_ISSUE_URL}#issuecomment-91"
+APPROVE_BOARD_EDIT="project item-edit --project-id PVT_proj --id PVTI_target --field-id PVTSSF_status --single-select-option-id st_3"
+APPROVE_USAGE="Usage: cfwf issue approve --repo <owner/repo> --issue <n> --body-file <file|-> [--keep-blocked]"
+
+# Runs issue approve on its issue with approve.md and any further arguments, outside an agent session.
+run_approve() {
+    unset CLAUDECODE
+    run --separate-stderr "${SCRIPT}" issue approve --repo "${REPO}" --issue "${APPROVE_ISSUE}" --body-file "${TEST_TMP}/approve.md" "$@"
+}
+
+# The issue to approve in the state $1 (OPEN by default) with the labels given as the further
+# arguments (Blocked when none are given) and a plan comment, a body that passes every check, and
+# the comment URL the post answers with.
+prepare_approve() {
+    local state="${1:-OPEN}"
+    shift || true
+    [ "$#" -gt 0 ] || set -- Blocked
+    write_issue "${APPROVE_ISSUE}" "fix: something" "${state}" "The body." "$@"
+    write_comments "${APPROVE_ISSUE}" \
+        "$(issue_comment 1 steward-warden COLLABORATOR $'## Implementation Plan\n\n1. Do the thing.\n')" \
+        "$(issue_comment 2 credfeto OWNER 'One question answered in chat.')"
+    printf '%s\n' "${APPROVE_COMMENT_URL}" > "${GH_FIXTURES}/comment.out"
+    printf 'Go ahead with the plan as written.\n' > "${TEST_TMP}/approve.md"
+}
+
+# Nothing was written: no comment, no label change and no board change.
+assert_nothing_approved() {
+    [ "$(gh_call_count "issue comment")" -eq 0 ]
+    [ "$(gh_call_count "issue edit")" -eq 0 ]
+    [ "$(gh_call_count "project item-add")" -eq 0 ]
+    [ "$(gh_call_count "project item-edit")" -eq 0 ]
+}
+
+@test "issue approve refuses (exit 10) in an AI agent session, before any option is read or gh is called" {
+    local args
+    prepare_approve
+    for args in "--repo ${REPO} --issue ${APPROVE_ISSUE} --body-file ${TEST_TMP}/approve.md" \
+        "--repo ${REPO} --issue ${APPROVE_ISSUE} --body-file ${TEST_TMP}/approve.md --keep-blocked" \
+        "" "--repo nope" "--frobnicate" "-h" "--help"; do
+        rm -f "${GH_LOG}"
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        CLAUDECODE=1 run --separate-stderr "${SCRIPT}" issue approve ${args}
+        [ "${status}" -eq 10 ] || {
+            echo "[${args}]: ${status}" >&2
+            return 1
+        }
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: issue approve refused: not allowed for agents; a human must run it" ]
+        [ ! -f "${GH_LOG}" ]
+    done
+}
+
+@test "issue approve posts the comment, then sets the board to Approved, then removes Blocked, printing the comment URL and 'Approved <url>'" {
+    prepare_approve
+    : > "${GH_LOG}"
+    run_approve
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "${APPROVE_COMMENT_URL}
+Approved ${APPROVE_ISSUE_URL}" ]
+    cmp "${TEST_TMP}/approve.md" "${GH_FIXTURES}/comment-body.txt"
+    [ "$(gh_call_count "issue view ${APPROVE_ISSUE} --repo ${REPO}")" -eq 1 ]
+    issue_create_called_with "issue comment ${APPROVE_ISSUE} --repo ${REPO} --body-file BODY"
+    grep -qxF "project item-add 74 --owner credfeto --url ${APPROVE_ISSUE_URL} --format json --jq .id" "${GH_LOG}"
+    grep -qxF "${APPROVE_BOARD_EDIT}" "${GH_LOG}"
+    tail -n 1 "${GH_LOG}" | grep -qxF "issue edit ${APPROVE_ISSUE} --repo ${REPO} --remove-label Blocked"
+    [ "$(gh_line_of "issue view")" -lt "$(gh_line_of "issue comment ${APPROVE_ISSUE}")" ]
+    [ "$(gh_line_of "project field-list")" -lt "$(gh_line_of "issue comment ${APPROVE_ISSUE}")" ]
+    [ "$(gh_line_of "issue comment ${APPROVE_ISSUE}")" -lt "$(gh_line_of "project item-add")" ]
+    [ "$(gh_line_of "project item-add")" -lt "$(gh_line_of "project item-edit")" ]
+    [ "$(gh_line_of "project item-edit")" -lt "$(gh_line_of "issue edit ${APPROVE_ISSUE}")" ]
+    [ "$(gh_call_count "issue comment")" -eq 1 ]
+    [ "$(gh_call_count "issue edit")" -eq 1 ]
+    [ "$(gh_call_count "--add-label")" -eq 0 ]
+    [ "$(gh_call_count "assignee")" -eq 0 ]
+    # No read-back of the board, which lags behind writes.
+    [ "$(gh_call_count "api graphql")" -eq 0 ]
+    [ "$(gh_call_count "project item-list")" -eq 0 ]
+}
+
+@test "issue approve reads the body from stdin" {
+    prepare_approve
+    unset CLAUDECODE
+    run --separate-stderr "${SCRIPT}" issue approve --repo "${REPO}" --issue "${APPROVE_ISSUE}" --body-file - < "${TEST_TMP}/approve.md"
+    [ "${status}" -eq 0 ]
+    cmp "${TEST_TMP}/approve.md" "${GH_FIXTURES}/comment-body.txt"
+}
+
+@test "issue approve runs with CLAUDECODE set to anything other than 1" {
+    local value
+    prepare_approve
+    for value in 0 "" true; do
+        : > "${GH_LOG}"
+        CLAUDECODE="${value}" run --separate-stderr "${SCRIPT}" issue approve --repo "${REPO}" --issue "${APPROVE_ISSUE}" --body-file "${TEST_TMP}/approve.md"
+        [ "${status}" -eq 0 ] || {
+            echo "[${value}]: ${status} ${stderr}" >&2
+            return 1
+        }
+        [ "$(gh_call_count "--remove-label Blocked")" -eq 1 ]
+    done
+}
+
+@test "issue approve --keep-blocked comments and sets Approved but leaves Blocked, printing '(Blocked kept)'" {
+    prepare_approve
+    : > "${GH_LOG}"
+    run_approve --keep-blocked
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "${APPROVE_COMMENT_URL}
+Approved ${APPROVE_ISSUE_URL} (Blocked kept)" ]
+    [ "$(gh_call_count "issue comment ${APPROVE_ISSUE}")" -eq 1 ]
+    grep -qxF "${APPROVE_BOARD_EDIT}" "${GH_LOG}"
+    [ "$(gh_call_count "issue edit")" -eq 0 ]
+    [ "$(gh_call_count "--remove-label")" -eq 0 ]
+}
+
+@test "issue approve never removes On Hold, with or without --keep-blocked" {
+    local label
+    for label in "On Hold" "On-Hold"; do
+        prepare_approve OPEN Blocked "${label}"
+        : > "${GH_LOG}"
+        run_approve
+        [ "${status}" -eq 0 ]
+        [ "$(gh_call_count "--remove-label")" -eq 1 ]
+        [ "$(gh_call_count "--remove-label Blocked")" -eq 1 ]
+        [ "$(gh_call_count "On Hold")" -eq 0 ]
+        [ "$(gh_call_count "On-Hold")" -eq 0 ]
+        : > "${GH_LOG}"
+        run_approve --keep-blocked
+        [ "${status}" -eq 0 ]
+        [ "$(gh_call_count "--remove-label")" -eq 0 ]
+    done
+}
+
+@test "issue approve in a repository with no Workflow board comments and removes Blocked, and says the board was not set" {
+    prepare_approve
+    jq -n '{projectsV2: {Nodes: [{id: "PVT_other", title: "Roadmap", number: 9, resourcePath: "/users/credfeto/projects/9", closed: false}]}}' \
+        > "${GH_FIXTURES}/repo-view.json"
+    : > "${GH_LOG}"
+    run_approve
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${APPROVE_COMMENT_URL}
+Approved ${APPROVE_ISSUE_URL}" ]
+    [ "${stderr}" = "cfwf: warning: no project titled Workflow is linked to ${REPO}, so the board was not set" ]
+    [ "$(gh_call_count "issue comment ${APPROVE_ISSUE}")" -eq 1 ]
+    [ "$(gh_call_count "project ")" -eq 0 ]
+    [ "$(gh_line_of "issue comment ${APPROVE_ISSUE}")" -lt "$(gh_line_of "issue edit ${APPROVE_ISSUE} --repo ${REPO} --remove-label Blocked")" ]
+}
+
+@test "issue approve posts a body with a plan-approval keyword, because the comment is the approval" {
+    local keyword
+    prepare_approve
+    for keyword in $(sign_off_keywords); do
+        printf 'Plan %s.\n' "${keyword}" > "${TEST_TMP}/approve.md"
+        : > "${GH_LOG}"
+        run_approve
+        [ "${status}" -eq 0 ]
+        cmp "${TEST_TMP}/approve.md" "${GH_FIXTURES}/comment-body.txt"
+    done
+}
+
+@test "issue approve refuses (exit 8) a body that fails the leak check, reading and writing nothing" {
+    prepare_approve
+    printf 'Go ahead.\n\ntoken ghp_%s\n' "$(printf 'a%.0s' {1..36})" > "${TEST_TMP}/approve.md"
+    : > "${GH_LOG}"
+    run_approve
+    [ "${status}" -eq 8 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: body refused: token (line 3)" ]
+    [ "$(gh_call_count "issue view")" -eq 0 ]
+    [ "$(gh_call_count "project ")" -eq 0 ]
+    assert_nothing_approved
+}
+
+@test "issue approve refuses an empty or blank body (exit 1), writing nothing" {
+    local body
+    prepare_approve
+    for body in '' '   \n\t\n'; do
+        # shellcheck disable=SC2059  # the body is the format on purpose, for its \n
+        printf "${body}" > "${TEST_TMP}/approve.md"
+        : > "${GH_LOG}"
+        run_approve
+        [ "${status}" -eq 1 ]
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: the body is empty" ]
+        assert_nothing_approved
+    done
+}
+
+@test "issue approve refuses (exit 8) a pull request's number, writing nothing" {
+    prepare_approve
+    jq -n --arg url "https://github.com/${REPO}/pull/${APPROVE_ISSUE}" '{url: $url, state: "OPEN", labels: [], comments: []}' \
+        > "$(issue_fixture "${APPROVE_ISSUE}").json"
+    : > "${GH_LOG}"
+    run_approve
+    [ "${status}" -eq 8 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: approve refused: ${REPO}#${APPROVE_ISSUE} is a pull request, not an issue" ]
+    [ "$(gh_call_count "project ")" -eq 0 ]
+    assert_nothing_approved
+}
+
+@test "issue approve refuses (exit 8) a closed issue, writing nothing" {
+    prepare_approve CLOSED
+    : > "${GH_LOG}"
+    run_approve
+    [ "${status}" -eq 8 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: approve refused: the issue is closed" ]
+    [ "$(gh_call_count "project ")" -eq 0 ]
+    assert_nothing_approved
+}
+
+@test "issue approve refuses (exit 8) an issue with no comment that has a line that is exactly the plan heading, writing nothing" {
+    local body
+    for body in "" $'## Implementation Plan:\n\n1. x' $'##Implementation Plan\n' $'## implementation plan\n' \
+        $' ## Implementation Plan\n' $'> ## Implementation Plan\n' $'Here is the ## Implementation Plan\n'; do
+        prepare_approve
+        if [ -z "${body}" ]; then
+            write_comments "${APPROVE_ISSUE}"
+        else
+            write_comments "${APPROVE_ISSUE}" "$(issue_comment 1 steward-warden COLLABORATOR "${body}")"
+        fi
+        : > "${GH_LOG}"
+        run_approve
+        [ "${status}" -eq 8 ] || {
+            echo "[${body}]: ${status}" >&2
+            return 1
+        }
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: approve refused: the issue has no comment with a line that is exactly ## Implementation Plan; there is nothing to approve" ]
+        [ "$(gh_call_count "project ")" -eq 0 ]
+        assert_nothing_approved
+    done
+}
+
+@test "issue approve finds a plan heading followed by a CR, as GitHub keeps one from a browser" {
+    prepare_approve
+    write_comments "${APPROVE_ISSUE}" "$(issue_comment 1 steward-warden COLLABORATOR $'Intro\r\n## Implementation Plan\r\n\r\n1. x\r\n')"
+    run_approve
+    [ "${status}" -eq 0 ]
+}
+
+@test "issue approve exits 9 for a number that is no issue, writing nothing" {
+    prepare_approve
+    rm "$(issue_fixture "${APPROVE_ISSUE}").json"
+    : > "${GH_LOG}"
+    run_approve
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: ${REPO}#${APPROVE_ISSUE} was not found" ]
+    assert_nothing_approved
+}
+
+@test "issue approve writes nothing else when the comment cannot be posted" {
+    prepare_approve
+    touch "${GH_FIXTURES}/comment.fail"
+    : > "${GH_LOG}"
+    run_approve
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == *"cfwf: could not post the comment on ${REPO}#${APPROVE_ISSUE}" ]]
+    [[ "${stderr}" != *"steps done"* ]]
+    [ "$(gh_call_count "project item-add")" -eq 0 ]
+    [ "$(gh_call_count "project item-edit")" -eq 0 ]
+    [ "$(gh_call_count "issue edit")" -eq 0 ]
+}
+
+@test "issue approve fails (exit 1) naming the comment when the board cannot be set, and leaves Blocked" {
+    prepare_approve
+    touch "${GH_FIXTURES}/item-edit.fail"
+    : > "${GH_LOG}"
+    run_approve
+    [ "${status}" -eq 1 ]
+    [ "${output}" = "${APPROVE_COMMENT_URL}" ]
+    [[ "${stderr}" == *"cfwf: could not set the Status of ${APPROVE_ISSUE_URL}"$'\n'* ]]
+    [[ "${stderr}" == *$'\n'"cfwf: approve steps done before the failure: comment ${APPROVE_COMMENT_URL}" ]]
+    [ "$(gh_call_count "issue edit")" -eq 0 ]
+}
+
+@test "issue approve fails (exit 1) naming the comment and the board when removing Blocked fails" {
+    prepare_approve
+    echo "HTTP 502: Bad Gateway" > "${GH_FIXTURES}/issue-edit.fail"
+    run_approve
+    [ "${status}" -eq 1 ]
+    [ "${output}" = "${APPROVE_COMMENT_URL}" ]
+    [[ "${stderr}" == "cfwf: could not remove the label Blocked from ${REPO}#${APPROVE_ISSUE}: HTTP 502: Bad Gateway"$'\n'* ]]
+    [[ "${stderr}" == *$'\n'"cfwf: approve steps done before the failure: comment ${APPROVE_COMMENT_URL}, board Approved" ]]
+}
+
+@test "issue approve usage errors exit 2 with its usage on stderr, before any gh call" {
+    local args
+    prepare_approve
+    unset CLAUDECODE
+    while IFS= read -r args; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run --separate-stderr "${SCRIPT}" issue approve ${args}
+        [ "${status}" -eq 2 ] || {
+            echo "[${args}]: ${status}" >&2
+            return 1
+        }
+        [ -z "${output}" ]
+        [[ "${stderr}" == *"${APPROVE_USAGE}"* ]]
+        [ ! -f "${GH_LOG}" ]
+    done < <(
+        block_usage_cases --issue --pr "${TEST_TMP}/approve.md"
+        printf '%s\n' "--repo ${REPO} --issue 1 --body-file ${TEST_TMP}/approve.md --keep-blocked --keep-blocked" \
+            "--repo ${REPO} --issue 1 --body-file ${TEST_TMP}/approve.md --keep-blocked=yes" \
+            "--repo ${REPO} --issue 1 --body-file ${TEST_TMP}/approve.md --status Approved"
+    )
+}
+
+@test "issue approve help, from -h, --help and help, says it is for humans only, gives the order and the exit codes, and none calls gh" {
+    local invocation
+    unset CLAUDECODE
+    for invocation in "issue approve -h" "issue approve --help" "help issue approve"; do
+        # shellcheck disable=SC2086  # each invocation is several words on purpose
+        run --separate-stderr "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [ -z "${stderr}" ]
+        [[ "${output}" == "${APPROVE_USAGE}"* ]]
+        [[ "${output}" == *"For humans only. In an AI agent session (CLAUDECODE=1) it is refused with exit 10 (not allowed"$'\n'"for agents; a human must run it)"* ]]
+        [[ "${output}" == *"posts the body as a"$'\n'"comment, sets the issue's status on the Workflow board to Approved"* ]]
+        [[ "${output}" == *"then removes the Blocked label unless --keep-blocked is given. On Hold is never"$'\n'"removed"* ]]
+        [[ "${output}" == *"exactly ## Implementation Plan"* ]]
+        [[ "${output}" == *'"cfwf: approve refused: <rule>"'* ]]
+        [[ "${output}" == *"Approved <url>"*'"Approved <url> (Blocked kept)" with --keep-blocked'* ]]
+        [[ "${output}" == *"8 refused, nothing written; 9 not found, nothing written;"$'\n'"10 not allowed for agents, nothing called or written."* ]]
+        [[ "${output}" != *"usage_"* ]]
+    done
+    CLAUDECODE=1 run --separate-stderr "${SCRIPT}" help issue approve
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == "${APPROVE_USAGE}"* ]]
+    run "${SCRIPT}" help issue
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Usage: cfwf issue unblock "*"${APPROVE_USAGE}"*"Usage: cfwf issue comments "* ]]
+    run "${SCRIPT}" help
+    [[ "${output}" == *$'\n'"  issue unblock            Humans only: post a comment, then remove Blocked, once the board is Approved or later (exit 8 refused, 10 agent)"$'\n'"  issue approve            Humans only: post the plan approval, set the board to Approved, then remove Blocked (exit 8 refused, 10 agent)"$'\n'* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "the agents' permissions deny the human-only commands and their MCP tools, while cfwf as a whole stays allowed" {
+    local settings="${REPO_ROOT}/containers/base/development-full/claude-managed-settings.json"
+    local entry
+    for entry in 'Bash(cfwf issue approve*)' 'Bash(cfwf issue unblock*)' 'Bash(cfwf pr unblock*)' \
+        mcp__cfwf__issue_approve mcp__cfwf__issue_unblock mcp__cfwf__pr_unblock mcp__cfwf__workflow_status_set; do
+        jq -r '.permissions.deny[]' "${settings}" | grep -qxF "${entry}"
+    done
+    jq -r '.permissions.allow[]' "${settings}" | grep -qxF 'Bash(cfwf *)'
+    jq -r '.permissions.allow[]' "${settings}" | grep -qxF 'mcp__cfwf__*'
 }
 
 # --- repo list, repo search, pr search, code search and workflow list -------------------------------
