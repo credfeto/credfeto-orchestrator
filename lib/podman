@@ -98,6 +98,7 @@ CLAUDE_PROMPT=""
 GPG_PUBKEY_TMPDIR=""
 PODMAN_SECRET_NAME=""
 GH_ENTERPRISE_SECRET_NAME=""
+KB_MCP_SECRET_NAME=""
 # Host-side per-invocation scratch dir bind-mounted read-write at CONTAINER_SCRATCH_PATH and
 # exposed to the agent via TMPDIR/TMP/TEMP (#1351) — throwaway space, wiped every invocation,
 # distinct from the persistent sessions/plans/cache/backups state dirs.
@@ -832,6 +833,10 @@ cleanup_claude_invocation_tmpfiles() {
         podman secret rm "${GH_ENTERPRISE_SECRET_NAME}" >/dev/null 2>&1 || true
         GH_ENTERPRISE_SECRET_NAME=""
     fi
+    if [ -n "${KB_MCP_SECRET_NAME}" ]; then
+        podman secret rm "${KB_MCP_SECRET_NAME}" >/dev/null 2>&1 || true
+        KB_MCP_SECRET_NAME=""
+    fi
 }
 
 # Runs a single FRESH claude session for one workflow phase and returns 0 on success.
@@ -1263,7 +1268,7 @@ ensure_agent_container_ready() {
 # (the generated CLAUDE.md), CLAUDE_SCRATCH_TMPDIR (the /workspace/tmp scratch mount), the
 # persistent CLAUDE_STATE_DIR/ORCHESTRATOR_CACHE_DIR subdirectories, the work item's transcript
 # directory (transcript_dir_path), and the Podman secrets for the Claude OAuth token and
-# GH_ENTERPRISE_TOKEN. item_type and item_id (both set, checked by invoke_claude) select the
+# GH_ENTERPRISE_TOKEN, plus one for KB_MCP_TOKEN when it is set. item_type and item_id (both set, checked by invoke_claude) select the
 # transcript directory and feed the WORK_ITEM_URL banner and the Discord error notifications.
 # Installs the EXIT trap before the first mktemp, so a die() from inside here cannot leak a
 # tmpfile or a secret (#1103). Bash traps replace rather than append, so the one trap also stops
@@ -1309,6 +1314,7 @@ prepare_claude_container_args() {
     fi
     PODMAN_SECRET_NAME=""
     GH_ENTERPRISE_SECRET_NAME=""
+    KB_MCP_SECRET_NAME=""
     for d in sessions session-env plans cache backups; do
         mkdir -p "${CLAUDE_STATE_DIR}/${d}" || die "Failed to create persistent Claude state directory: ${CLAUDE_STATE_DIR}/${d}"
     done
@@ -1423,6 +1429,15 @@ prepare_claude_container_args() {
         printf '%s' "${GH_ENTERPRISE_TOKEN}" | podman secret create "${GH_ENTERPRISE_SECRET_NAME}" - \
             || { notify_discord_claude_error "${item_type}" "${item_id}" "Failed to create Podman secret for GH_ENTERPRISE_TOKEN"; die "Failed to create Podman secret for GH_ENTERPRISE_TOKEN"; }
         PODMAN_RUN_ARGS+=( --secret "${GH_ENTERPRISE_SECRET_NAME},type=env,target=${gh_token_target}" )
+    fi
+    # Read by the kb MCP server's headersHelper (kb-mcp-headers). Unset, the container gets
+    # nothing and the kb server simply fails to connect.
+    if [ -n "${KB_MCP_TOKEN:-}" ]; then
+        KB_MCP_SECRET_NAME="kb-mcp-token-${container_name}"
+        podman secret rm "${KB_MCP_SECRET_NAME}" >/dev/null 2>&1 || true
+        printf '%s' "${KB_MCP_TOKEN}" | podman secret create "${KB_MCP_SECRET_NAME}" - \
+            || { notify_discord_claude_error "${item_type}" "${item_id}" "Failed to create Podman secret for KB_MCP_TOKEN"; die "Failed to create Podman secret for KB_MCP_TOKEN"; }
+        PODMAN_RUN_ARGS+=( --secret "${KB_MCP_SECRET_NAME},type=env,target=KB_MCP_TOKEN" )
     fi
     [ -n "${GH_HOST:-}" ]                && PODMAN_RUN_ARGS+=( --env "GH_HOST=$(normalize_gh_host "${GH_HOST}")" )
     PODMAN_RUN_ARGS+=( --env "CLAUDE_CODE_AUTO_COMPACT_WINDOW=${CLAUDE_CODE_AUTO_COMPACT_WINDOW}" )
