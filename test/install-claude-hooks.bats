@@ -677,13 +677,11 @@ kb_token_privacy_predicates() {
     jq -r '.permissions.allow[]' "${SOURCE_MANAGED_SETTINGS}" | grep -qxF 'mcp__build-dotnet__*'
 }
 
-@test "the Dockerfile sanity block requires the cfwf and build-dotnet servers, the build-dotnet env, executable and allow rule, and pins no server set (#1818, #1850)" {
+@test "the Dockerfile sanity block pins the build-dotnet server, its env, executable and allow rule, forbids Authorization text, and pins no server set (#1818, #1850)" {
     local dockerfile="${SOURCE_DIR}/Dockerfile"
-    grep -qF "jq -e '.mcpServers.cfwf.type == \"http\" and .mcpServers.cfwf.url == \"${CFWF_URL}\" and .mcpServers.cfwf.headersHelper == \"/etc/claude-code/mcp/cfwf-mcp-headers\"' /etc/claude-code/managed-mcp.json" "${dockerfile}"
     [ "$(grep -cF '.mcpServers | keys' "${dockerfile}")" -eq 0 ]
     grep -qF "! grep -qi 'authorization' /etc/claude-code/managed-mcp.json" "${dockerfile}"
     grep -qF "jq -e '.mcpServers[\"build-dotnet\"] == {\"type\": \"stdio\", \"command\": \"/home/developer/.dotnet/tools/credfeto-build-dotnet\", \"env\": {\"BUILD_MCP_REPO_ROOT\": \"/workspace/repo\"}}' /etc/claude-code/managed-mcp.json" "${dockerfile}"
-    grep -qF "jq -e '.mcpServers.cfwf | has(\"headers\") or has(\"env\") | not' /etc/claude-code/managed-mcp.json" "${dockerfile}"
     grep -qF '[ -x /home/developer/.dotnet/tools/credfeto-build-dotnet ]' "${dockerfile}"
     grep -qF "jq -e '.permissions.allow | index(\"mcp__build-dotnet__*\")' /etc/claude-code/managed-settings.json" "${dockerfile}"
     grep -qE 'for tool in .* credfeto\.build\.dotnet\.server; do' "${dockerfile}"
@@ -704,7 +702,7 @@ run_dockerfile_mcp_checks() {
 }
 
 @test "the Dockerfile managed-mcp.json checks pass the shipped file and a copy with extra servers (#1850)" {
-    [ "$(dockerfile_mcp_programs | wc -l)" -ge 4 ]
+    [ "$(dockerfile_mcp_programs | wc -l)" -ge 3 ]
     run_dockerfile_mcp_checks "${SOURCE_MANAGED_MCP}"
 
     jq '.mcpServers += {"extra-ide": {"type": "http", "url": "http://127.0.0.1:65000/stream"}, "extra-tool": {"type": "stdio", "command": "/usr/bin/extra-tool", "env": {"MODE": "serve"}}}' "${SOURCE_MANAGED_MCP}" > "${TEST_TMP}/extra.json"
@@ -744,6 +742,13 @@ run_dockerfile_mcp_checks() {
     # The cache bust hashes the package's latest version, so a new release rebuilds the layer.
     grep -qxF '            Credfeto.Build.Dotnet.Server' "${REPO_ROOT}/.github/workflows/build-development-credfeto-tools.yml"
     grep -qxF '            Credfeto.Build.Dotnet.Server' "${REPO_ROOT}/.github/workflows/check-credfeto-tools-updates.yml"
+}
+
+@test "the Dockerfile sanity block pins the cfwf server, its helper's owner and mode, and its allow rule" {
+    local dockerfile="${SOURCE_DIR}/Dockerfile"
+    grep -qF "jq -e '.mcpServers.cfwf == {\"type\": \"http\", \"url\": \"${CFWF_URL}\", \"headersHelper\": \"/etc/claude-code/mcp/cfwf-mcp-headers\"}' /etc/claude-code/managed-mcp.json" "${dockerfile}"
+    grep -qF "[ \"\$(stat -c '%U:%G %a' /etc/claude-code/mcp/cfwf-mcp-headers)\" = \"root:root 755\" ]" "${dockerfile}"
+    grep -qF "jq -e '.permissions.allow | index(\"mcp__cfwf__*\")' /etc/claude-code/managed-settings.json" "${dockerfile}"
 }
 
 @test "the Dockerfile sanity block pins the kb server, its helper's owner and mode, and its allow rule" {
