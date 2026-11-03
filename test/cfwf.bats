@@ -7295,7 +7295,6 @@ assert_sign_off() {
         "--repo ${REPO} --issue 7 --json title"
         "--repo ${REPO} --issue 7 --jq ."
         "--repo ${REPO} --issue 7 --template x"
-        "--repo ${REPO} --issue 7 --comments"
         "--repo ${REPO} --issue 7 --web"
         "--repo ${REPO} --issue 7 --pr 7"
         "--repo ${REPO} --issue 7 --title T"
@@ -7303,8 +7302,15 @@ assert_sign_off() {
         "--repo ${REPO} --issue"
     )
     local subcommand args
+    local -a own_cases
     for subcommand in view plan-status; do
-        for args in "${cases[@]}"; do
+        own_cases=("${cases[@]}")
+        if [ "${subcommand}" = view ]; then
+            own_cases+=("--repo ${REPO} --issue 7 --comments --comments" "--repo ${REPO} --issue 7 --comments yes")
+        else
+            own_cases+=("--repo ${REPO} --issue 7 --comments")
+        fi
+        for args in "${own_cases[@]}"; do
             # shellcheck disable=SC2086  # each case is split into its words on purpose
             run --separate-stderr "${SCRIPT}" issue "${subcommand}" ${args}
             [ "${status}" -eq 2 ] || { echo "accepted: ${subcommand} ${args} (${status})" >&2; return 1; }
@@ -15155,6 +15161,117 @@ run_issue_comments() {
     run "${SCRIPT}" issue comments --help
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"Usage: cfwf issue comments --repo <owner/repo> --issue <n> [--since <time>] [--author <login>]"* ]]
+}
+
+# --- issue view --comments ---------------------------------------------------------
+
+ISSUE_VIEW_SEPARATOR="section"$'\t'"comments"
+
+@test "issue view --comments prints the issue exactly as without it, the separator line, then the comments exactly as issue comments prints them" {
+    local body=$'The request.\n\nwith a blank line'
+    write_issue 7 "A title" OPEN "${body}" AI-Work -- credfeto
+    write_rest_comments "$(rest_comment 11 credfeto User OWNER 2026-10-01T10:00:00Z $'First.\n\nsecond line')" \
+        "$(rest_comment 12 someone User NONE 2026-10-02T10:00:00Z "Later.")"
+    "${SCRIPT}" issue view --repo "${REPO}" --issue 7 > "${TEST_TMP}/view" < /dev/null
+    "${SCRIPT}" issue comments --repo "${REPO}" --issue 7 > "${TEST_TMP}/comments" < /dev/null
+    rm -f "${GH_LOG}"
+    "${SCRIPT}" issue view --repo "${REPO}" --issue 7 --comments > "${TEST_TMP}/out" 2> "${TEST_TMP}/err" < /dev/null
+    [ ! -s "${TEST_TMP}/err" ]
+    printf '%s\n' "${ISSUE_VIEW_SEPARATOR}" | cat "${TEST_TMP}/view" - "${TEST_TMP}/comments" > "${TEST_TMP}/expected"
+    cmp "${TEST_TMP}/expected" "${TEST_TMP}/out"
+
+    # The header is the one issue view prints without --comments, and the comments come oldest first.
+    printf 'title\tA title\nstate\tOPEN\nlabels\tAI-Work\nassignees\tcredfeto\n\n%s\n%s\nissue\t%s#7\n' \
+        "${body}" "${ISSUE_VIEW_SEPARATOR}" "${REPO}" > "${TEST_TMP}/head"
+    cmp "${TEST_TMP}/head" <(head -n 10 "${TEST_TMP}/out")
+    [[ "$(cat "${TEST_TMP}/out")" == *$'comment\t11\n'*$'comment\t12\n'*"summary printed=2 matched=2 total=2 omitted=0" ]]
+    [ "$(grep -cx "${ISSUE_VIEW_SEPARATOR}" "${TEST_TMP}/out")" -eq 1 ]
+
+    # One read of the issue, then the reads issue comments makes.
+    [ "$(gh_call_count "issue view 7 --repo ${REPO} --json ${VIEW_FIELDS} --jq ")" -eq 1 ]
+    [ "$(gh_call_count "api repos/${REPO}/issues/7 ")" -eq 1 ]
+    [ "$(gh_call_count "api repos/${REPO}/issues/7/comments?per_page=100 --paginate --jq ")" -eq 1 ]
+}
+
+@test "issue view without --comments reads no comment, and with it an issue with none still ends in the summary" {
+    write_issue 7 "A title" OPEN "The request."
+    write_rest_comments
+    run_issue_read view --issue 7
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "title"$'\t'"A title"$'\n'"state"$'\t'"OPEN"$'\n'"labels"$'\t'$'\n'"assignees"$'\t'$'\n\n'"The request." ]
+    assert_one_issue_read 7 "${VIEW_FIELDS}"
+    [ "$(gh_call_count "api ")" -eq 0 ]
+
+    run_issue_read view --issue 7 --comments
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "title"$'\t'"A title"$'\n'"state"$'\t'"OPEN"$'\n'"labels"$'\t'$'\n'"assignees"$'\t'$'\n\n'"The request."$'\n'"${ISSUE_VIEW_SEPARATOR}"$'\n'"issue"$'\t'"${REPO}#7"$'\n'"url"$'\t'"${COMMENTS_ISSUE_URL}"$'\n\n'"summary printed=0 matched=0 total=0 omitted=0" ]
+    [ "$(gh_call_count "/comments")" -eq 0 ]
+}
+
+@test "issue view --comments keeps a body that holds the separator line apart: the last separator is the one" {
+    write_issue 7 "A title" OPEN "before"$'\n'"${ISSUE_VIEW_SEPARATOR}"$'\n'"after"
+    write_rest_comments "$(rest_comment 11 credfeto User OWNER 2026-10-01T10:00:00Z "${ISSUE_VIEW_SEPARATOR}")"
+    run_issue_read view --issue 7 --comments
+    [ "${status}" -eq 0 ]
+    # The comment body's copy is printed as a body line, so only the body's own copy and the real
+    # separator are whole lines.
+    [ "$(grep -cx "${ISSUE_VIEW_SEPARATOR}" <<< "${output}")" -eq 2 ]
+    [[ "${output}" == *$'\n| section comments\n'* ]]
+    "${SCRIPT}" issue comments --repo "${REPO}" --issue 7 > "${TEST_TMP}/comments" < /dev/null
+    cmp "${TEST_TMP}/comments" <(printf '%s\n' "${output}" | awk -v sep="${ISSUE_VIEW_SEPARATOR}" '
+        { line[NR] = $0 } $0 == sep { last = NR } END { for (i = last + 1; i <= NR; i++) print line[i] }')
+}
+
+@test "issue view --comments exits 9 for a number that is no issue, or a pull request's, reading no comment" {
+    write_issue 8 "A pull request" MERGED "Its description."
+    jq --arg url "https://github.com/${REPO}/pull/8" '.url = $url' "$(issue_fixture 8).json" > "${TEST_TMP}/pull.json"
+    mv "${TEST_TMP}/pull.json" "$(issue_fixture 8).json"
+    run_issue_read view --issue 404 --comments
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: ${REPO}#404 was not found" ]
+    run_issue_read view --comments --issue 8
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: ${REPO}#8 is a pull request, not an issue" ]
+    [ "$(gh_call_count "api ")" -eq 0 ]
+}
+
+@test "issue view --comments prints nothing (exit 1) when the comments cannot all be read" {
+    write_issue 7 "A title" OPEN "The request."
+    write_rest_comments "$(rest_comment 1 someone User NONE 2026-10-01T10:00:00Z "one")"
+    jq -n --arg url "${COMMENTS_ISSUE_URL}" '{html_url: $url, comments: 2}' | write_api "repos/${REPO}/issues/7"
+    run_issue_read view --issue 7 --comments
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: the comments of ${REPO}#7 changed while they were read"* ]]
+}
+
+@test "issue view --comments given twice, or with a value, is a usage error (exit 2) before any gh call" {
+    write_issue 7 "A title" OPEN "The request."
+    run_issue_read view --issue 7 --comments --comments
+    [ "${status}" -eq 2 ]
+    [ -z "${output}" ]
+    [[ "${stderr%%$'\n'*}" == "cfwf: --comments can only be given once" ]]
+    [[ "${stderr}" == *"Usage: cfwf issue view ${ISSUE_READ_USAGE} [--comments]"* ]]
+    run_issue_read view --issue 7 --comments 1
+    [ "${status}" -eq 2 ]
+    run_issue_read view --issue 7 --comments=yes
+    [ "${status}" -eq 2 ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue view help lists --comments, its separator and issue comments, and still refuses the other gh flags" {
+    run "${SCRIPT}" issue view --help
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Usage: cfwf issue view ${ISSUE_READ_USAGE} [--comments]"* ]]
+    [[ "${output}" == *"--comments  Also print the issue's top-level comments, oldest first"* ]]
+    [[ "${output}" == *"'cfwf issue comments' prints the comments alone"* ]]
+    [[ "${output}" == *"--json, --jq, --template and --web are not options."* ]]
+    [[ "${output}" != *"--comments and --web are not options"* ]]
+    [[ "${output}" == *$'\n  section<TAB>comments\n'* ]]
+    [ ! -f "${GH_LOG}" ]
 }
 
 # --- issue add-sub-issue, label create and pr auto-merge-at --------------------------
