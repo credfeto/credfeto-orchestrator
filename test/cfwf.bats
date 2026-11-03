@@ -17304,10 +17304,15 @@ Approved ${APPROVE_ISSUE_URL}" ]
     [ ! -f "${GH_LOG}" ]
 }
 
-@test "the agents' permissions deny issue approve, while cfwf as a whole stays allowed" {
+@test "the agents' permissions deny the human-only commands and their MCP tools, while cfwf as a whole stays allowed" {
     local settings="${REPO_ROOT}/containers/base/development-full/claude-managed-settings.json"
-    jq -r '.permissions.deny[]' "${settings}" | grep -qxF 'Bash(cfwf issue approve*)'
+    local entry
+    for entry in 'Bash(cfwf issue approve*)' 'Bash(cfwf issue unblock*)' 'Bash(cfwf pr unblock*)' \
+        mcp__cfwf__issue_approve mcp__cfwf__issue_unblock mcp__cfwf__pr_unblock mcp__cfwf__workflow_status_set; do
+        jq -r '.permissions.deny[]' "${settings}" | grep -qxF "${entry}"
+    done
     jq -r '.permissions.allow[]' "${settings}" | grep -qxF 'Bash(cfwf *)'
+    jq -r '.permissions.allow[]' "${settings}" | grep -qxF 'mcp__cfwf__*'
 }
 
 # --- repo list, repo search, pr search, code search and workflow list -------------------------------
