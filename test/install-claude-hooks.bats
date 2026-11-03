@@ -267,6 +267,21 @@ expected_mcp_names() {
     [[ "${output}" != *'ghp_hostsecret'* ]]
 }
 
+@test "host servers at kb's URL, under kb's own name or another, are left out as duplicates rather than colliding" {
+    allow_sudo
+    write_host_claude_json "{
+        \"mcpServers\": {\"kb\": {\"type\": \"http\", \"url\": \"${KB_URL}\", \"headers\": {\"Authorization\": \"Bearer \${KB_TOKEN}\"}}},
+        \"projects\": {\"${HOME}\": {\"mcpServers\": {\"memory\": {\"type\": \"http\", \"url\": \"${KB_URL}/\"}, \"secure-api\": {\"type\": \"http\", \"url\": \"${CFWF_URL}\"}}}}
+    }"
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(installed_mcp_names)" = "$(expected_mcp_names)" ]
+    [ "$(jq -c '.mcpServers.kb' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "$(jq -c '.mcpServers.kb' "${SOURCE_MANAGED_MCP}")" ]
+    [[ "${output}" == *"Left out kb, memory from ${HOME}/.claude.json: same URL as kb, which replaces them"* ]]
+    [[ "${output}" == *"Left out secure-api from ${HOME}/.claude.json: same URL as cfwf, which replaces them"* ]]
+    [[ "${output}" != *"used for two different servers"* ]]
+}
+
 @test "a host server with a literal header or env value is refused by name and never copied" {
     allow_sudo
     write_host_claude_json '{

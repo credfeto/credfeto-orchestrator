@@ -199,7 +199,7 @@ changes; `CLAUDE_MANAGED_DIR` overrides the directory for tests only), the prefe
 optional first argument names a file of host directory roots, installed as the root-owned
 `/etc/claude-code/hooks/allowed-dirs.local`. It installs `cfwf-mcp-headers`, `kb-mcp-headers` and a `managed-mcp.json` that
 merges the shipped servers with the host's own MCP servers from `~/.claude.json` (user scope and every project scope).
-A server at `cfwf`'s URL is left out as a duplicate, with a suggestion to remove it. A server with a
+A server at a shipped `http` server's URL, such as `cfwf`'s or `kb`'s, is left out as a duplicate, whatever its name, with a suggestion to remove it. A server with a
 literal `headers` or `env` value, a `url` carrying userinfo or a query string, or a credential-like `command` or
 `args` word is refused with a warning naming it, because the file is world-readable.
 A name used for two different servers is fatal. The merge is a snapshot, so re-run the script after
