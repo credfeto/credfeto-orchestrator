@@ -656,9 +656,8 @@ kb_token_privacy_predicates() {
 
 @test "the Dockerfile sanity block pins the build-dotnet server, its env, its executable and its allow rule (#1818)" {
     local dockerfile="${SOURCE_DIR}/Dockerfile"
-    grep -qF "jq -e '(.mcpServers | keys) == [\"build-dotnet\", \"cfwf\", \"kb\"] and .mcpServers.cfwf.type == \"http\"" "${dockerfile}"
+    grep -qF "jq -e '(.mcpServers | keys) == [\"build-dotnet\", \"cfwf\", \"kb\"]' /etc/claude-code/managed-mcp.json" "${dockerfile}"
     grep -qF "jq -e '.mcpServers[\"build-dotnet\"] == {\"type\": \"stdio\", \"command\": \"/home/developer/.dotnet/tools/credfeto-build-dotnet\", \"env\": {\"BUILD_MCP_REPO_ROOT\": \"/workspace/repo\"}}' /etc/claude-code/managed-mcp.json" "${dockerfile}"
-    grep -qF "jq -e '.mcpServers.cfwf | has(\"headers\") or has(\"env\") | not' /etc/claude-code/managed-mcp.json" "${dockerfile}"
     grep -qF '[ -x /home/developer/.dotnet/tools/credfeto-build-dotnet ]' "${dockerfile}"
     grep -qF "jq -e '.permissions.allow | index(\"mcp__build-dotnet__*\")' /etc/claude-code/managed-settings.json" "${dockerfile}"
     grep -qE 'for tool in .* credfeto\.build\.dotnet\.server; do' "${dockerfile}"
@@ -675,6 +674,13 @@ kb_token_privacy_predicates() {
     # The cache bust hashes the package's latest version, so a new release rebuilds the layer.
     grep -qxF '            Credfeto.Build.Dotnet.Server' "${REPO_ROOT}/.github/workflows/build-development-credfeto-tools.yml"
     grep -qxF '            Credfeto.Build.Dotnet.Server' "${REPO_ROOT}/.github/workflows/check-credfeto-tools-updates.yml"
+}
+
+@test "the Dockerfile sanity block pins the cfwf server, its helper's owner and mode, and its allow rule" {
+    local dockerfile="${SOURCE_DIR}/Dockerfile"
+    grep -qF "jq -e '.mcpServers.cfwf == {\"type\": \"http\", \"url\": \"${CFWF_URL}\", \"headersHelper\": \"/etc/claude-code/mcp/cfwf-mcp-headers\"}' /etc/claude-code/managed-mcp.json" "${dockerfile}"
+    grep -qF "[ \"\$(stat -c '%U:%G %a' /etc/claude-code/mcp/cfwf-mcp-headers)\" = \"root:root 755\" ]" "${dockerfile}"
+    grep -qF "jq -e '.permissions.allow | index(\"mcp__cfwf__*\")' /etc/claude-code/managed-settings.json" "${dockerfile}"
 }
 
 @test "the Dockerfile sanity block pins the kb server, its helper's owner and mode, and its allow rule" {
