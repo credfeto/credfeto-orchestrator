@@ -255,10 +255,9 @@ merge_host_mcp_servers() {
         | (($shipped + ($hosted - $duplicates - $refused)) | unique) as $kept
         | {
             merged: {mcpServers: ($kept | from_entries)},
-            duplicates: ($shipped_http
-                | map(.key as $name
-                    | {key, value: ($replaced | map(select(.replaced_by == $name) | .key) | unique)})
-                | map(select(.value | length > 0))
+            duplicates: ($replaced
+                | group_by(.replaced_by)
+                | map({key: .[0].replaced_by, value: (map(.key) | unique)})
                 | from_entries),
             refused: ($refused | map(.key) | unique),
             collisions: ($kept | group_by(.key) | map(select(length > 1) | .[0].key))
