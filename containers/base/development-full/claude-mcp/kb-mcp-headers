@@ -29,7 +29,7 @@ token_file_is_private() {
 }
 
 token_from_file() {
-    [ -e "${token_file}" ] || return 0
+    [ -e "${token_file}" ] || [ -L "${token_file}" ] || return 0
     token_file_is_private || fail "${token_file} must be a regular file owned by you with mode 0600"
     line=""
     IFS= read -r line <"${token_file}" || [ -n "${line}" ] || return 0
