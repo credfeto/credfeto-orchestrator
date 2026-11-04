@@ -282,6 +282,21 @@ expected_mcp_names() {
     [[ "${output}" != *"used for two different servers"* ]]
 }
 
+@test "a host server at kb's URL with a literal header is left out, with a warning that names its field and never its value" {
+    allow_sudo
+    write_host_claude_json "{\"mcpServers\": {\"kb\": {\"type\": \"http\", \"url\": \"${KB_URL}\", \"headers\": {\"Authorization\": \"Bearer kb-literal-dup\"}}}}"
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(installed_mcp_names)" = "$(expected_mcp_names)" ]
+    [ "$(jq -c '.mcpServers.kb' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "$(jq -c '.mcpServers.kb' "${SOURCE_MANAGED_MCP}")" ]
+    [[ "${output}" == *"Left out kb from ${HOME}/.claude.json: same URL as kb, which replaces them"* ]]
+    [[ "${output}" == *"WARNING: kb in ${HOME}/.claude.json, left out above, may hold a secret in plain text: a headers or env value holds literal text"* ]]
+    [[ "${output}" != *'did not copy'* ]]
+    [ "$(grep -c 'kb-literal-dup' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" -eq 0 ]
+    [ "$(grep -c 'kb-literal-dup' "${HOME}/.claude/managed-mcp.merged.json")" -eq 0 ]
+    [[ "${output}" != *'kb-literal-dup'* ]]
+}
+
 @test "a host server with a literal header or env value is refused by name and never copied" {
     allow_sudo
     write_host_claude_json '{

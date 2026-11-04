@@ -186,6 +186,10 @@ install_managed_files() {
 #               server's, which replaces them, keyed by that shipped server's
 #               name; one with that server's own name and definition is the
 #               same server, so it is merged silently instead
+#   duplicate_secrets
+#               duplicates that may hold a secret, by the same test as refused:
+#               left out all the same, but named so the plaintext secret in
+#               ~/.claude.json can be rotated or moved
 #   refused     host servers left out because they may hold a secret: a headers
 #               or env value holds literal text rather than only ${VAR}
 #               references (an optional Bearer/Basic/Token scheme word is
@@ -263,6 +267,7 @@ merge_host_mcp_servers() {
                 | group_by(.replaced_by)
                 | map({key: .[0].replaced_by, value: (map(.key) | unique)})
                 | from_entries),
+            duplicate_secrets: ($duplicates | map(select(.value | holds_literal_secret) | .key) | unique),
             refused: ($refused | map(.key) | unique),
             collisions: ($kept | group_by(.key) | map(select(length > 1) | .[0].key))
           }
@@ -280,6 +285,8 @@ write_merged_mcp() {
     while IFS=$'\t' read -r shipped names; do
         info "Left out ${names} from ${host_claude_json}: same URL as ${shipped}, which replaces them. Remove them from ${host_claude_json}, as they are no longer used."
     done < <(jq -r '.duplicates | to_entries[] | [.key, (.value | join(", "))] | @tsv' <<<"${report}")
+    names=$(jq -r '.duplicate_secrets | join(", ")' <<<"${report}")
+    [ -z "${names}" ] || info "WARNING: ${names} in ${host_claude_json}, left out above, may hold a secret in plain text: a headers or env value holds literal text, the url carries userinfo or a query string, or the command or args look like a credential. Rotate that secret, and remove the entry or supply the secret through a headersHelper or a \${VAR} reference instead."
     names=$(jq -r '.refused | join(", ")' <<<"${report}")
     [ -z "${names}" ] || info "WARNING: did not copy ${names} from ${host_claude_json}: a headers or env value holds literal text, the url carries userinfo or a query string, or the command or args look like a credential, and ${CLAUDE_MANAGED_DIR}/managed-mcp.json is readable by every user. Supply the secret through a headersHelper or a \${VAR} reference instead, then re-run."
 
