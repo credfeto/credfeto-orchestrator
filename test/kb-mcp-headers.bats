@@ -71,6 +71,14 @@ write_token_file() {
     [ "${output}" = '{"Authorization":"Bearer kb_no_newline"}' ]
 }
 
+@test "a token file saved with CRLF line endings is read without the carriage return" {
+    write_token_file $'kb_crlf\r\n' 600
+    run_helper
+    [ "${status}" -eq 0 ]
+    [ "${output}" = '{"Authorization":"Bearer kb_crlf"}' ]
+    [[ "${output}" != *$'\r'* ]]
+}
+
 @test "a token file that is not mode 0600 is refused and not read" {
     local mode
     for mode in 644 640 604 400 700; do
