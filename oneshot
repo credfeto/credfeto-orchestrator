@@ -45,6 +45,9 @@ source "${ONESHOT_DIR}/lib/github" \
 # shellcheck source=lib/github-status disable=SC1091
 source "${ONESHOT_DIR}/lib/github-status" \
     || { printf 'oneshot: FATAL: failed to source %s/lib/github-status\n' "${ONESHOT_DIR}" >&2; exit 1; }
+# shellcheck source=lib/github-health disable=SC1091
+source "${ONESHOT_DIR}/lib/github-health" \
+    || { printf 'oneshot: FATAL: failed to source %s/lib/github-health\n' "${ONESHOT_DIR}" >&2; exit 1; }
 # shellcheck source=lib/fingerprints disable=SC1091
 source "${ONESHOT_DIR}/lib/fingerprints" \
     || { printf 'oneshot: FATAL: failed to source %s/lib/fingerprints\n' "${ONESHOT_DIR}" >&2; exit 1; }
@@ -105,6 +108,7 @@ source "${ONESHOT_DIR}/lib/podman" \
 # pr_should_advance_unchanged, issue_should_advance_unchanged,
 # block_issue_for_idle_exhausted_no_progress, and block_issue_for_idle_exhausted_no_plan are
 # declared in lib/github-status.
+# github_incident_open is declared in lib/github-health.
 # find_ai_instructions is declared in lib/git.
 
 # Workflow project cache globals (_WF_PROJECT_ID, _WF_STATUS_FIELD_ID, _WF_OPTION_IDS,
@@ -256,6 +260,24 @@ main() {
     # stop an --owner run and a no-owner run overlapping on the same owner; send_daily_digest_if_
     # due takes its own per-owner digest lock for that.
     run_daily_digest_rollover "${owner_filter}"
+
+    # The GitHub health gate (#1846), before the priorities fetch and the first gh call. While
+    # githubstatus.com has an unresolved incident on a component a session needs (Git Operations,
+    # Pull Requests, Issues, API Requests or Webhooks), a session can neither push, comment nor write
+    # the board: it fails pre-flight or is charged idle budget for making no progress, and a healthy
+    # PR can be parked as idle-exhausted. Exiting 0 here, as the low-disk-space skip does, runs no
+    # session at all this tick, so nothing is charged and the unit does not record a failure. A
+    # lookup that fails (rc 2: unreachable, timed out or not the expected JSON) fails open, so a
+    # githubstatus.com problem never stops the fleet on its own.
+    local github_incident github_incident_rc=0
+    github_incident=$(github_incident_open) || github_incident_rc=$?
+    if [ "${github_incident_rc}" -eq 0 ]; then
+        warn "GitHub incident open (${github_incident%%$'\t'*}, since ${github_incident#*$'\t'}) — skipping work this tick"
+        exit 0
+    fi
+    if [ "${github_incident_rc}" -eq 2 ]; then
+        warn "Could not read GitHub status from ${GITHUB_STATUS_URL} — carrying on as if GitHub is healthy"
+    fi
 
     local items_json item_count fetch_rc
     # Resolve the login here, not only inside fetch_all_priorities' command substitution, so
