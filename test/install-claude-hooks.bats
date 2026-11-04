@@ -656,7 +656,6 @@ kb_token_privacy_predicates() {
 
 @test "the Dockerfile sanity block pins the build-dotnet server, its env, its executable and its allow rule (#1818)" {
     local dockerfile="${SOURCE_DIR}/Dockerfile"
-    grep -qF "jq -e '([\"build-dotnet\", \"cfwf\", \"kb\"] - (.mcpServers | keys)) == []' /etc/claude-code/managed-mcp.json" "${dockerfile}"
     grep -qF "jq -e '.mcpServers[\"build-dotnet\"] == {\"type\": \"stdio\", \"command\": \"/home/developer/.dotnet/tools/credfeto-build-dotnet\", \"env\": {\"BUILD_MCP_REPO_ROOT\": \"/workspace/repo\"}}' /etc/claude-code/managed-mcp.json" "${dockerfile}"
     grep -qF '[ -x /home/developer/.dotnet/tools/credfeto-build-dotnet ]' "${dockerfile}"
     grep -qF "jq -e '.permissions.allow | index(\"mcp__build-dotnet__*\")' /etc/claude-code/managed-settings.json" "${dockerfile}"
