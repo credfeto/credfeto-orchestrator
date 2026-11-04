@@ -54,8 +54,9 @@ On top of all of that, this final image:
    is missing, any removed tool is somehow still reachable, or the entrypoint itself is broken —
    catching a broken image at build time, not three hours into an unattended overnight run.
 
-Claude Code can reach exactly two MCP servers, pinned by `development-full` in a root-owned
-`/etc/claude-code/managed-mcp.json`, so the agent cannot add a server or point one anywhere else:
+Claude Code can reach only the MCP servers pinned by `development-full` in a root-owned
+`/etc/claude-code/managed-mcp.json`, so the agent cannot add a server or point one anywhere else. The
+image requires two:
 
 - `cfwf`, the workflow MCP server at `https://workflow-mcp.markridgwell.com/mcp`. The file holds
   no token. A root-owned helper hands Claude Code's MCP client the GitHub token the container
@@ -64,6 +65,10 @@ Claude Code can reach exactly two MCP servers, pinned by `development-full` in a
 - `build-dotnet`, the .NET build, test and coverage server (`credfeto-build-dotnet`, a local stdio
   process), working on the repository at `/workspace/repo` (#1818). It is registered for every
   session, whatever the repository's language.
+
+The file may list others, such as `rider` and `webstorm`, the JetBrains IDEs' own MCP servers over
+`http` on the loopback address. The image build checks only the two required servers (and a `kb`
+server, when present), so adding a server does not break it (#1850).
 
 ## What the entrypoint checks before the agent ever starts
 

@@ -221,12 +221,15 @@ RUN mkdir -p /home/developer/.claude/agents \
 # ~/.claude copies can be replaced along with ~/.claude itself (see the skills
 # link step above). oneshot does not (and must not) bind-mount over these
 # paths - see containers/agent/Dockerfile.
-# managed-mcp.json pins the only MCP servers, cfwf and build-dotnet, and is
-# world-readable, so it holds no token: cfwf's Authorization header comes at
-# connect time from the root-owned headersHelper, mcp/cfwf-mcp-headers, which
-# reads the GitHub token from the environment. build-dotnet is the .NET
+# managed-mcp.json pins the only MCP servers Claude Code loads and is
+# world-readable, so it holds no token. The sanity check requires the two the
+# image depends on: cfwf, whose Authorization header comes at connect time
+# from the root-owned headersHelper, mcp/cfwf-mcp-headers, which reads the
+# GitHub token from the environment, and build-dotnet, the .NET
 # build/test/coverage server installed by development-credfeto-tools, started
 # by its absolute path with one fixed, non-secret env value: the repo mount.
+# A kb server, when present, must follow cfwf's pattern. Any other server
+# (such as the JetBrains IDEs' rider and webstorm) is allowed and not checked.
 COPY --chown=root:root --chmod=0444 claude-user-settings.json /home/developer/.claude/settings.json
 COPY --chown=root:root --chmod=0444 claude-policy-limits.json /home/developer/.claude/policy-limits.json
 COPY --chown=root:root --chmod=0444 claude-managed-settings.json /etc/claude-code/managed-settings.json
@@ -440,10 +443,12 @@ RUN set -e; \
         [ "$(stat -c '%U:%G %a' /etc/claude-code/hooks/$h)" = "root:root 755" ] \
             || { echo "FATAL sanity: $h hook missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
     done; \
-    jq -e '(.mcpServers | keys) == ["build-dotnet", "cfwf"] and .mcpServers.cfwf.type == "http" and .mcpServers.cfwf.url == "https://workflow-mcp.markridgwell.com/mcp" and .mcpServers.cfwf.headersHelper == "/etc/claude-code/mcp/cfwf-mcp-headers"' /etc/claude-code/managed-mcp.json >/dev/null \
-        || { echo "FATAL sanity: managed-mcp.json must hold exactly the build-dotnet and cfwf servers, cfwf at its https URL, with its headers from /etc/claude-code/mcp/cfwf-mcp-headers" >&2; exit 1; }; \
+    jq -e '.mcpServers.cfwf.type == "http" and .mcpServers.cfwf.url == "https://workflow-mcp.markridgwell.com/mcp" and .mcpServers.cfwf.headersHelper == "/etc/claude-code/mcp/cfwf-mcp-headers"' /etc/claude-code/managed-mcp.json >/dev/null \
+        || { echo "FATAL sanity: managed-mcp.json must hold the required cfwf server, type http at its https URL, with its headers from /etc/claude-code/mcp/cfwf-mcp-headers" >&2; exit 1; }; \
     jq -e '.mcpServers["build-dotnet"] == {"type": "stdio", "command": "/home/developer/.dotnet/tools/credfeto-build-dotnet", "env": {"BUILD_MCP_REPO_ROOT": "/workspace/repo"}}' /etc/claude-code/managed-mcp.json >/dev/null \
-        || { echo "FATAL sanity: managed-mcp.json is world-readable, so the build-dotnet server must be exactly the stdio credfeto-build-dotnet tool by its absolute path, with BUILD_MCP_REPO_ROOT=/workspace/repo as its only env value" >&2; exit 1; }; \
+        || { echo "FATAL sanity: managed-mcp.json must hold the required build-dotnet server, and as the file is world-readable it must be exactly the stdio credfeto-build-dotnet tool by its absolute path, with BUILD_MCP_REPO_ROOT=/workspace/repo as its only env value" >&2; exit 1; }; \
+    jq -e 'if .mcpServers | has("kb") then .mcpServers.kb | type == "object" and .type == "http" and (.url | tostring | startswith("https://")) and (.headersHelper | tostring | startswith("/etc/claude-code/mcp/")) and (has("headers") or has("env") | not) else true end' /etc/claude-code/managed-mcp.json >/dev/null \
+        || { echo "FATAL sanity: managed-mcp.json is world-readable, so a kb server, when present, must be type http on an https URL with its headers from a helper under /etc/claude-code/mcp/, and no literal headers or env" >&2; exit 1; }; \
     [ -x /home/developer/.dotnet/tools/credfeto-build-dotnet ] \
         || { echo "FATAL sanity: /home/developer/.dotnet/tools/credfeto-build-dotnet, the build-dotnet MCP server, is missing or not executable" >&2; exit 1; }; \
     jq -e '.mcpServers.cfwf | has("headers") or has("env") | not' /etc/claude-code/managed-mcp.json >/dev/null \

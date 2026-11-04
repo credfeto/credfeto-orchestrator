@@ -12,6 +12,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ### Security
 ### Added
 ### Fixed
+- The development-full image sanity check and the install-claude-hooks tests check only the required managed MCP servers: cfwf and build-dotnet must be present and correct, a kb server must follow cfwf's pattern when present, and any other server (such as the shipped rider and webstorm) is allowed and not checked, so adding a server no longer breaks the image build or the tests (#1850)
 ### Changed
 - SDK - Updated DotNet SDK to 11.0.100-rc.3.26522.148
 ### Deprecated
