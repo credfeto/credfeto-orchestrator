@@ -209,11 +209,11 @@ installed_mcp_names() {
     grep -qxF "install -o root -g root -m 0444 ${HOME}/.claude/managed-mcp.merged.json ${CLAUDE_MANAGED_DIR}/managed-mcp.json" "${SUDO_LOG}"
 }
 
-@test "with no ~/.claude.json, managed-mcp.json holds the shipped cfwf, kb and build-dotnet servers alone, unchanged" {
+@test "with no ~/.claude.json, managed-mcp.json holds the shipped cfwf, kb, build-dotnet, rider and webstorm servers alone, unchanged" {
     allow_sudo
     run main
     [ "${status}" -eq 0 ]
-    [ "$(installed_mcp_names)" = "build-dotnet cfwf kb" ]
+    [ "$(installed_mcp_names)" = "build-dotnet cfwf kb rider webstorm" ]
     [ "$(jq -S . "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "$(jq -S . "${SOURCE_MANAGED_MCP}")" ]
     [[ "${output}" == *"re-run this script after adding an MCP server there"* ]]
 }
@@ -222,17 +222,17 @@ installed_mcp_names() {
     allow_sudo
     : > "${HOME}/.claude.json"
     main
-    [ "$(installed_mcp_names)" = "build-dotnet cfwf kb" ]
+    [ "$(installed_mcp_names)" = "build-dotnet cfwf kb rider webstorm" ]
 
     write_host_claude_json '{"projects": {"/x": {"allowedTools": []}}, "theme": "dark"}'
     main
-    [ "$(installed_mcp_names)" = "build-dotnet cfwf kb" ]
+    [ "$(installed_mcp_names)" = "build-dotnet cfwf kb rider webstorm" ]
 }
 
 @test "user-scope and every project's MCP servers are merged in beside cfwf" {
     allow_sudo
     write_host_claude_json '{
-        "mcpServers": {"rider": {"type": "sse", "url": "http://localhost:64342/sse"}},
+        "mcpServers": {"goland": {"type": "sse", "url": "http://localhost:64342/sse"}},
         "projects": {
             "/a": {"mcpServers": {"tool-a": {"type": "stdio", "command": "/usr/bin/tool-a", "args": ["--serve"]}}},
             "/b": {"mcpServers": {"tool-b": {"type": "http", "url": "https://b.example.com/mcp"}}}
@@ -240,7 +240,7 @@ installed_mcp_names() {
     }'
     main
 
-    [ "$(installed_mcp_names)" = "build-dotnet cfwf kb rider tool-a tool-b" ]
+    [ "$(installed_mcp_names)" = "build-dotnet cfwf goland kb rider tool-a tool-b webstorm" ]
     [ "$(jq -c '.mcpServers.kb' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "$(jq -c '.mcpServers.kb' "${SOURCE_MANAGED_MCP}")" ]
     [ "$(jq -r '.mcpServers["tool-a"].args[0]' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "--serve" ]
     [ "$(jq -c '.mcpServers.cfwf' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "$(jq -c '.mcpServers.cfwf' "${SOURCE_MANAGED_MCP}")" ]
@@ -252,7 +252,7 @@ installed_mcp_names() {
     write_host_claude_json "{\"projects\": {\"${HOME}\": {\"mcpServers\": {\"secure-api\": {\"type\": \"http\", \"url\": \"${CFWF_URL}/\", \"headers\": {\"Authorization\": \"Bearer ghp_hostsecret\"}}}}}}"
     run main
     [ "${status}" -eq 0 ]
-    [ "$(installed_mcp_names)" = "build-dotnet cfwf kb" ]
+    [ "$(installed_mcp_names)" = "build-dotnet cfwf kb rider webstorm" ]
     [[ "${output}" == *"Left out secure-api from ${HOME}/.claude.json: same URL as cfwf"* ]]
     [[ "${output}" == *"Remove them from ${HOME}/.claude.json"* ]]
     [ "$(grep -c 'ghp_hostsecret' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" -eq 0 ]
@@ -267,7 +267,7 @@ installed_mcp_names() {
     }"
     run main
     [ "${status}" -eq 0 ]
-    [ "$(installed_mcp_names)" = "build-dotnet cfwf kb" ]
+    [ "$(installed_mcp_names)" = "build-dotnet cfwf kb rider webstorm" ]
     [ "$(jq -c '.mcpServers.kb' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "$(jq -c '.mcpServers.kb' "${SOURCE_MANAGED_MCP}")" ]
     [[ "${output}" == *"Left out kb, memory from ${HOME}/.claude.json: same URL as kb, which replaces them"* ]]
     [[ "${output}" == *"Left out secure-api from ${HOME}/.claude.json: same URL as cfwf, which replaces them"* ]]
@@ -285,7 +285,7 @@ installed_mcp_names() {
     }'
     run main
     [ "${status}" -eq 0 ]
-    [ "$(installed_mcp_names)" = "build-dotnet cfwf kb" ]
+    [ "$(installed_mcp_names)" = "build-dotnet cfwf kb rider webstorm" ]
     [[ "${output}" == *"WARNING: did not copy leaky-bearer, leaky-env, leaky-header from ${HOME}/.claude.json"* ]]
     [ "$(grep -c 'sk-literal' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" -eq 0 ]
     [ "$(grep -c 'sk-literal' "${HOME}/.claude/managed-mcp.merged.json")" -eq 0 ]
@@ -298,7 +298,7 @@ installed_mcp_names() {
     write_host_claude_json '{"mcpServers": {"by-ref": {"type": "http", "url": "https://r.example.com/mcp", "headers": {"Authorization": "Bearer ${R_TOKEN}", "X-Key": "${R_KEY}"}, "env": {"A": "${A}"}}}}'
     run main
     [ "${status}" -eq 0 ]
-    [ "$(installed_mcp_names)" = "build-dotnet by-ref cfwf kb" ]
+    [ "$(installed_mcp_names)" = "build-dotnet by-ref cfwf kb rider webstorm" ]
     # shellcheck disable=SC2016
     [ "$(jq -r '.mcpServers["by-ref"].headers.Authorization' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = 'Bearer ${R_TOKEN}' ]
     [[ "${output}" != *'did not copy'* ]]
@@ -315,7 +315,7 @@ installed_mcp_names() {
     }'
     run main
     [ "${status}" -eq 0 ]
-    [ "$(installed_mcp_names)" = "build-dotnet cfwf kb" ]
+    [ "$(installed_mcp_names)" = "build-dotnet cfwf kb rider webstorm" ]
     [[ "${output}" == *"WARNING: did not copy url-query, url-user-only, url-userinfo from ${HOME}/.claude.json"* ]]
     [ "$(grep -c -- '-literal-' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" -eq 0 ]
     [ "$(grep -c -- '-literal-' "${HOME}/.claude/managed-mcp.merged.json")" -eq 0 ]
@@ -340,7 +340,7 @@ installed_mcp_names() {
     }"
     run main
     [ "${status}" -eq 0 ]
-    [ "$(installed_mcp_names)" = "build-dotnet cfwf kb" ]
+    [ "$(installed_mcp_names)" = "build-dotnet cfwf kb rider webstorm" ]
     [[ "${output}" == *"WARNING: did not copy args-aws, args-env-style, args-flag-equals, args-flag-value, args-prefix, command-prefix from ${HOME}/.claude.json"* ]]
     [ "$(grep -c -e 'literalarg' -e 'LITERALARG' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" -eq 0 ]
     [ "$(grep -c -e 'literalarg' -e 'LITERALARG' "${HOME}/.claude/managed-mcp.merged.json")" -eq 0 ]
@@ -358,7 +358,7 @@ installed_mcp_names() {
     }}'
     run main
     [ "${status}" -eq 0 ]
-    [ "$(installed_mcp_names)" = "build-dotnet cfwf clean-args clean-url kb ref-args" ]
+    [ "$(installed_mcp_names)" = "build-dotnet cfwf clean-args clean-url kb ref-args rider webstorm" ]
     # shellcheck disable=SC2016
     [ "$(jq -r '.mcpServers["ref-args"].args[1]' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = '${S_TOKEN}' ]
     [[ "${output}" != *'did not copy'* ]]
@@ -368,22 +368,22 @@ installed_mcp_names() {
     allow_sudo
     local padding
     padding=$(head -c 200000 /dev/zero | tr '\0' 'x')
-    write_host_claude_json "{\"padding\": \"${padding}\", \"mcpServers\": {\"rider\": {\"type\": \"sse\", \"url\": \"http://localhost:64342/sse\"}}}"
+    write_host_claude_json "{\"padding\": \"${padding}\", \"mcpServers\": {\"goland\": {\"type\": \"sse\", \"url\": \"http://localhost:64342/sse\"}}}"
     [ "$(stat -c '%s' "${HOME}/.claude.json")" -gt 131072 ]
     run main
     [ "${status}" -eq 0 ]
-    [ "$(installed_mcp_names)" = "build-dotnet cfwf kb rider" ]
+    [ "$(installed_mcp_names)" = "build-dotnet cfwf goland kb rider webstorm" ]
 }
 
 @test "the same server repeated in several scopes is installed once" {
     allow_sudo
     write_host_claude_json '{
-        "mcpServers": {"rider": {"type": "sse", "url": "http://localhost:64342/sse"}},
-        "projects": {"/a": {"mcpServers": {"rider": {"type": "sse", "url": "http://localhost:64342/sse"}}}}
+        "mcpServers": {"goland": {"type": "sse", "url": "http://localhost:64342/sse"}},
+        "projects": {"/a": {"mcpServers": {"goland": {"type": "sse", "url": "http://localhost:64342/sse"}}}}
     }'
     run main
     [ "${status}" -eq 0 ]
-    [ "$(installed_mcp_names)" = "build-dotnet cfwf kb rider" ]
+    [ "$(installed_mcp_names)" = "build-dotnet cfwf goland kb rider webstorm" ]
 }
 
 @test "one name for two different host servers is fatal before anything is installed" {
@@ -424,7 +424,7 @@ installed_mcp_names() {
     write_host_claude_json '{"mcpServers": {"host-build": {"type": "stdio", "command": "/usr/bin/host-build", "env": {"BUILD_MCP_REPO_ROOT": "/workspace/repo"}}}}'
     run main
     [ "${status}" -eq 0 ]
-    [ "$(installed_mcp_names)" = "build-dotnet cfwf kb" ]
+    [ "$(installed_mcp_names)" = "build-dotnet cfwf kb rider webstorm" ]
     [[ "${output}" == *"WARNING: did not copy host-build from ${HOME}/.claude.json"* ]]
 }
 
@@ -573,12 +573,12 @@ kb_token_privacy_predicates() {
 }
 
 @test "when sudo is declined, the printed managed-mcp.json install command names a merged file that still exists" {
-    write_host_claude_json '{"mcpServers": {"rider": {"type": "sse", "url": "http://localhost:64342/sse"}}}'
+    write_host_claude_json '{"mcpServers": {"goland": {"type": "sse", "url": "http://localhost:64342/sse"}}}'
     run main
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"sudo install -o root -g root -m 0444 ${HOME}/.claude/managed-mcp.merged.json ${CLAUDE_MANAGED_DIR}/managed-mcp.json"* ]]
     [[ "${output}" == *"sudo install -o root -g root -m 0755 ${SOURCE_CFWF_MCP_HEADERS} ${CLAUDE_MANAGED_DIR}/mcp/cfwf-mcp-headers"* ]]
-    [ "$(jq -r '.mcpServers | keys | join(" ")' "${HOME}/.claude/managed-mcp.merged.json")" = "build-dotnet cfwf kb rider" ]
+    [ "$(jq -r '.mcpServers | keys | join(" ")' "${HOME}/.claude/managed-mcp.merged.json")" = "build-dotnet cfwf goland kb rider webstorm" ]
 }
 
 @test "a merged MCP file that cannot be written is fatal before anything is installed" {
@@ -607,10 +607,10 @@ kb_token_privacy_predicates() {
 
 # --- the shipped managed MCP servers ------------------------------------------------
 
-@test "the shipped managed-mcp.json holds only cfwf, kb and build-dotnet, cfwf over https with its header from the root-owned helper" {
+@test "the shipped managed-mcp.json holds only cfwf, kb, build-dotnet, rider and webstorm, cfwf over https with its header from the root-owned helper" {
     run jq -c '.mcpServers | keys' "${SOURCE_MANAGED_MCP}"
     [ "${status}" -eq 0 ]
-    [ "${output}" = '["build-dotnet","cfwf","kb"]' ]
+    [ "${output}" = '["build-dotnet","cfwf","kb","rider","webstorm"]' ]
     run jq -c '.mcpServers.cfwf' "${SOURCE_MANAGED_MCP}"
     [ "${status}" -eq 0 ]
     [ "${output}" = "{\"type\":\"http\",\"url\":\"${CFWF_URL}\",\"headersHelper\":\"/etc/claude-code/mcp/cfwf-mcp-headers\"}" ]
@@ -656,7 +656,7 @@ kb_token_privacy_predicates() {
 
 @test "the Dockerfile sanity block pins the build-dotnet server, its env, its executable and its allow rule (#1818)" {
     local dockerfile="${SOURCE_DIR}/Dockerfile"
-    grep -qF "jq -e '(.mcpServers | keys) == [\"build-dotnet\", \"cfwf\", \"kb\"]' /etc/claude-code/managed-mcp.json" "${dockerfile}"
+    grep -qF "jq -e '([\"build-dotnet\", \"cfwf\", \"kb\"] - (.mcpServers | keys)) == []' /etc/claude-code/managed-mcp.json" "${dockerfile}"
     grep -qF "jq -e '.mcpServers[\"build-dotnet\"] == {\"type\": \"stdio\", \"command\": \"/home/developer/.dotnet/tools/credfeto-build-dotnet\", \"env\": {\"BUILD_MCP_REPO_ROOT\": \"/workspace/repo\"}}' /etc/claude-code/managed-mcp.json" "${dockerfile}"
     grep -qF '[ -x /home/developer/.dotnet/tools/credfeto-build-dotnet ]' "${dockerfile}"
     grep -qF "jq -e '.permissions.allow | index(\"mcp__build-dotnet__*\")' /etc/claude-code/managed-settings.json" "${dockerfile}"
