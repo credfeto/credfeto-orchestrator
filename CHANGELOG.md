@@ -11,8 +11,8 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ## [Unreleased]
 ### Security
 ### Added
-- The `kb` knowledge-base MCP server is installed in the development-full agent image with its tools allowed as `mcp__kb__*`, and the image sanity check requires it and pins it exactly, alongside cfwf and build-dotnet; its token is an optional `KB_MCP_TOKEN` in `.env`, passed to each container as a per-container Podman secret and read only by a root-owned headers helper, so it is never written to the image or the managed MCP configuration (#1791)
-- `install-claude-hooks` installs the same `kb` MCP server on a developer machine, with its token taken from `KB_MCP_TOKEN` or a private `~/.config/kb-mcp/token` file, which is warned about when it is not private (#1791)
+- The `kb` knowledge-base MCP server is installed in the development-full agent image with its tools allowed as `mcp__kb__*`, and the image sanity check requires it and pins it exactly, alongside cfwf and build-dotnet; its token is an optional `KB_MCP_TOKEN` in `.env`, passed to each container as a per-container Podman secret and read only by a root-owned headers helper, so it is never written to the image or the managed MCP configuration, a malformed `KB_MCP_TOKEN` in `.env` is warned about and ignored on the host, and a shell-exported `KB_MCP_TOKEN` or Discord webhook URL is no longer left exported to host child processes (#1791)
+- `install-claude-hooks` installs the same `kb` MCP server on a developer machine, with its token taken from `KB_MCP_TOKEN` or a private `~/.config/kb-mcp/token` file, which is warned about when it is not private, a CRLF token file is accepted, a dangling token-file symlink is reported as not private, a host entry identical to a shipped server merges silently, and a left-out duplicate holding a literal secret is warned about (#1791)
 ### Fixed
 ### Changed
 ### Deprecated
