@@ -12,6 +12,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ### Security
 ### Added
 ### Fixed
+- The agent container's secret-file mask skips files git tracks (read once with `git ls-files -z`) and masks only untracked and ignored matches, logging one line with the tracked matches it left unmasked, so a committed placeholder such as `.database` no longer breaks every commit with `cannot hash`; if `git ls-files` fails every match is still masked. `.env.example` is never treated as secret by the mask or the block-secret-file-reads hook, wherever it is and whether or not it is tracked, while `.env.local` and other `.env.*` names stay masked and blocked (#1853)
 - The development-full image sanity check and the install-claude-hooks tests check only the required managed MCP servers: cfwf and build-dotnet must be present and correct, a kb server must follow cfwf's pattern when present, and any other server (such as the shipped rider and webstorm) is allowed and not checked, so adding a server no longer breaks the image build or the tests (#1850)
 ### Changed
 - SDK - Updated DotNet SDK to 11.0.100-rc.3.26522.148

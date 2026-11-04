@@ -65,8 +65,30 @@ run_tool() {
     assert_blocked "printf x > new.env"
 }
 
-@test "an example env file is blocked, since .env.* matches it" {
-    assert_blocked "cat .env.example"
+@test ".env.example is allowed wherever it is, and whether or not it exists" {
+    printf 'TOKEN=x\n' > "${ROOT}/.env.example"
+    printf 'TOKEN=x\n' > "${ROOT}/cfg/.env.example"
+    assert_allowed "cat .env.example"
+    assert_allowed "cat cfg/.env.example"
+    assert_allowed "cat ${ROOT}/cfg/.env.example"
+    assert_allowed "cat missing/.env.example"
+    assert_allowed "cp .env.example cfg/.env.example"
+}
+
+@test "other .env.* names are still blocked next to an allowed .env.example" {
+    printf 'TOKEN=x\n' > "${ROOT}/.env.example"
+    printf 'TOKEN=x\n' > "${ROOT}/.env.local"
+    assert_blocked "cat .env.local" "matches '.env.*'"
+    assert_blocked "cat .env.examples" "matches '.env.*'"
+    assert_blocked "cat .env.example.local" "matches '.env.*'"
+    assert_blocked "cp .env.example .env" "'.env' names"
+}
+
+@test "a .env.example symlink that resolves to a secret file is blocked" {
+    ln -s .env "${ROOT}/.env.example"
+    assert_blocked "cat .env.example" "'.env.example' names"
+    run_tool Read '{"file_path": ".env.example"}'
+    [ "${status}" -eq 2 ]
 }
 
 @test "a .database file is blocked and the message points at querydb" {
@@ -214,6 +236,18 @@ EOF"
     [ "${status}" -eq 0 ]
 }
 
+@test "file tools on .env.example are allowed and on .env.local are blocked" {
+    printf 'TOKEN=x\n' > "${ROOT}/.env.example"
+    run_tool Read '{"file_path": ".env.example"}'
+    [ "${status}" -eq 0 ]
+    run_tool Edit "{\"file_path\": \"${ROOT}/cfg/.env.example\"}"
+    [ "${status}" -eq 0 ]
+    run_tool Read '{"file_path": ".env.local"}'
+    [ "${status}" -eq 2 ]
+    run_tool Write '{"file_path": "cfg/.env.local", "content": "x"}'
+    [ "${status}" -eq 2 ]
+}
+
 @test "a file tool payload with no path fails closed" {
     run_tool Read '{}'
     [ "${status}" -eq 2 ]
@@ -232,6 +266,11 @@ EOF"
     printf '%s\n' '# local only' '' '  *.secret  ' > "${HOOK_DIR}/secret-files.local"
     assert_allowed "cat .env"
     assert_blocked "cat x.secret" "matches '*.secret'"
+}
+
+@test ".env.example is allowed even when secret-files.local names it" {
+    printf '.env.example\n' > "${HOOK_DIR}/secret-files.local"
+    assert_allowed "cat .env.example"
 }
 
 @test "a missing pattern list fails closed" {
