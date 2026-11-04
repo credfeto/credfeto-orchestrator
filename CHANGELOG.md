@@ -15,6 +15,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - `install-claude-hooks` installs the same `kb` MCP server on a developer machine, with its token taken from `KB_MCP_TOKEN` or a private `~/.config/kb-mcp/token` file, which is warned about when it is not private, the token file's first non-blank line is used with its surrounding whitespace trimmed, a dangling token-file symlink is reported as not private, a host entry identical to a shipped server merges silently, and a left-out duplicate holding a literal secret is warned about (#1791)
 ### Fixed
 - A per-container Podman secret (Claude OAuth, GH Enterprise token or kb token) left behind by a killed oneshot run is now removed on the next launch even when its token is no longer configured (#1791)
+- `cfwf pr edit`, `cfwf pr close` and `cfwf pr reopen` act on any pull request in the repository: the ownership refusal (only the agent's own, or a bot's whose commits were all the agent's) is gone, so a pull request a person opened, or a bot's one a person has pushed to, can have its title, body and priority set, the agent assigned, and be closed or reopened. The leak checks, the Conventional Commits title rule, the Security priority rule and the refusal of a merged pull request are unchanged, and neither the pull request's author nor its commits are read any more (#1845)
 ### Changed
 ### Deprecated
 ### Removed
