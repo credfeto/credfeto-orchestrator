@@ -1030,7 +1030,12 @@ run_precommit_precheck() {
         stop_ssh_agent() { return 0; }
         prepare_claude_container_args "Pre-commit pre-check (#1785): no agent session runs in this container." \
             "${owner_token}" "${container_name}" "${item_type}" "${item_id}"
-        PODMAN_RUN_ARGS+=(--env "ORCHESTRATOR_PRECHECK=1")
+        # CLAUDECODE=1 is the marker Claude Code sets for the agent's own shells (#1843). The
+        # global pre-commit hook skips its installation freshness check only for an AI agent in
+        # a container, so without it the pre-check failed whenever the hooks had released since
+        # the image was built, while the agent's own commits passed. The pre-check must run the
+        # hooks exactly as the agent's commits will, so it carries the same marker.
+        PODMAN_RUN_ARGS+=(--env "ORCHESTRATOR_PRECHECK=1" --env "CLAUDECODE=1")
         validate_bind_mounts
         info "Running pre-commit-check in container ${container_name} (limit ${PRECHECK_TIMEOUT_MINUTES} minutes)..." >&2
         run_exit=0

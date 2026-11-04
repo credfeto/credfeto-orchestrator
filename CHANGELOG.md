@@ -13,6 +13,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ### Added
 ### Fixed
 - The development-full image sanity check and the install-claude-hooks tests check only the required managed MCP servers: cfwf and build-dotnet must be present and correct, a kb server must follow cfwf's pattern when present, and any other server (such as the shipped rider and webstorm) is allowed and not checked, so adding a server no longer breaks the image build or the tests (#1850)
+- oneshot: the pre-commit pre-check runs with the agent marker (CLAUDECODE=1), so the global hook skips its installation freshness check as it does for the agent's own commits, and the pre-check no longer fails whenever the hooks have released since the image was built (#1843)
 ### Changed
 - SDK - Updated DotNet SDK to 11.0.100-rc.3.26522.148
 ### Deprecated
