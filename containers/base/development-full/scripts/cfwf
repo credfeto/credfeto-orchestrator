@@ -432,10 +432,10 @@ Commands:
   pr diff                  Print a PR's diff, its changed files or a per-file line count (exit 9 when not found)
   pr list                  List a repository's open pull requests, one line each
   pr create                Create a draft PR and put it on the Workflow board as Development (prints the existing one's URL if the branch has one)
-  pr edit                  Change the agent's own PR's title, body or priority, or assign the agent (exit 8 when refused, 9 when not found)
+  pr edit                  Change a PR's title, body or priority, or assign the agent (exit 8 when refused, 9 when not found)
   pr sync-labels           Add the labels of the issues a PR closes to it, never removing one, and optionally assign the agent
-  pr close                 Close the agent's own PR without merging it, with an optional comment first (exit 8 refused, 9 not found)
-  pr reopen                Reopen the agent's own closed PR, with an optional comment first (exit 8 refused, 9 not found)
+  pr close                 Close a PR without merging it, with an optional comment first (exit 8 refused, 9 not found)
+  pr reopen                Reopen a closed PR, with an optional comment first (exit 8 refused, 9 not found)
   pr block                 Post a question on a PR, then add Blocked, leaving the board as it is (exit 8 when refused)
   pr unblock               Humans only: post a comment, then remove Blocked, once the board is Approved or later (exit 8 refused, 10 agent)
   pr search                Search one repository's pull requests by words in their title or body, one line each
@@ -1916,8 +1916,8 @@ Run 'cfwf pr list --help' for pr list, which lists a repository's open pull requ
 Run 'cfwf pr diff --help' for pr diff, which prints a pull request's diff, changed files or line counts.
 Run 'cfwf pr create --help' for pr create, which creates a draft pull request on the Workflow board.
 Run 'cfwf pr edit --help' for pr edit, which changes a pull request's title, body or priority, or assigns the agent.
-Run 'cfwf pr close --help' for pr close, which closes the agent's own pull request without merging it.
-Run 'cfwf pr reopen --help' for pr reopen, which reopens the agent's own closed pull request.
+Run 'cfwf pr close --help' for pr close, which closes a pull request without merging it.
+Run 'cfwf pr reopen --help' for pr reopen, which reopens a closed pull request.
 Run 'cfwf pr block --help' for pr block, which posts a question on a pull request and adds Blocked.
 Run 'cfwf help pr unblock' for pr unblock, for humans only, which posts a comment on a pull request
 and removes Blocked.
@@ -2012,23 +2012,17 @@ labels have commands of their own (label add and label remove, which never chang
 
 Everything is checked before anything is written. The title and the body are checked for leaks
 first (see 'cfwf help body'): a refused one exits ${BODY_REFUSED_EXIT} with "cfwf: body refused: <rule>" or
-"cfwf: title refused: <rule>" on stderr, never naming the text that matched. Then the agent's login
-is read (gh api user), and so is the pull request, once, to check who owns it:
-  the agent's own        a pull request the agent opened can be edited
-  a bot's                one opened by a GitHub App, or by the account that opens the agent's pull
-                         requests (PR_CREATOR_LOGIN, default prpixie), can be edited only when every
-                         one of its commits is authored by the agent
-  anyone else's          is refused
-A refusal exits ${POLICY_REFUSED_EXIT} with "cfwf: edit refused: <rule>" on stderr, and nothing is written. A
-pull request with more commits than GitHub lists (250) cannot be checked, and is a runtime failure.
-The same read gives the pull request's labels. A --priority asked for on a pull request that
+"cfwf: title refused: <rule>" on stderr, never naming the text that matched. Any pull request in
+the repository can be edited, whoever opened it and whoever wrote its commits: there is no
+ownership rule. With --assign-self, the agent's login is read (gh api user). The pull request is
+read once, for its URL and its labels. A --priority asked for on a pull request that
 carries Security exits ${POLICY_REFUSED_EXIT} with "cfwf: priority refused: Security is never replaced by
 --priority". With a priority label to add, the repository's labels are read (gh label list). A
 pull request already as asked is not edited.
 
 Exit codes: 0 edited, or nothing to write; 1 a runtime failure, such as a gh or network error,
 prefixed "cfwf:"; 2 a usage error, an unknown --priority included; ${BODY_REFUSED_EXIT} the title or the body was
-refused by the leak check, the edit by the ownership rule, or the priority by the Security rule;
+refused by the leak check, or the priority by the Security rule;
 ${PR_NOT_FOUND_EXIT} the pull request does not exist (the number of an issue included).
 USAGE
 }
@@ -2158,8 +2152,9 @@ usage_pr_close() {
     cat << USAGE
 Usage: cfwf pr close --repo <owner/repo> --pr <n> [--body-file <file|->]
 
-Closes the agent's own pull request without merging it, then prints its URL and its new state. The
-head branch is kept: it is never deleted.
+Closes a pull request without merging it, then prints its URL and its new state. The head branch
+is kept: it is never deleted. Any pull request in the repository can be closed, whoever opened it
+and whoever wrote its commits: there is no ownership rule.
 
 --repo       Always required; never taken from the current directory.
 --pr         Always required: the pull request's number, above 0.
@@ -2173,9 +2168,6 @@ Everything is checked before anything is written: the body first, then the pull 
 (gh api repos/<repo>/pulls/<n>):
   merged            a merged pull request is refused
   already closed    is left alone, the comment included, and prints "<url> already closed"
-  ownership         the rule of 'cfwf pr edit': the agent's own pull request, or one opened by a bot
-                    or by the account that opens the agent's pull requests (PR_CREATOR_LOGIN,
-                    default prpixie) whose commits are all the agent's; anyone else's is refused
 A refusal exits ${POLICY_REFUSED_EXIT} with "cfwf: close refused: <rule>" (or "cfwf: body refused: <rule>") on stderr,
 and nothing is written.
 
@@ -2192,7 +2184,9 @@ usage_pr_reopen() {
     cat << USAGE
 Usage: cfwf pr reopen --repo <owner/repo> --pr <n> [--body-file <file|->]
 
-Reopens the agent's own closed pull request, then prints its URL and its new state.
+Reopens a closed pull request, then prints its URL and its new state. Any pull request in the
+repository can be reopened, whoever opened it and whoever wrote its commits: there is no ownership
+rule.
 
 --repo       Always required; never taken from the current directory.
 --pr         Always required: the pull request's number, above 0.
@@ -2200,8 +2194,8 @@ Reopens the agent's own closed pull request, then prints its URL and its new sta
              as for 'cfwf pr close'. There is no --body.
 
 The checks are those of 'cfwf pr close', in the same order: a merged pull request is refused (it
-cannot be reopened), one already open is left alone and prints "<url> already open", and anyone
-else's is refused, with "cfwf: reopen refused: <rule>".
+cannot be reopened), with "cfwf: reopen refused: <rule>", and one already open is left alone and
+prints "<url> already open".
 
 Output, one line: "<url> open", or "<url> already open".
 
@@ -5218,19 +5212,18 @@ issue_approve() {
 PR_STATE=""
 PR_MERGED=""
 
-# Reads PR of REPO for pr close and pr reopen in one REST read, setting what read_pull_request_for_edit
-# sets (EDIT_AUTHOR, EDIT_AUTHOR_TYPE, EDIT_URL and EDIT_COMMITS, so the ownership rule of pr edit can
-# judge it) and PR_STATE and PR_MERGED. A 404 is a pull request that is not there (the number of an
-# issue included) once the repository has been read and found; any other failure dies, and so does
-# an answer that is not this pull request's.
+# Reads PR of REPO for pr close and pr reopen in one REST read, setting EDIT_URL, PR_STATE and
+# PR_MERGED. A 404 is a pull request that is not there (the number of an issue included) once the
+# repository has been read and found; any other failure dies, and so does an answer that is not
+# this pull request's. Who opened it and who wrote its commits are not read: pr close and pr reopen
+# have no ownership rule.
 read_pull_request_for_state() {
     local end
     api_read "could not read ${REPO}#${PR}" "repos/${REPO}/pulls/${PR}" \
-        "${FIELDS_ROW_DEF} [.user.login, .user.type, .html_url, .commits, .state, .merged, \"end\"] | fields_row" \
+        "${FIELDS_ROW_DEF} [.html_url, .state, .merged, \"end\"] | fields_row" \
         || not_found_in_repository "${PR_NOT_FOUND_EXIT}" "the pull request ${REPO}#${PR} was not found"
-    IFS="${ROW_SEPARATOR}" read -r EDIT_AUTHOR EDIT_AUTHOR_TYPE EDIT_URL EDIT_COMMITS PR_STATE PR_MERGED end <<< "${GH_OUTPUT}"
-    if [ "${end}" != end ] || ! matches_pattern "${EDIT_AUTHOR}" "${LOGIN_PATTERN}" \
-        || ! matches_pattern "${EDIT_COMMITS}" '^[0-9]+$' \
+    IFS="${ROW_SEPARATOR}" read -r EDIT_URL PR_STATE PR_MERGED end <<< "${GH_OUTPUT}"
+    if [ "${end}" != end ] \
         || ! matches_pattern "${EDIT_URL}" "${REPOSITORY_URL_PATTERN}/pull/${PR}\$" \
         || ! is_one_of "${PR_STATE}" open closed || ! is_one_of "${PR_MERGED}" true false; then
         die "gh returned an unexpected result for ${REPO}#${PR}"
@@ -5240,8 +5233,8 @@ read_pull_request_for_state() {
 # Moves PR of REPO to the state $1 (closed or open) with gh pr $2 (close or reopen), posting the body
 # first when one is given. Everything is checked before anything is written: the body, then the
 # pull request, read once. A merged pull request is refused; one already in that state is left
-# alone, the comment included; then the ownership rule of pr edit, which reads the agent's login. gh
-# pr close is run without --delete-branch, and closing never merges.
+# alone, the comment included. Any other pull request is moved, whoever opened it and whoever wrote
+# its commits. gh pr close is run without --delete-branch, and closing never merges.
 pr_set_state() {
     local wanted="$1" verb="$2"
     shift 2
@@ -5257,9 +5250,6 @@ pr_set_state() {
         printf '%s already %s\n' "${EDIT_URL}" "${wanted}"
         return 0
     fi
-    OWNERSHIP_SUBJECT="${verb}"
-    read_agent_login
-    check_edit_ownership
 
     [ -z "${BODY_FILE}" ] || post_state_comment pr "${PR}"
     gh_capture pr "${verb}" "${PR}" --repo "${REPO}" < /dev/null \
@@ -7887,17 +7877,11 @@ pr_review_comment() {
     post_review_comment
 }
 
-# pr edit: whether --assign-self was given, the agent's login, and the pull request as read for the
-# ownership check (its author, the author's type, its URL and its number of commits).
+# pr edit: whether --assign-self was given and the agent's login. The URL of the pull request as
+# read (pr edit, pr close and pr reopen).
 ASSIGN_SELF=""
 AGENT_LOGIN=""
-EDIT_AUTHOR=""
-EDIT_AUTHOR_TYPE=""
 EDIT_URL=""
-EDIT_COMMITS=""
-# The most commits GitHub lists for a pull request ("a maximum of 250 commits", in the REST reference
-# for "List commits on a pull request"), so the authors of one with more cannot all be checked.
-readonly PR_COMMITS_LIMIT=250
 
 assign_pr_edit_option() {
     local flag="$1" value="${2:-}"
@@ -7922,10 +7906,6 @@ assign_self_option() {
     ASSIGN_SELF=1
 }
 
-# What an ownership refusal names (cfwf: <subject> refused: <rule>): the command's own verb, edit for
-# pr edit, close and reopen for pr close and pr reopen.
-OWNERSHIP_SUBJECT=edit
-
 # Prints, lower-cased, the login of the account that opens the pull requests for the agent's work:
 # PR_CREATOR_LOGIN, as the orchestrator names it, or prpixie (the orchestrator's own default) when
 # it is unset or is not a login.
@@ -7935,22 +7915,21 @@ pr_creator_login() {
     printf '%s\n' "${login,,}"
 }
 
-# Reads PR of REPO for pr edit in one REST read, setting EDIT_AUTHOR, EDIT_AUTHOR_TYPE, EDIT_URL,
-# EDIT_COMMITS and EDIT_LABELS. A 404 is a pull request that is not there (the number of an issue
-# included) once the repository has been read and found; any other failure dies. The answer is
-# refused unless the author is a login, the number of commits is a number, the URL is this pull
-# request's and as many labels came as it says it has.
+# Reads PR of REPO for pr edit in one REST read, setting EDIT_URL and EDIT_LABELS. A 404 is a pull
+# request that is not there (the number of an issue included) once the repository has been read and
+# found; any other failure dies. The answer is refused unless the URL is this pull request's and as
+# many labels came as it says it has. Who opened it and who wrote its commits are not read: pr edit
+# has no ownership rule.
 read_pull_request_for_edit() {
     local end count row tag name
     local -a rows
     api_read "could not read ${REPO}#${PR}" "repos/${REPO}/pulls/${PR}" \
-        "${FIELDS_ROW_DEF} ([.user.login, .user.type, .html_url, .commits, (.labels // [] | length), \"end\"] | fields_row),
+        "${FIELDS_ROW_DEF} ([.html_url, (.labels // [] | length), \"end\"] | fields_row),
          ((.labels // [])[] | [\"label\", .name, \"end\"] | fields_row)" \
         || not_found_in_repository "${PR_NOT_FOUND_EXIT}" "the pull request ${REPO}#${PR} was not found"
     mapfile -t rows <<< "${GH_OUTPUT}"
-    IFS="${ROW_SEPARATOR}" read -r EDIT_AUTHOR EDIT_AUTHOR_TYPE EDIT_URL EDIT_COMMITS count end <<< "${rows[0]}"
-    if [ "${end}" != end ] || ! matches_pattern "${EDIT_AUTHOR}" "${LOGIN_PATTERN}" \
-        || ! matches_pattern "${EDIT_COMMITS}" '^[0-9]+$' \
+    IFS="${ROW_SEPARATOR}" read -r EDIT_URL count end <<< "${rows[0]}"
+    if [ "${end}" != end ] \
         || ! matches_pattern "${EDIT_URL}" "${REPOSITORY_URL_PATTERN}/pull/${PR}\$" \
         || ! matches_pattern "${count}" '^[0-9]+$' || [ "$((${#rows[@]} - 1))" -ne "${count}" ]; then
         die "gh returned an unexpected result for ${REPO}#${PR}"
@@ -7962,42 +7941,6 @@ read_pull_request_for_edit() {
             || die "gh returned an unexpected result for ${REPO}#${PR}"
         EDIT_LABELS+=("${name}")
     done
-}
-
-# Refuses (exit POLICY_REFUSED_EXIT) the edit unless every commit of PR is authored by the agent
-# (AGENT_LOGIN, compared without regard to case, as GitHub compares logins). A commit whose author
-# has no login (an email GitHub does not know) is not the agent's. Every page is read, and the
-# commits listed must be as many as the pull request has: GitHub lists at most PR_COMMITS_LIMIT, so
-# one with more is a runtime failure, never judged on part of its commits.
-require_all_commits_by_agent() {
-    local LC_ALL=C login listed=0 own=0
-    local -a logins=()
-    [ "${EDIT_COMMITS}" -le "${PR_COMMITS_LIMIT}" ] \
-        || die "${REPO}#${PR} has more than ${PR_COMMITS_LIMIT} commits, so their authors cannot all be checked"
-    api_read "could not read the commits of ${REPO}#${PR}" "repos/${REPO}/pulls/${PR}/commits?per_page=${API_PAGE_SIZE}" \
-        '.[] | (.author.login // "-")' --paginate || die "could not read the commits of ${REPO}#${PR}"
-    [ -z "${GH_OUTPUT}" ] || mapfile -t logins <<< "${GH_OUTPUT}"
-    for login in "${logins[@]}"; do
-        listed=$((listed + 1))
-        [ "${login,,}" != "${AGENT_LOGIN,,}" ] || own=$((own + 1))
-    done
-    [ "${listed}" -eq "${EDIT_COMMITS}" ] \
-        || die "gh listed ${listed} commits for ${REPO}#${PR}, which has ${EDIT_COMMITS}"
-    [ "${own}" -gt 0 ] || refuse_policy "${OWNERSHIP_SUBJECT}" "the pull request has no commit by the agent"
-    [ "${own}" -eq "${listed}" ] || refuse_policy "${OWNERSHIP_SUBJECT}" "the pull request has commits by another author"
-}
-
-# Refuses (exit POLICY_REFUSED_EXIT) an edit of a pull request the agent does not own: one opened by
-# the agent is its own; one opened by a bot (a GitHub App, or the account that opens the agent's
-# pull requests) is its own only when all of its commits are the agent's; any other is someone
-# else's.
-check_edit_ownership() {
-    local LC_ALL=C
-    [ "${EDIT_AUTHOR,,}" != "${AGENT_LOGIN,,}" ] || return 0
-    if [ "${EDIT_AUTHOR_TYPE}" != Bot ] && [ "${EDIT_AUTHOR,,}" != "$(pr_creator_login)" ]; then
-        refuse_policy "${OWNERSHIP_SUBJECT}" "the pull request was opened by someone other than the agent"
-    fi
-    require_all_commits_by_agent
 }
 
 # --priority of pr edit and issue edit: the labels the item carries as read before any write, the
@@ -8078,9 +8021,8 @@ pr_edit() {
     [ -z "${BODY_FILE}" ] || resolve_body
     [ -z "${TITLE}" ] || check_value_for_leaks "${TITLE}" "${REPO}" title
 
-    read_agent_login
+    [ -z "${ASSIGN_SELF}" ] || read_agent_login
     read_pull_request_for_edit
-    check_edit_ownership
     plan_priority_change
 
     EDIT_ARGS=(pr edit "${PR}" --repo "${REPO}")
