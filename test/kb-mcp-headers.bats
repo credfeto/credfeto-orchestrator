@@ -114,6 +114,16 @@ write_token_file() {
     [[ "${stderr}" == *'must be a regular file owned by you with mode 0600'* ]]
 }
 
+@test "a token file that is a dangling symlink is refused as not private, not as missing" {
+    mkdir -p "${TOKEN_FILE%/*}"
+    ln -s "${TEST_TMP}/no-such-target" "${TOKEN_FILE}"
+    run_helper
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == *'must be a regular file owned by you with mode 0600'* ]]
+    [[ "${stderr}" != *'no kb token'* ]]
+}
+
 @test "the output is one JSON object holding only an Authorization header" {
     run_helper KB_MCP_TOKEN=kb_direct
     [ "${status}" -eq 0 ]

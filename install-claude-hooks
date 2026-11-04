@@ -366,7 +366,7 @@ warn_if_no_allowed_dirs_override() {
 warn_if_no_kb_token() {
     local token_file="${XDG_CONFIG_HOME:-${HOME}/.config}/kb-mcp/token"
     [ -n "${KB_MCP_TOKEN:-}" ] && return 0
-    if [ -e "${token_file}" ]; then
+    if [ -e "${token_file}" ] || [ -L "${token_file}" ]; then
         [ -n "$(find "${token_file}" -prune -type f -user "$(id -u)" -perm 600 2>/dev/null)" ] && return 0
         info "kb MCP token file ${token_file} is not private - kb-mcp-headers refuses it until it is a regular file owned by you with mode 0600"
         return 0

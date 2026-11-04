@@ -564,6 +564,17 @@ expected_mcp_names() {
     [[ "${output}" != *'kb_file_secret'* ]]
 }
 
+@test "a kb token file that is a dangling symlink gives the not-private note, not the no-token note" {
+    allow_sudo
+    unset KB_MCP_TOKEN
+    mkdir -p "${XDG_CONFIG_HOME}/kb-mcp"
+    ln -s "${TEST_TMP}/no-such-token" "${XDG_CONFIG_HOME}/kb-mcp/token"
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(grep -c "kb MCP token file ${XDG_CONFIG_HOME}/kb-mcp/token is not private" <<<"${output}")" -eq 1 ]
+    [[ "${output}" != *'No kb MCP token found'* ]]
+}
+
 # Prints the find predicate (everything after the "${token_file}" argument) from each code line
 # of the given file that tests the kb token file's privacy, skipping comment lines so prose that
 # quotes the test cannot stand in for the code.
