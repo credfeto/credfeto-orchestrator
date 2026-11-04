@@ -12,6 +12,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ### Security
 ### Added
 ### Fixed
+- oneshot: the pre-commit pre-check runs with the agent marker (CLAUDECODE=1), so the global hook skips its installation freshness check as it does for the agent's own commits, and the pre-check no longer fails whenever the hooks have released since the image was built (#1843)
 ### Changed
 ### Deprecated
 ### Removed
