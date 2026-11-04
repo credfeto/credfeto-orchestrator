@@ -97,6 +97,11 @@ setup_isolated_env() {
     # confirmed to actually create files under the real $HOME/.cache/orchestrator/ before
     # this unset was added.
     unset XDG_CACHE_HOME
+    # The GitHub health gate (lib/github-health) reads githubstatus.com at the start of every
+    # main() run. Point it at a local "no incidents" fixture so no test reaches the network and
+    # every main() test sees a healthy GitHub unless it says otherwise.
+    printf '%s' '{"incidents":[]}' >"${TEST_TMP}/github-status-healthy.json"
+    export GITHUB_STATUS_URL="file://${TEST_TMP}/github-status-healthy.json"
 }
 
 # Sources the oneshot script so its functions are defined without running main.

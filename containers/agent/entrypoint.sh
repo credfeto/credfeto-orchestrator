@@ -140,7 +140,7 @@ verify_ssh_signing() {
         die "SSH agent offered too many keys to GitHub before trying the right one (exceeds GitHub's auth-attempt limit) — reduce the keys loaded in the agent, or use 'IdentitiesOnly=yes' with an explicit IdentityFile: ${github_auth}"
     fi
     if printf '%s' "${github_auth}" | grep -qiE 'permission denied|denied \(publickey\)'; then
-        die "SSH key is not authorized to access GitHub — register the public key at https://github.com/settings/keys"
+        die "SSH key is not authorized to access GitHub — this can also be a GitHub Git Operations outage, when GitHub refuses git over SSH for keys that are fine: check https://www.githubstatus.com before re-registering the public key at https://github.com/settings/keys"
     fi
     # Deliberately no specific cause claimed here (e.g. "network failure") — this branch
     # also covers non-network failures such as host-key verification, and the raw ssh
