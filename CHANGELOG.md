@@ -10,6 +10,19 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 
 ## [Unreleased]
 ### Security
+### Added
+### Fixed
+### Changed
+### Deprecated
+### Removed
+### Deployment Changes
+
+<!--
+Releases that have at least been deployed to staging, BUT NOT necessarily released to live.  Changes should be moved from [Unreleased] into here as they are merged into the appropriate release branch
+-->
+
+## [0.0.7] - 2026-11-04
+### Security
 - `cfwf workflow-status --set --status Approved` is refused in an AI agent session (CLAUDECODE=1) with exit 10, before any gh call: only a human moves an item to Approved (#1608)
 - Redact every token form cfwf refuses (sk-proj-, discordapp.com webhooks, Bearer, AWS key IDs, Slack, sk-ant) in notify-unit-failure and lib/discord using a shared pattern list - #1616
 - The enforce-allowed-dirs hook now checks that the script given to node resolves under .github/actions and denies node options that load code from outside the script (such as --require, --import, --loader and --inspect), and the Bash(node *..*) deny rule is removed from claude-managed-settings.json now that the hook covers node paths - #1540
@@ -91,13 +104,6 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - test/oneshot.bats is split into 17 per-concern test/oneshot-<concern>.bats files with the shared setup, teardown and fixture helpers in test/oneshot_helper.bash, so bats can run them in parallel; no test is added, removed or changed (#1579)
 - Five slow bats tests no longer wait on avoidable delays: the real retry sleep in a count_pr_comments_matching test, real gh calls in two notify_discord_work_item waiting-latch tests, a per-guide rescan of every script in the development-guides check, and 20 read-backs in a project_status_convert mismatch test; no assertion is changed (#1580)
 - Dependencies - Updated trufflehog to 3.99.8
-### Deprecated
-### Removed
-### Deployment Changes
-
-<!--
-Releases that have at least been deployed to staging, BUT NOT necessarily released to live.  Changes should be moved from [Unreleased] into here as they are merged into the appropriate release branch
--->
 
 ## [0.0.6] - 2026-10-26
 ### Security
