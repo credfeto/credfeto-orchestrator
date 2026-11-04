@@ -1535,17 +1535,33 @@ main() {
                 apply_blocked_label_with_reason "${item_type}" "${item_id}" "${item_repo}" "${infra_block_reason}"
                 count_blocked=$((count_blocked + 1))
                 item_status_log+=("$(record_item_status "${item_type}" "${item_id}" "${item_repo}" "agent container failed ${new_infra_failures} times in a row before Claude could even start - marking Blocked")")
-                continue
+            else
+                warn "${item_type} #${item_id} in ${item_repo}: agent container failed before Claude started (pre-flight/infra failure, ${new_infra_failures}/${MAX_CONSECUTIVE_INFRA_FAILURES}) — not counted against the invocation budget"
+                count_error=$((count_error + 1))
+                # Deliberately omits new_infra_failures/MAX_CONSECUTIVE_INFRA_FAILURES from the
+                # recorded reason (unlike the warn line above): this site recurs every tick while
+                # below the threshold, so a strictly-increasing counter baked into the Discord
+                # breakdown text would change notify_discord_no_work's dedup hash every tick,
+                # defeating the documented at-most-once-per-hour suppression for a situation that
+                # has not actually changed in kind (#1291 review).
+                item_status_log+=("$(record_item_status "${item_type}" "${item_id}" "${item_repo}" "agent container failed before Claude started (pre-flight/infra failure) - not counted against the invocation budget")")
             fi
-            warn "${item_type} #${item_id} in ${item_repo}: agent container failed before Claude started (pre-flight/infra failure, ${new_infra_failures}/${MAX_CONSECUTIVE_INFRA_FAILURES}) — not counted against the invocation budget"
-            count_error=$((count_error + 1))
-            # Deliberately omits new_infra_failures/MAX_CONSECUTIVE_INFRA_FAILURES from the
-            # recorded reason (unlike the warn line above): this site recurs every tick while
-            # below the threshold, so a strictly-increasing counter baked into the Discord
-            # breakdown text would change notify_discord_no_work's dedup hash every tick,
-            # defeating the documented at-most-once-per-hour suppression for a situation that
-            # has not actually changed in kind (#1291 review).
-            item_status_log+=("$(record_item_status "${item_type}" "${item_id}" "${item_repo}" "agent container failed before Claude started (pre-flight/infra failure) - not counted against the invocation budget")")
+            # The second guard of the GitHub health gate (#1846). githubstatus.com often reports an
+            # outage late, and meanwhile GitHub refuses git over SSH for keys that are fine, so
+            # every further item this tick would fail the same pre-flight. Stop picking items and
+            # exit 0, as the gate itself does, so the unit does not record a failure for what is
+            # most likely GitHub's. The item's infra-failure counter above still advances, so a key
+            # that really is refused is still Blocked after MAX_CONSECUTIVE_INFRA_FAILURES ticks.
+            # An earlier item that failed pre-flight for another reason this tick keeps the
+            # non-zero exit (#1361).
+            if [ "${PREFLIGHT_GITHUB_SSH_AUTH_FAILED:-0}" = "1" ]; then
+                warn "pre-flight git SSH auth failed — treating as a likely GitHub outage, skipping the rest of this tick"
+                if [ "${count_infra_failure}" -gt 1 ]; then
+                    warn "$((count_infra_failure - 1)) earlier item(s) had an agent container fail before Claude started — exiting non-zero so the unit's OnFailure= handler reports it"
+                    return 1
+                fi
+                exit 0
+            fi
             continue
         fi
         # No other invoke_claude_exit value is reachable here: invoke_claude either dies

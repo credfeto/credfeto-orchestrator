@@ -20,6 +20,12 @@ GITHUB_STATUS_URL="${GITHUB_STATUS_URL:-https://www.githubstatus.com/api/v2/inci
 # of them skips the tick. Incidents on other components (Codespaces, Copilot, Actions and so on) do not.
 # shellcheck disable=SC2034  # read by lib/github-health after sourcing
 GITHUB_HEALTH_COMPONENTS=("Git Operations" "Pull Requests" "Issues" "API Requests" "Webhooks")
+# The start of the agent entrypoint's pre-flight message when GitHub refuses the SSH key
+# (containers/agent/entrypoint.sh, verify_ssh_signing). run_claude_fresh (lib/podman) looks for it
+# in a failed container's stderr; during an outage GitHub refuses keys that are fine, so oneshot
+# treats it as a likely GitHub outage and skips the rest of the tick (#1846).
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
+PREFLIGHT_GITHUB_SSH_AUTH_TEXT="SSH key is not authorized to access GitHub"
 # shellcheck disable=SC2034  # read by lib/core and lib/git after sourcing
 WORK="${XDG_PROJECTS_DIR:-${HOME}/work}"
 # Base directory for mutable runtime state (session/fingerprint files, per-owner rate-limit

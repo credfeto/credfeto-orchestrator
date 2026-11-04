@@ -872,6 +872,53 @@ STUBEOF
     [ "${status}" -eq 2 ]
 }
 
+@test "invoke_claude flags a pre-flight failure on GitHub SSH auth (#1846)" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+if [ "$1" = "run" ]; then
+    printf '✗ SSH key is not authorized to access GitHub — this can also be a GitHub Git Operations outage\n' >&2
+    exit 1
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    local rc=0
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2> /dev/null || rc=$?
+    [ "${rc}" -eq 2 ]
+    [ "${PREFLIGHT_GITHUB_SSH_AUTH_FAILED}" = "1" ]
+}
+
+@test "invoke_claude clears the GitHub SSH-auth flag for any other pre-flight failure (#1846)" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+if [ "$1" = "run" ]; then
+    printf '✗ Repo checkout contains /workspace/repo/.claude/settings.json — refusing to grant workspace trust\n' >&2
+    exit 1
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    # Left over from an earlier item's failure: each launch must reset it.
+    PREFLIGHT_GITHUB_SSH_AUTH_FAILED=1
+    local rc=0
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2> /dev/null || rc=$?
+    [ "${rc}" -eq 2 ]
+    [ "${PREFLIGHT_GITHUB_SSH_AUTH_FAILED}" = "0" ]
+}
+
+@test "PREFLIGHT_GITHUB_SSH_AUTH_TEXT matches the agent entrypoint's SSH-auth pre-flight message (#1846)" {
+    [ -n "${PREFLIGHT_GITHUB_SSH_AUTH_TEXT}" ]
+    grep -qF -- "die \"${PREFLIGHT_GITHUB_SSH_AUTH_TEXT}" "${BATS_TEST_DIRNAME}/../containers/agent/entrypoint.sh"
+}
+
 @test "invoke_claude removes the Claude OAuth podman secret when the container fails before Claude produces any result (#1133 review)" {
     local secret_log="${TEST_TMP}/podman_secret"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
