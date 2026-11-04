@@ -16,6 +16,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ### Fixed
 - A per-container Podman secret (Claude OAuth, GH Enterprise token or kb token) left behind by a killed oneshot run is now removed on the next launch even when its token is no longer configured (#1791)
 - `cfwf pr edit`, `cfwf pr close` and `cfwf pr reopen` act on any pull request in the repository: the ownership refusal (only the agent's own, or a bot's whose commits were all the agent's) is gone, so a pull request a person opened, or a bot's one a person has pushed to, can have its title, body and priority set, the agent assigned, and be closed or reopened. The leak checks, the Conventional Commits title rule, the Security priority rule and the refusal of a merged pull request are unchanged, and neither the pull request's author nor its commits are read any more (#1845)
+- oneshot: the pre-commit pre-check runs with the agent marker (CLAUDECODE=1), so the global hook skips its installation freshness check as it does for the agent's own commits, and the pre-check no longer fails whenever the hooks have released since the image was built (#1843)
 ### Changed
 ### Deprecated
 ### Removed
