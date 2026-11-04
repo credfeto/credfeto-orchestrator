@@ -1,12 +1,12 @@
 # The lib/ function libraries
 
-Thirteen of the sourced-only files in `lib/` hold all the logic that `oneshot` runs (it sources all thirteen); `loop` sources only `lib/core`, `setup-owner` and `teardown-owner` source `lib/core` and the fourteenth file, `lib/systemd-units`, and `create-project` sources `lib/core` and `lib/project-status`.
+Fourteen of the sourced-only files in `lib/` hold all the logic that `oneshot` runs (it sources all fourteen); `loop` sources only `lib/core`, `setup-owner` and `teardown-owner` source `lib/core` and the fifteenth file, `lib/systemd-units`, and `create-project` sources `lib/core` and `lib/project-status`.
 
 Back to the [development guide](README.md).
 
 ## How the libraries are loaded
 
-`oneshot` resolves its own directory from `${BASH_SOURCE[0]}` (never `$0`, which is the bats runner when a test sources it) and sources the libraries in this fixed order: `globals`, `core`, `git`, `github`, `github-status`, `fingerprints`, `state`, `prompts`, `project-status`, `workflow-board`, `secret-patterns`, `discord`, `podman`. Each `source` line carries a `# shellcheck source=lib/x disable=SC1091` directive and a dependency-free failure fallback that prints `FATAL: failed to source` and exits 1. The fallback cannot call `die`, because `die` lives in `lib/core` and may not have loaded.
+`oneshot` resolves its own directory from `${BASH_SOURCE[0]}` (never `$0`, which is the bats runner when a test sources it) and sources the libraries in this fixed order: `globals`, `core`, `git`, `github`, `github-status`, `github-health`, `fingerprints`, `state`, `prompts`, `project-status`, `workflow-board`, `secret-patterns`, `discord`, `podman`. Each `source` line carries a `# shellcheck source=lib/x disable=SC1091` directive and a dependency-free failure fallback that prints `FATAL: failed to source` and exits 1. The fallback cannot call `die`, because `die` lives in `lib/core` and may not have loaded.
 
 Before sourcing `lib/globals`, the top-level script (`oneshot`) sets `BASEDIR` to that directory. A `lib/` file never works out where it is itself (no `BASH_SOURCE` in a library); one that needs a path in the tree builds it from `BASEDIR`, as `lib/globals` does for `CFWF_SCRIPT`, and `lib/globals` stops with a message if `BASEDIR` is not set.
 
@@ -45,6 +45,10 @@ Pure predicates over already-fetched JSON (`pr_json_is_terminal`, `pr_json_has_p
 - Idle accounting: `pr_session_progress_reason` decides whether a no-change session is left uncharged: the board moved or a new head commit (the agent's progress), or a non-orchestrator trusted comment arrived during the session (not the agent's progress; it stays unaddressed for the next run, and resetting the idle count keeps that run from being parked). `pr_next_phase_for_board_status` names the phase an unchanged PR should run from its board status, and `plan_unchanged_pr_reinvocation` uses it to hand the agent that phase. It names none for an unknown status or for Complete, and the PR is then invoked without one, as every unchanged PR was before the board was consulted: board sync raises a PR's card to its linked issues' highest status, so Complete on an open PR does not mean its own work is done. `block_pr_for_idle_exhausted_no_progress` also takes `pr_json` from `oneshot` and, when the repository has a board, adds the PR's board status and the phase `pr_next_phase_for_board_status` names for it to the Blocked reason, so a human can see where the review loop stalled (#1650).
 
 Depends on: `core`, `discord`, `fingerprints`, `prompts`, `state`, `workflow-board`.
+
+### github-health
+
+The GitHub health gate (#1846). `github_incident_open` reads githubstatus.com's unresolved incidents from `GITHUB_STATUS_URL` (lib/globals; default `https://www.githubstatus.com/api/v2/incidents/unresolved.json`, overridable from the environment, and set by `setup_isolated_env` to a `file://` fixture with no incidents so tests never reach the network) with `curl --connect-timeout 5 --max-time 10`. It returns 0 and prints `<name><TAB><created_at>` for the first incident whose components include one of `GITHUB_HEALTH_COMPONENTS` (Git Operations, Pull Requests, Issues, API Requests, Webhooks), 1 when no such incident is open (incidents only on other components, such as Codespaces or Copilot, do not count), and 2 when the lookup failed: curl failed or timed out, or the body is not an object with an `incidents` array. `oneshot` calls it once a tick, after the lock and the digest rollover and before `resolve_gh_me` and the priorities fetch; on 0 it logs one line and exits 0, on 2 it warns and carries on (fail open). Depends on nothing outside `globals`.
 
 ### fingerprints
 

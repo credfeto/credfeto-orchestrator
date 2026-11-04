@@ -477,6 +477,10 @@ STUBEOF
         bash "${ENTRYPOINT}"
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"SSH key is not authorized to access GitHub"* ]]
+    # A Git Operations outage rejects good keys the same way (#1846), so the message names it and
+    # sends the reader to githubstatus.com before re-registering the key.
+    [[ "${output}" == *"GitHub Git Operations outage"* ]]
+    [[ "${output}" == *"check https://www.githubstatus.com before re-registering the public key"* ]]
 }
 
 @test "entrypoint dies with a generic SSH-failure message (not a misdiagnosed auth failure, and not an assumed cause) when GitHub is unreachable over SSH (#1099 review)" {
