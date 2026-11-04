@@ -184,7 +184,8 @@ install_managed_files() {
 #   merged      the managed-mcp.json to install
 #   duplicates  host servers left out because their URL is a shipped http
 #               server's, which replaces them, keyed by that shipped server's
-#               name
+#               name; one with that server's own name and definition is the
+#               same server, so it is merged silently instead
 #   refused     host servers left out because they may hold a secret: a headers
 #               or env value holds literal text rather than only ${VAR}
 #               references (an optional Bearer/Basic/Token scheme word is
@@ -243,7 +244,9 @@ merge_host_mcp_servers() {
         | ($shipped | map(select(.value.type == "http" and (.value.url | type == "string")))) as $shipped_http
         | [($host | objects | .mcpServers // {} | objects | to_entries[]),
            ($host | objects | .projects // {} | objects | .[] | objects | .mcpServers // {} | objects | to_entries[])]
-        | map(select(.value | type == "object")) as $hosted
+        # A host entry with the name and definition of a shipped server is that
+        # server, already kept, so it is neither a duplicate nor refused.
+        | (map(select(.value | type == "object")) - $shipped) as $hosted
         # Matched by URL once, so the servers left out and the servers named
         # in the report cannot drift apart; a host server matching no shipped
         # server yields nothing from first() and so drops out of the list.
