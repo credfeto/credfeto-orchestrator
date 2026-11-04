@@ -13,6 +13,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ### Added
 ### Fixed
 - The development-full image sanity check and the install-claude-hooks tests check only the required managed MCP servers: cfwf and build-dotnet must be present and correct, a kb server must follow cfwf's pattern when present, and any other server (such as the shipped rider and webstorm) is allowed and not checked, so adding a server no longer breaks the image build or the tests (#1850)
+- `cfwf pr edit`, `cfwf pr close` and `cfwf pr reopen` act on any pull request in the repository: the ownership refusal (only the agent's own, or a bot's whose commits were all the agent's) is gone, so a pull request a person opened, or a bot's one a person has pushed to, can have its title, body and priority set, the agent assigned, and be closed or reopened. The leak checks, the Conventional Commits title rule, the Security priority rule and the refusal of a merged pull request are unchanged, and neither the pull request's author nor its commits are read any more (#1845)
 ### Changed
 - SDK - Updated DotNet SDK to 11.0.100-rc.3.26522.148
 ### Deprecated
