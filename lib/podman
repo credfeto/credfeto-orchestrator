@@ -697,14 +697,20 @@ add_gpg_podman_args() {
     PODMAN_RUN_ARGS+=( --volume "${extra_socket}:/home/developer/.gnupg/S.gpg-agent:ro" )
 }
 
-# Appends a read-only /dev/null mount over every regular file under REPO_WORK_DIR whose basename
-# matches a pattern in the secret-files list (secret-files.local takes precedence when present), so
-# the agent reads an empty file even through a command the block-secret-file-reads hook cannot see
-# through. Dies when the list is missing or empty: starting the container without the mask would
-# silently expose every secret in the repository.
+# Appends a read-only /dev/null mount over every untracked regular file under REPO_WORK_DIR whose
+# basename matches a pattern in the secret-files list (secret-files.local takes precedence when
+# present), so the agent reads an empty file even through a command the block-secret-file-reads hook
+# cannot see through. A file git tracks is left alone: its content is already in the repository and
+# its history, so masking it hides nothing, and git inside the container would see a character device
+# in its place and fail every commit ("cannot hash"). Untracked and ignored matches are masked. When
+# git ls-files fails, every match is masked, tracked or not (fail closed). A file named in
+# SECRET_FILES_NEVER_SECRET (.env.example) is never masked, wherever it is. Dies when the list is
+# missing or empty: starting the container without the mask would silently expose every secret in
+# the repository.
 add_secret_mask_podman_args() {
-    local file="${SECRET_FILES_DIR}/secret-files" line f rel base pat
-    local -a patterns=() masked=()
+    local file="${SECRET_FILES_DIR}/secret-files" line f rel base pat tracked_list
+    local -a patterns=() candidates=() masked=() unmasked=()
+    local -A tracked=()
     [ -f "${SECRET_FILES_DIR}/secret-files.local" ] && file="${SECRET_FILES_DIR}/secret-files.local"
     [ -r "${file}" ] || die "Secret file pattern list ${file} is missing or unreadable"
     while IFS= read -r line || [ -n "${line}" ]; do
@@ -717,18 +723,49 @@ add_secret_mask_podman_args() {
 
     while IFS= read -r -d '' f; do
         base="${f##*/}"
+        is_never_secret_file "${base}" && continue
         for pat in "${patterns[@]}"; do
             # shellcheck disable=SC2053  # the pattern is deliberately unquoted so it matches as a glob
             if [[ ${base} == ${pat} ]]; then
-                rel="${f#"${REPO_WORK_DIR}/"}"
-                PODMAN_RUN_ARGS+=( --volume "/dev/null:${CONTAINER_REPO_PATH}/${rel}:ro" )
-                masked+=( "${rel}" )
+                candidates+=( "${f#"${REPO_WORK_DIR}/"}" )
                 break
             fi
         done
     done < <(find "${REPO_WORK_DIR}" -name .git -prune -o -type f -print0)
+    [ "${#candidates[@]}" -gt 0 ] || return 0
+
+    # The tracked set is read once, through a file so a git failure is seen (a process substitution
+    # would hide its exit status). Paths are relative to REPO_WORK_DIR, like the candidates.
+    if tracked_list=$(mktemp) && git -C "${REPO_WORK_DIR}" ls-files -z > "${tracked_list}" 2> /dev/null; then
+        while IFS= read -r -d '' f; do
+            tracked["${f}"]=1
+        done < "${tracked_list}"
+    else
+        warn "git ls-files failed in ${REPO_WORK_DIR}; masking every secret-pattern file, tracked or not"
+    fi
+    [ -n "${tracked_list:-}" ] && rm -f "${tracked_list}"
+
+    for rel in "${candidates[@]}"; do
+        if [ -n "${tracked["${rel}"]+x}" ]; then
+            unmasked+=( "${rel}" )
+            continue
+        fi
+        PODMAN_RUN_ARGS+=( --volume "/dev/null:${CONTAINER_REPO_PATH}/${rel}:ro" )
+        masked+=( "${rel}" )
+    done
 
     [ "${#masked[@]}" -eq 0 ] || warn "Masking secret-bearing files in the agent container: ${masked[*]}"
+    [ "${#unmasked[@]}" -eq 0 ] || warn "Leaving tracked files that match a secret pattern unmasked (already in the repository): ${unmasked[*]}"
+}
+
+# True when the basename $1 is one SECRET_FILES_NEVER_SECRET names: a file that is never treated as
+# secret, whatever the patterns say.
+is_never_secret_file() {
+    local name
+    for name in "${SECRET_FILES_NEVER_SECRET[@]}"; do
+        [ "$1" = "${name}" ] && return 0
+    done
+    return 1
 }
 
 # Verify all --volume source paths in PODMAN_RUN_ARGS exist with the expected

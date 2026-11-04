@@ -111,11 +111,17 @@ The check is skipped silently when the `.env` file or its `SHA=` line is absent,
 unavailable, the remote is unreachable, or the remote returns something that is not a hex SHA.
 
 Secret-bearing files in the repository checkout are masked before the container starts. For
-every regular file under the repository whose name matches a pattern in
+every untracked or ignored regular file under the repository whose name matches a pattern in
 `claude-hooks/secret-files` (`.env`, `.env.*`, `*.env`, `.database`), the launcher adds a
 read-only bind mount of `/dev/null` over its path inside the container, so the agent sees an
 empty file in its place, and prints a warning listing the files it masked. The `.git`
-directory is skipped and symlinks are not followed. Inside the container, the
+directory is skipped and symlinks are not followed. A matching file that git tracks is not
+masked: its content is already in the repository and its history, and masking it would make
+git inside the container fail every commit (`cannot hash`). The tracked set is read once with
+`git ls-files -z`, and one line lists the tracked matches left unmasked. If `git ls-files`
+fails, every match is masked, tracked or not. `.env.example`, the conventional committed
+template, is never masked and the hook always allows it, wherever it is and whether or not it
+is tracked; every other `.env.*` name (such as `.env.local`) is still masked and blocked. Inside the container, the
 `block-secret-file-reads` hook is a second layer: it denies any `Bash`, `Read`, `Edit`, `Write`
 or `NotebookEdit` call that names a file matching the same patterns, including through a glob
 or a symlink. A tool inside the container that needs one of these files therefore sees it as
