@@ -1281,6 +1281,106 @@ STUBEOF
     [ "${INFRA_FAILURE_COUNT}" -eq 1 ]
 }
 
+@test "main skips the rest of the tick and exits 0 when pre-flight fails on GitHub SSH auth (#1846)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":11,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    local claude_log="${TEST_TMP}/claude_log"
+    invoke_claude() {
+        printf '%s\n' "$3" >> "${claude_log}"
+        PREFLIGHT_GITHUB_SSH_AUTH_FAILED=1
+        return 2
+    }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"pre-flight git SSH auth failed — treating as a likely GitHub outage, skipping the rest of this tick"* ]]
+    [[ "${output}" == *"not counted against the invocation budget"* ]]
+    [[ "${output}" != *"exiting non-zero"* ]]
+    # Only the first item was tried: the tick stopped picking items after it.
+    [ "$(cat "${claude_log}")" = "10" ]
+
+    load_issue_invocation_counts 10
+    [ "${ISSUE_INVOCATION_TOTAL}" -eq 0 ]
+    load_infra_failure_count "Issue" 10
+    [ "${INFRA_FAILURE_COUNT}" -eq 1 ]
+}
+
+@test "main carries on to the next item after a pre-flight failure that is not GitHub SSH auth (#1846)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":11,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    local claude_log="${TEST_TMP}/claude_log"
+    invoke_claude() {
+        printf '%s\n' "$3" >> "${claude_log}"
+        PREFLIGHT_GITHUB_SSH_AUTH_FAILED=0
+        return 2
+    }
+
+    run main
+    [ "${status}" -eq 1 ]
+    [[ "${output}" != *"pre-flight git SSH auth failed"* ]]
+    [[ "${output}" == *"2 item(s) had an agent container fail before Claude started — exiting non-zero"* ]]
+    [ "$(cat "${claude_log}")" = "$(printf '10\n11')" ]
+}
+
+@test "main still exits 1 when an earlier item failed pre-flight for another reason before a GitHub SSH-auth failure (#1846)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":11,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false},{"id":12,"itemType":"Issue","repository":"org/repo","priority":3,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    local claude_log="${TEST_TMP}/claude_log"
+    invoke_claude() {
+        printf '%s\n' "$3" >> "${claude_log}"
+        PREFLIGHT_GITHUB_SSH_AUTH_FAILED=0
+        if [ "$3" = "11" ]; then
+            PREFLIGHT_GITHUB_SSH_AUTH_FAILED=1
+        fi
+        return 2
+    }
+
+    run main
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"pre-flight git SSH auth failed — treating as a likely GitHub outage, skipping the rest of this tick"* ]]
+    [[ "${output}" == *"1 earlier item(s) had an agent container fail before Claude started — exiting non-zero"* ]]
+    [ "$(cat "${claude_log}")" = "$(printf '10\n11')" ]
+}
+
+@test "main still Blocks at MAX_CONSECUTIVE_INFRA_FAILURES on a GitHub SSH-auth pre-flight failure, then skips the rest of the tick (#1846)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":11,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    local claude_log="${TEST_TMP}/claude_log"
+    invoke_claude() {
+        printf '%s\n' "$3" >> "${claude_log}"
+        PREFLIGHT_GITHUB_SSH_AUTH_FAILED=1
+        return 2
+    }
+    apply_blocked_label() {
+        printf 'BLOCKED %s #%s\n' "$1" "$2"
+        return 0
+    }
+    make_stub gh 'exit 0'
+    save_infra_failure_count "Issue" 10 "$((MAX_CONSECUTIVE_INFRA_FAILURES - 1))"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"BLOCKED Issue #10"* ]]
+    [[ "${output}" == *"pre-flight git SSH auth failed — treating as a likely GitHub outage, skipping the rest of this tick"* ]]
+    [ "$(cat "${claude_log}")" = "10" ]
+}
+
 @test "main escalates to Blocked after MAX_CONSECUTIVE_INFRA_FAILURES consecutive infra failures (#1133 review)" {
     setup_main_mocks
     fetch_all_priorities() {
