@@ -802,7 +802,7 @@ validate_bind_mounts() {
 # globals. Shared by every invoke_claude exit path (success, infra-failure early-return, and
 # the "no result object" die) so cleanup cannot drift between them (#1133).
 # Removes the per-invocation CLAUDE.md tempfile, GPG pubkey tempdir, and any podman secrets
-# created for this invocation (Claude OAuth / GH Enterprise tokens), resetting their globals.
+# created for this invocation (Claude OAuth / GH Enterprise tokens, plus the kb token secret KB_MCP_SECRET_NAME when KB_MCP_TOKEN is set), resetting their globals.
 # Shared by every invoke_claude exit path (success, infra-failure early-return, and the "no
 # result object" die) so cleanup cannot drift between them, AND by the EXIT trap — which used
 # to be the ONLY thing that removed the podman secrets, firing only when the whole oneshot
