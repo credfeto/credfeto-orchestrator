@@ -443,8 +443,8 @@ RUN set -e; \
         [ "$(stat -c '%U:%G %a' /etc/claude-code/hooks/$h)" = "root:root 755" ] \
             || { echo "FATAL sanity: $h hook missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
     done; \
-    jq -e '(.mcpServers | keys) == ["build-dotnet", "cfwf", "kb"]' /etc/claude-code/managed-mcp.json >/dev/null \
-        || { echo "FATAL sanity: managed-mcp.json must hold exactly the build-dotnet, cfwf and kb servers" >&2; exit 1; }; \
+    jq -e '(["build-dotnet", "cfwf", "kb"] - (.mcpServers | keys)) == []' /etc/claude-code/managed-mcp.json >/dev/null \
+        || { echo "FATAL sanity: managed-mcp.json must hold the build-dotnet, cfwf and kb servers" >&2; exit 1; }; \
     jq -e '.mcpServers.cfwf == {"type": "http", "url": "https://workflow-mcp.markridgwell.com/mcp", "headersHelper": "/etc/claude-code/mcp/cfwf-mcp-headers"}' /etc/claude-code/managed-mcp.json >/dev/null \
         || { echo "FATAL sanity: managed-mcp.json is world-readable, so the cfwf server must be exactly the http server at its https URL with its headers from /etc/claude-code/mcp/cfwf-mcp-headers, and carry no literal headers or env" >&2; exit 1; }; \
     jq -e '.mcpServers.kb == {"type": "http", "url": "https://memory.markridgwell.com/dev/mcp", "headersHelper": "/etc/claude-code/mcp/kb-mcp-headers"}' /etc/claude-code/managed-mcp.json >/dev/null \

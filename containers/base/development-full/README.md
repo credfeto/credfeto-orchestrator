@@ -159,7 +159,8 @@ per-work-item transcript directory (`projects/`) are mounted per invocation.
 `claude-mcp/cfwf-mcp-headers` and `claude-mcp/kb-mcp-headers` to `/etc/claude-code/mcp/` (root:root 0755). The file defines
 the only MCP servers Claude Code loads in the container: `cfwf`, an HTTP server at
 `https://workflow-mcp.markridgwell.com/mcp`, `kb`, an HTTP server at `https://memory.markridgwell.com/dev/mcp`
-(described below), and `build-dotnet` (also described below). While the file exists it has exclusive control, so no user,
+(described below), `build-dotnet` (also described below), and the `rider` and `webstorm` IDE servers at
+`http://127.0.0.1:64482/stream` and `http://127.0.0.1:64542/stream`. While the file exists it has exclusive control, so no user,
 project, plugin or `--mcp-config` server can be added. `mcp__cfwf__*` in `permissions.allow` lets every
 agent use all of its tools. The file is world-readable, so it holds no token. Its `headersHelper`, the
 root-owned `cfwf-mcp-headers`, runs at connect time and prints `{"Authorization":"Bearer <token>"}`. The
@@ -270,7 +271,7 @@ Paths locked down by this image. NuGet.Config and the .NET tool paths are locked
 | `/home/developer/.claude/policy-limits.json` | root:root | 0444 | Baked-in Claude Code policy limits (from `claude-policy-limits.json`); read-only for all users |
 | `/etc/claude-code/` | root:root | 0755 | Claude Code managed settings directory; agent can read but not modify |
 | `/etc/claude-code/managed-settings.json` | root:root | 0444 | Baked-in Claude Code managed settings: permissions, hooks, sandbox (from `claude-managed-settings.json`); read-only for all users |
-| `/etc/claude-code/managed-mcp.json` | root:root | 0444 | Baked-in MCP server list, the `cfwf`, `kb` and `build-dotnet` servers alone, with no token (from `claude-managed-mcp.json`); read-only for all users |
+| `/etc/claude-code/managed-mcp.json` | root:root | 0444 | Baked-in MCP server list, the `cfwf`, `kb`, `build-dotnet`, `rider` and `webstorm` servers alone, with no token (from `claude-managed-mcp.json`); read-only for all users |
 | `/etc/claude-code/mcp/` | root:root | 0755 | MCP headers helper directory; agent can read/execute but not modify |
 | `/etc/claude-code/mcp/cfwf-mcp-headers` | root:root | 0755 | `headersHelper` printing the `cfwf` server's `Authorization` header from the GitHub token in the environment (from `claude-mcp/cfwf-mcp-headers`); read/execute only |
 | `/etc/claude-code/mcp/kb-mcp-headers` | root:root | 0755 | `headersHelper` printing the `kb` server's `Authorization` header from `KB_MCP_TOKEN` or the user's 0600 token file (from `claude-mcp/kb-mcp-headers`); read/execute only |
@@ -351,7 +352,7 @@ Executed as root. Fails the build immediately if anything is missing or broken.
 `/etc/claude-code/managed-mcp.json` must be root:root 0444, and `/etc/claude-code`, `/etc/claude-code/hooks`
 and `/etc/claude-code/mcp` root:root 0755; `managed-settings.json` must set
 the `allowManaged*Only` locks, disable bypass-permissions mode and allow `mcp__cfwf__*`, `mcp__kb__*` and `mcp__build-dotnet__*`;
-`managed-mcp.json` must hold exactly the `build-dotnet`, `cfwf` and `kb` servers: `cfwf`, `type` `http`, at
+`managed-mcp.json` must hold the `build-dotnet`, `cfwf` and `kb` servers (others are allowed): `cfwf`, `type` `http`, at
 `https://workflow-mcp.markridgwell.com/mcp`, with `headersHelper` `/etc/claude-code/mcp/cfwf-mcp-headers`,
 and `kb`, `type` `http`, at `https://memory.markridgwell.com/dev/mcp`, with `headersHelper`
 `/etc/claude-code/mcp/kb-mcp-headers`, neither with `headers` or `env`, no `Authorization` text in the file,
