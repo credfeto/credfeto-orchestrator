@@ -824,6 +824,15 @@ ENVEOF
     [ -z "${KB_MCP_TOKEN}" ]
 }
 
+@test "load_env_config un-exports a shell-exported KB_MCP_TOKEN so child processes never see the .env value" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'KB_MCP_TOKEN=kb-from-env-file\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    export KB_MCP_TOKEN="kb-from-shell"
+    load_env_config
+    [ "${KB_MCP_TOKEN}" = "kb-from-env-file" ]
+    [ "$(bash -c 'echo "${KB_MCP_TOKEN-unset}"')" = "unset" ]
+}
+
 @test "CI_CHECK_TIMEOUT_MINUTES defaults to 1440 minutes when it is not set (#1504)" {
     unset CI_CHECK_TIMEOUT_MINUTES
     source_oneshot
