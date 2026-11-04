@@ -118,6 +118,10 @@ write_failing_run_body() {
     local args="${TEST_TMP}/podman_run_args"
     grep -qx -- "--env" "${args}"
     grep -qx -- "ORCHESTRATOR_PRECHECK=1" "${args}"
+    # Both are passed as environment variables, and the agent marker is there so the hooks run
+    # as they do for the agent's own commits (#1843).
+    [ "$(grep -x -B1 -- "ORCHESTRATOR_PRECHECK=1" "${args}" | head -n 1)" = "--env" ]
+    [ "$(grep -x -B1 -- "CLAUDECODE=1" "${args}" | head -n 1)" = "--env" ]
     grep -qx -- "${REPO_WORK_DIR}:${CONTAINER_REPO_PATH}:rw" "${args}"
     grep -qx -- "${RULES_DIR}:${CONTAINER_RULES_PATH}:ro" "${args}"
     grep -q -- ":/home/developer/.claude/CLAUDE.md:ro$" "${args}"
