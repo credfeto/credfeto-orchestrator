@@ -65,7 +65,8 @@ image requires three:
 - `kb`, the knowledge-base MCP server at `https://memory.markridgwell.com/dev/mcp`. Its token is
   the optional `KB_MCP_TOKEN` in `orchestrator/.env`, which `oneshot` passes in as a per-container
   Podman secret and removes on exit; a root-owned helper hands it to the MCP client at connect
-  time. Without it, the session starts with `kb` shown as failed to connect.
+  time. Without it, the session starts with `kb` shown as failed to connect. A malformed value (one
+  holding a character a bearer token cannot contain) is ignored with a warning that never prints it.
 - `build-dotnet`, the .NET build, test and coverage server (`credfeto-build-dotnet`, a local stdio
   process), working on the repository at `/workspace/repo` (#1818). It is registered for every
   session, whatever the repository's language.

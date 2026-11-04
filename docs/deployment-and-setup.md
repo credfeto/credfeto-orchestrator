@@ -31,7 +31,8 @@ document covers the scripts that set all of that up.
    instead of `DISCORD_WEBHOOK` — see [discord-notifications.md](discord-notifications.md);
    `setup-owner` does not require any of these four. It can also set `KB_MCP_TOKEN`, the bearer
    token for the agent container's `kb` knowledge-base MCP server, which `oneshot` passes into
-   each container as a Podman secret; without it, sessions start with `kb` failing to connect.
+   each container as a Podman secret; without it, sessions start with `kb` failing to connect. A
+   malformed value is ignored with a warning that names the key but never prints the value.
 2. Run `sudo ./setup-owner --owner <name>`. This creates the Linux account, clones the
    repository into it, copies the staged credentials in, **and installs the timer itself** —
    there is no separate timer-install step.

@@ -824,6 +824,28 @@ ENVEOF
     [ -z "${KB_MCP_TOKEN}" ]
 }
 
+@test "load_env_config clears and warns about a KB_MCP_TOKEN outside the token68 set, never printing it" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    local bad
+    for bad in 'kbsecret value' 'kbsecret # comment' '"kbsecret' "kbsecret'"; do
+        printf 'KB_MCP_TOKEN=%s\n' "${bad}" > "${XDG_CONFIG_HOME}/orchestrator/.env"
+        KB_MCP_TOKEN="stale-token"
+        load_env_config > "${BATS_TEST_TMPDIR}/stdout" 2> "${BATS_TEST_TMPDIR}/stderr"
+        [ -z "${KB_MCP_TOKEN}" ]
+        grep -q 'KB_MCP_TOKEN in .env holds characters a bearer token cannot contain' "${BATS_TEST_TMPDIR}/stderr"
+        [ "$(cat "${BATS_TEST_TMPDIR}/stdout" "${BATS_TEST_TMPDIR}/stderr" | grep -c kbsecret)" -eq 0 ]
+    done
+}
+
+@test "load_env_config keeps a KB_MCP_TOKEN made only of token68 characters, without warning" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'KB_MCP_TOKEN=Az09-._~+/=\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    unset KB_MCP_TOKEN
+    load_env_config 2> "${BATS_TEST_TMPDIR}/stderr"
+    [ "${KB_MCP_TOKEN}" = 'Az09-._~+/=' ]
+    [ ! -s "${BATS_TEST_TMPDIR}/stderr" ]
+}
+
 @test "load_env_config un-exports a shell-exported KB_MCP_TOKEN so child processes never see the .env value" {
     mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
     printf 'KB_MCP_TOKEN=kb-from-env-file\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"

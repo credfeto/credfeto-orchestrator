@@ -114,7 +114,8 @@ normalize_gh_host() {
 # DISCORD_WEBHOOK_PERMISSIONS, DISCORD_WEBHOOK_SLOW_PULL, GH_TOKEN, GH_HOST, GIT_USER_NAME,
 # GIT_USER_EMAIL, GIT_SIGNING_KEY, and the optional KB_MCP_TOKEN from orchestrator/.env.
 # KB_MCP_TOKEN is not exported: prepare_claude_container_args hands it to the container as a
-# podman secret, and no host-side command needs it.
+# podman secret, and no host-side command needs it. A value outside the RFC 6750 token68 set is
+# warned about (without printing it) and cleared, so the run carries on without kb.
 # Sets DISCORD_WEBHOOK_URL and the four DISCORD_WEBHOOK_URL_<CATEGORY> vars lib/discord's
 # _discord_webhook_for reads (#1456; same "_URL" naming split as the base DISCORD_WEBHOOK/
 # DISCORD_WEBHOOK_URL pair, so all five follow one convention in .env). None of them is exported:
@@ -184,8 +185,16 @@ load_env_config() {
                         # shellcheck disable=SC2034  # read by lib/fingerprints and lib/github-status after sourcing
                         if [[ "${val}" =~ ^[1-9][0-9]*$ ]]; then CI_CHECK_TIMEOUT_MINUTES="${val}"; else warn "CI_CHECK_TIMEOUT_MINUTES must be a positive integer; ignoring '${val}'"; fi ;;
                     KB_MCP_TOKEN=*)
-                        # shellcheck disable=SC2034  # read by lib/podman after sourcing
-                        KB_MCP_TOKEN="${val}" ;;
+                        # Same token68 check as kb-mcp-headers, so a malformed value is reported here
+                        # rather than as a silent kb connect failure; the value is never printed.
+                        case "${val}" in
+                            *[!A-Za-z0-9._~+/=-]*)
+                                warn "KB_MCP_TOKEN in .env holds characters a bearer token cannot contain; ignoring it"
+                                KB_MCP_TOKEN="" ;;
+                            *)
+                                # shellcheck disable=SC2034  # read by lib/podman after sourcing
+                                KB_MCP_TOKEN="${val}" ;;
+                        esac ;;
                 esac
                 ;;
         esac
