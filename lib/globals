@@ -11,6 +11,15 @@
 ORCHESTRATOR_IMAGE="${ORCHESTRATOR_IMAGE:-ghcr.io/credfeto/development-agent:latest}"
 # shellcheck disable=SC2034  # read by lib/discord, lib/github and oneshot after sourcing
 PRIORITIES_URL="https://git-workflow.markridgwell.com/priorities"
+# githubstatus.com's unresolved-incidents feed, read once a tick by github_incident_open
+# (lib/github-health). Overridable from the environment so tests can point it at a fixture file
+# (file://) or a stub.
+# shellcheck disable=SC2034  # read by lib/github-health and oneshot after sourcing
+GITHUB_STATUS_URL="${GITHUB_STATUS_URL:-https://www.githubstatus.com/api/v2/incidents/unresolved.json}"
+# The githubstatus.com components an orchestrator session depends on: an unresolved incident on any
+# of them skips the tick. Incidents on other components (Codespaces, Copilot, Actions and so on) do not.
+# shellcheck disable=SC2034  # read by lib/github-health after sourcing
+GITHUB_HEALTH_COMPONENTS=("Git Operations" "Pull Requests" "Issues" "API Requests" "Webhooks")
 # shellcheck disable=SC2034  # read by lib/core and lib/git after sourcing
 WORK="${XDG_PROJECTS_DIR:-${HOME}/work}"
 # Base directory for mutable runtime state (session/fingerprint files, per-owner rate-limit

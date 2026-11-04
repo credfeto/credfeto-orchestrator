@@ -123,6 +123,38 @@ DISCORD_WEBHOOK=https://discord.com/api/webhooks/<id>/<token>
 
 If `DISCORD_WEBHOOK` is absent or the file does not exist, Discord notifications are silently skipped.
 
+### GitHub health gate
+
+At the start of every tick, after taking the lock and before fetching priorities, `oneshot`
+reads GitHub's unresolved incidents from
+[githubstatus.com](https://www.githubstatus.com/api/v2/incidents/unresolved.json) (a single
+`curl` with a 5 second connect timeout and a 10 second total timeout). If an incident is open on
+any of the components the agent's sessions depend on (**Git Operations**, **Pull Requests**,
+**Issues**, **API Requests** or **Webhooks**), the tick does no work at all. It logs one line:
+
+```text
+GitHub incident open (<incident name>, since <start time>) — skipping work this tick
+```
+
+and exits 0, as the low-disk-space skip does, so the systemd unit does not record a failure.
+
+Without the gate, every session in an outage fails its pre-flight or is charged against its
+item's idle budget for "making no progress", because it cannot push, comment or move a board
+card, and a healthy PR can be marked `Blocked` as idle-exhausted within minutes. No session runs
+in a tick the gate stops, so no idle budget is charged and no PR is parked.
+
+- Incidents only on other components (for example Codespaces, Copilot or Actions) do not stop
+  the tick.
+- The gate fails open: if githubstatus.com cannot be reached, times out or returns something that
+  is not the expected JSON, `oneshot` logs a warning and carries on as before, so a problem with
+  the status page never stops the fleet on its own.
+- `GITHUB_STATUS_URL` overrides the status URL (the tests point it at a local `file://` fixture).
+
+The agent container's pre-flight SSH check can still fail during an outage that githubstatus.com
+has not reported yet. Its "SSH key is not authorized to access GitHub" message therefore says
+that this can also be a GitHub Git Operations outage, and to check githubstatus.com before
+re-registering the key.
+
 ### Unit-failure alerts (`notify-unit-failure`)
 
 `setup-owner` also installs a `<service>-failure.service` unit, wired to the main service's

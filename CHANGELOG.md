@@ -11,6 +11,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ## [Unreleased]
 ### Security
 ### Added
+- oneshot skips the whole tick (logs one line and exits 0) while githubstatus.com has an unresolved incident on Git Operations, Pull Requests, Issues, API Requests or Webhooks, so no session runs and no idle budget is charged during an outage. The lookup fails open, and the agent pre-flight SSH-auth message now says it can be a Git Operations outage - #1846
 ### Fixed
 ### Changed
 ### Deprecated
