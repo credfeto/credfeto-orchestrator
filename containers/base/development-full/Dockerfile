@@ -221,7 +221,7 @@ RUN mkdir -p /home/developer/.claude/agents \
 # ~/.claude copies can be replaced along with ~/.claude itself (see the skills
 # link step above). oneshot does not (and must not) bind-mount over these
 # paths - see containers/agent/Dockerfile.
-# managed-mcp.json pins the only MCP servers, cfwf and build-dotnet, and is
+# managed-mcp.json pins the only MCP servers, cfwf, build-dotnet, rider and webstorm, and is
 # world-readable, so it holds no token: cfwf's Authorization header comes at
 # connect time from the root-owned headersHelper, mcp/cfwf-mcp-headers, which
 # reads the GitHub token from the environment. build-dotnet is the .NET
@@ -232,7 +232,7 @@ COPY --chown=root:root --chmod=0444 claude-policy-limits.json /home/developer/.c
 COPY --chown=root:root --chmod=0444 claude-managed-settings.json /etc/claude-code/managed-settings.json
 COPY --chown=root:root --chmod=0444 claude-managed-mcp.json /etc/claude-code/managed-mcp.json
 COPY --chown=root:root --chmod=0755 claude-mcp/cfwf-mcp-headers /etc/claude-code/mcp/cfwf-mcp-headers
-COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-dash-c /etc/claude-code/hooks/enforce-git-dash-c
+COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-policy /etc/claude-code/hooks/enforce-git-policy
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-identity /etc/claude-code/hooks/enforce-git-identity
 COPY --chown=root:root --chmod=0755 claude-hooks/reject-obfuscated-commands /etc/claude-code/hooks/reject-obfuscated-commands
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-allowed-dirs /etc/claude-code/hooks/enforce-allowed-dirs
@@ -434,14 +434,14 @@ RUN set -e; \
         || { echo "FATAL sanity: ~/.claude/settings.json must hold preferences only - permissions, hooks, sandbox and MCP config belong in /etc/claude-code/managed-settings.json" >&2; exit 1; }; \
     ! jq -r '.hooks.PreToolUse[].hooks[].command' /etc/claude-code/managed-settings.json | grep -vxE '/etc/claude-code/hooks/[A-Za-z0-9-]+' \
         || { echo "FATAL sanity: managed-settings.json runs a hook from outside /etc/claude-code/hooks (listed above)" >&2; exit 1; }; \
-    for h in reject-obfuscated-commands enforce-allowed-dirs block-config-skills enforce-git-identity enforce-git-dash-c \
+    for h in reject-obfuscated-commands enforce-allowed-dirs block-config-skills enforce-git-identity enforce-git-policy \
              block-git-worktree block-dotnet-tool-install block-github-mcp-write-tools enforce-ssh-host-and-key enforce-curl-host \
              enforce-background-for-long-running-commands cache-gh-lookups block-secret-file-reads; do \
         [ "$(stat -c '%U:%G %a' /etc/claude-code/hooks/$h)" = "root:root 755" ] \
             || { echo "FATAL sanity: $h hook missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
     done; \
-    jq -e '(.mcpServers | keys) == ["build-dotnet", "cfwf"] and .mcpServers.cfwf.type == "http" and .mcpServers.cfwf.url == "https://workflow-mcp.markridgwell.com/mcp" and .mcpServers.cfwf.headersHelper == "/etc/claude-code/mcp/cfwf-mcp-headers"' /etc/claude-code/managed-mcp.json >/dev/null \
-        || { echo "FATAL sanity: managed-mcp.json must hold exactly the build-dotnet and cfwf servers, cfwf at its https URL, with its headers from /etc/claude-code/mcp/cfwf-mcp-headers" >&2; exit 1; }; \
+    jq -e '(.mcpServers | keys) == ["build-dotnet", "cfwf", "rider", "webstorm"] and .mcpServers.cfwf.type == "http" and .mcpServers.cfwf.url == "https://workflow-mcp.markridgwell.com/mcp" and .mcpServers.cfwf.headersHelper == "/etc/claude-code/mcp/cfwf-mcp-headers"' /etc/claude-code/managed-mcp.json >/dev/null \
+        || { echo "FATAL sanity: managed-mcp.json must hold exactly the build-dotnet, cfwf, rider and webstorm servers, cfwf at its https URL, with its headers from /etc/claude-code/mcp/cfwf-mcp-headers" >&2; exit 1; }; \
     jq -e '.mcpServers["build-dotnet"] == {"type": "stdio", "command": "/home/developer/.dotnet/tools/credfeto-build-dotnet", "env": {"BUILD_MCP_REPO_ROOT": "/workspace/repo"}}' /etc/claude-code/managed-mcp.json >/dev/null \
         || { echo "FATAL sanity: managed-mcp.json is world-readable, so the build-dotnet server must be exactly the stdio credfeto-build-dotnet tool by its absolute path, with BUILD_MCP_REPO_ROOT=/workspace/repo as its only env value" >&2; exit 1; }; \
     [ -x /home/developer/.dotnet/tools/credfeto-build-dotnet ] \
