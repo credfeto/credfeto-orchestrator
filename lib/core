@@ -114,7 +114,9 @@ normalize_gh_host() {
 # DISCORD_WEBHOOK_PERMISSIONS, DISCORD_WEBHOOK_SLOW_PULL, GH_TOKEN, GH_HOST, GIT_USER_NAME,
 # GIT_USER_EMAIL, GIT_SIGNING_KEY, and the optional KB_MCP_TOKEN from orchestrator/.env.
 # KB_MCP_TOKEN is not exported: prepare_claude_container_args hands it to the container as a
-# podman secret, and no host-side command needs it.
+# podman secret, and no host-side command needs it. Any shell-exported KB_MCP_TOKEN is unset
+# first, so .env is its only source and it never reaches a host child process (gh, git, curl);
+# when .env has no KB_MCP_TOKEN key the shell value is still cleared.
 # Sets DISCORD_WEBHOOK_URL and the four DISCORD_WEBHOOK_URL_<CATEGORY> vars lib/discord's
 # _discord_webhook_for reads (#1456; same "_URL" naming split as the base DISCORD_WEBHOOK/
 # DISCORD_WEBHOOK_URL pair, so all five follow one convention in .env); exports GH_HOST
@@ -135,6 +137,7 @@ load_env_config() {
     GIT_USER_EMAIL=""
     GIT_SIGNING_KEY=""
     WHITELISTED_USERS=""
+    unset KB_MCP_TOKEN
     KB_MCP_TOKEN=""
     local env_file="${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/.env"
     [ -f "${env_file}" ] || return 0
