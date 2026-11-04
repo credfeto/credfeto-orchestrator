@@ -114,12 +114,15 @@ normalize_gh_host() {
 # DISCORD_WEBHOOK_PERMISSIONS, DISCORD_WEBHOOK_SLOW_PULL, GH_TOKEN, GH_HOST, GIT_USER_NAME,
 # GIT_USER_EMAIL, GIT_SIGNING_KEY, and the optional KB_MCP_TOKEN from orchestrator/.env.
 # KB_MCP_TOKEN is not exported: prepare_claude_container_args hands it to the container as a
-# podman secret, and no host-side command needs it. Any shell-exported KB_MCP_TOKEN is unset
-# first, so .env is its only source and it never reaches a host child process (gh, git, curl);
-# when .env has no KB_MCP_TOKEN key the shell value is still cleared.
+# podman secret, and no host-side command needs it.
 # Sets DISCORD_WEBHOOK_URL and the four DISCORD_WEBHOOK_URL_<CATEGORY> vars lib/discord's
 # _discord_webhook_for reads (#1456; same "_URL" naming split as the base DISCORD_WEBHOOK/
-# DISCORD_WEBHOOK_URL pair, so all five follow one convention in .env); exports GH_HOST
+# DISCORD_WEBHOOK_URL pair, so all five follow one convention in .env). None of them is exported:
+# lib/discord runs in this shell and passes the URL to curl as an argument, and a webhook URL
+# carries its own token.
+# KB_MCP_TOKEN and the five webhook vars are each unset before being reset, so a value the shell
+# exported never stays exported: .env is their only source and they never reach a host child
+# process (gh, git, curl); when .env lacks a key the shell value is still cleared. Exports GH_HOST
 # (normalised) and GH_ENTERPRISE_TOKEN when both are present so host-side gh CLI calls use the
 # same proxy as the agent container. For a direct github.com host gh ignores
 # GH_ENTERPRISE_TOKEN, so GH_TOKEN is exported as well: the container plumbing keys off
@@ -128,6 +131,8 @@ normalize_gh_host() {
 # GIT_USER_NAME, GIT_USER_EMAIL, and GIT_SIGNING_KEY are used by build_minimal_gitconfig.
 # Silent when the file is absent or a key is missing.
 load_env_config() {
+    unset DISCORD_WEBHOOK_URL DISCORD_WEBHOOK_URL_BLOCKED DISCORD_WEBHOOK_URL_AWAITING_APPROVAL \
+        DISCORD_WEBHOOK_URL_PERMISSIONS DISCORD_WEBHOOK_URL_SLOW_PULL
     DISCORD_WEBHOOK_URL=""
     DISCORD_WEBHOOK_URL_BLOCKED=""
     DISCORD_WEBHOOK_URL_AWAITING_APPROVAL=""

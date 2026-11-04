@@ -833,6 +833,15 @@ ENVEOF
     [ "$(bash -c 'echo "${KB_MCP_TOKEN-unset}"')" = "unset" ]
 }
 
+@test "load_env_config un-exports a shell-exported DISCORD_WEBHOOK_URL so child processes never see the .env value" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'DISCORD_WEBHOOK=https://discord.example.com/from-env-file\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    export DISCORD_WEBHOOK_URL="https://discord.example.com/from-shell"
+    load_env_config
+    [ "${DISCORD_WEBHOOK_URL}" = "https://discord.example.com/from-env-file" ]
+    [ "$(bash -c 'echo "${DISCORD_WEBHOOK_URL-unset}"')" = "unset" ]
+}
+
 @test "CI_CHECK_TIMEOUT_MINUTES defaults to 1440 minutes when it is not set (#1504)" {
     unset CI_CHECK_TIMEOUT_MINUTES
     source_oneshot
