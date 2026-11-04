@@ -632,6 +632,15 @@ kb_token_privacy_predicates() {
     [ "${status}" -eq 0 ]
     [ "$(installed_mcp_names)" = "$(expected_mcp_names)" ]
     [[ " $(installed_mcp_names) " == *" shipped-ide "* ]]
+    [[ "${output}" != *"Left out"* ]]
+
+    rm -rf "${CLAUDE_MANAGED_DIR}"
+    write_host_claude_json '{"mcpServers": {"shipped-ide": {"type": "http", "url": "http://127.0.0.1:65000/stream"}, "ide-alias": {"type": "http", "url": "http://127.0.0.1:65000/stream"}}}'
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(installed_mcp_names)" = "$(expected_mcp_names)" ]
+    [[ "${output}" == *"Left out ide-alias from ${HOME}/.claude.json: same URL as shipped-ide, which replaces them"* ]]
+    [[ "${output}" != *"Left out shipped-ide"* ]]
 
     rm -rf "${CLAUDE_MANAGED_DIR}"
     write_host_claude_json '{"mcpServers": {"shipped-ide": {"type": "sse", "url": "http://localhost:64342/sse"}}}'
