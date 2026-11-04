@@ -155,6 +155,24 @@ has not reported yet. Its "SSH key is not authorized to access GitHub" message t
 that this can also be a GitHub Git Operations outage, and to check githubstatus.com before
 re-registering the key.
 
+That failure is also the gate's second guard. When a session's container fails pre-flight with
+that message, `oneshot` treats it as a likely GitHub outage, because every further item in the
+tick would fail the same check. It logs:
+
+```text
+pre-flight git SSH auth failed — treating as a likely GitHub outage, skipping the rest of this tick
+```
+
+picks no further items and exits 0, so the unit does not record a failure.
+
+- As with any pre-flight failure, the attempt is not counted against the item's invocation
+  budget, and the item's consecutive pre-flight failure counter still advances. A key that GitHub
+  really does refuse is therefore still marked `Blocked` after `MAX_CONSECUTIVE_INFRA_FAILURES`
+  ticks in a row.
+- Other pre-flight failures behave as before: `oneshot` moves on to the next item and, if no
+  session runs, exits 1 so the unit's failure alert fires. If an earlier item in the same tick
+  failed pre-flight for another reason, the tick still exits 1.
+
 ### Unit-failure alerts (`notify-unit-failure`)
 
 `setup-owner` also installs a `<service>-failure.service` unit, wired to the main service's

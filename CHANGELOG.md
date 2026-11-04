@@ -11,7 +11,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ## [Unreleased]
 ### Security
 ### Added
-- oneshot skips the whole tick (logs one line and exits 0) while githubstatus.com has an unresolved incident on Git Operations, Pull Requests, Issues, API Requests or Webhooks, so no session runs and no idle budget is charged during an outage. The lookup fails open, and the agent pre-flight SSH-auth message now says it can be a Git Operations outage - #1846
+- oneshot skips the whole tick (logs one line and exits 0) while githubstatus.com has an unresolved incident on Git Operations, Pull Requests, Issues, API Requests or Webhooks, so no session runs and no idle budget is charged during an outage. The lookup fails open, and the agent pre-flight SSH-auth message now says it can be a Git Operations outage. As a second guard, when a session's pre-flight fails on GitHub SSH auth, oneshot treats it as a likely GitHub outage: it logs one line, picks no further items that tick and exits 0 (the attempt is still not counted against the invocation budget) - #1846
 ### Fixed
 - The development-full image sanity check and the install-claude-hooks tests check only the required managed MCP servers: cfwf and build-dotnet must be present and correct, a kb server must follow cfwf's pattern when present, and any other server (such as the shipped rider and webstorm) is allowed and not checked, so adding a server no longer breaks the image build or the tests (#1850)
 ### Changed
