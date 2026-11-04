@@ -33,7 +33,9 @@ token_from_file() {
     token_file_is_private || fail "${token_file} must be a regular file owned by you with mode 0600"
     line=""
     IFS= read -r line <"${token_file}" || [ -n "${line}" ] || return 0
-    printf '%s' "${line}"
+    # A file saved with CRLF line endings leaves a carriage return on the line.
+    cr=$(printf '\r')
+    printf '%s' "${line%"${cr}"}"
 }
 
 token="${KB_MCP_TOKEN:-}"
