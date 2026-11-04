@@ -167,8 +167,8 @@ agent use all of its tools. The file is world-readable, so it holds no token. It
 root-owned `cfwf-mcp-headers`, runs at connect time and prints `{"Authorization":"Bearer <token>"}`. The
 token comes from `GH_ENTERPRISE_TOKEN`, then `GH_TOKEN` (the GitHub token that already reaches the
 container as a Podman secret), then `gh auth token`. With no token it exits non-zero and prints nothing,
-and the token is never written to stderr, a file or the image. `enforce-curl-host` is unchanged, so an
-agent cannot send that token to the server with `curl`; only the MCP client talks to it. No prompt routes
+and the token is never written to stderr, a file or the image. `enforce-curl-host` does not yet block the
+server's host, so it does not stop an agent sending that token there with `curl` (#1840). No prompt routes
 work to the server yet. See
 [docs/development/claude-hooks.md](../../../docs/development/claude-hooks.md#the-cfwf-mcp-server).
 
