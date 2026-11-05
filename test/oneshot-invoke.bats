@@ -638,6 +638,28 @@ STUBEOF
     [ -z "${KB_MCP_SECRET_NAME}" ]
 }
 
+@test "invoke_claude removes a leftover gh-enterprise-token secret for the container even when GH_ENTERPRISE_TOKEN is unset (#1791)" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    unset GH_ENTERPRISE_TOKEN
+    make_secret_logging_podman_stub
+
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
+    [ "$(grep -A1 -x 'rm' "${TEST_TMP}/podman_secret" | grep -cx 'gh-enterprise-token-orchestrator-credfeto')" -eq 1 ]
+    [ "$(grep -A1 -x 'create' "${TEST_TMP}/podman_secret" | grep -c 'gh-enterprise-token')" -eq 0 ]
+    [ "$(grep -c 'gh-enterprise-token' "${TEST_TMP}/podman_args")" -eq 0 ]
+}
+
+@test "invoke_claude removes a leftover claude-oauth secret for the container even when the owner has no token (#1791)" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    rm -f "${XDG_CONFIG_HOME}/orchestrator/tokens/credfeto"
+    make_secret_logging_podman_stub
+
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
+    [ "$(grep -A1 -x 'rm' "${TEST_TMP}/podman_secret" | grep -cx 'claude-oauth-orchestrator-credfeto')" -eq 1 ]
+    [ "$(grep -A1 -x 'create' "${TEST_TMP}/podman_secret" | grep -c 'claude-oauth')" -eq 0 ]
+    [ "$(grep -c 'claude-oauth' "${TEST_TMP}/podman_args")" -eq 0 ]
+}
+
 @test "invoke_claude notifies Discord before dying when creating the KB_MCP_TOKEN Podman secret fails" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     KB_MCP_TOKEN="kb-secret-token"
@@ -873,14 +895,14 @@ STUBEOF
 
     run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -eq 2 ]
-    # The stub logs one argument per line. The container-scoped secret name must appear three
-    # times: the pre-create cleanup of any stale secret from a prior run, the create, and THIS
-    # invocation's own post-failure cleanup (#1133 review) — previously only the pre-create rm
-    # happened; the post-failure one was missing entirely. (The legacy-name sweep is a separate
-    # rm and is not counted here.)
+    # The stub logs one argument per line. The container-scoped secret name must appear four
+    # times: the every-launch sweep of a leftover secret (#1791), the pre-create cleanup of any
+    # stale secret from a prior run, the create, and THIS invocation's own post-failure cleanup
+    # (#1133 review); previously only the pre-create rm happened and the post-failure one was
+    # missing entirely. (The legacy-name sweep is a separate rm and is not counted here.)
     local name_count
     name_count=$(grep -c '^claude-oauth-orchestrator-credfeto$' "${secret_log}" || true)
-    [ "${name_count}" -eq 3 ]
+    [ "${name_count}" -eq 4 ]
     [ "$(grep -c '^create$' "${secret_log}")" -eq 1 ]
 }
 

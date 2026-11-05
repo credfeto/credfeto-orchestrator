@@ -1250,8 +1250,8 @@ ensure_agent_container_ready() {
 # persistent CLAUDE_STATE_DIR/ORCHESTRATOR_CACHE_DIR subdirectories, the work item's transcript
 # directory (transcript_dir_path), and the Podman secrets for the Claude OAuth token and
 # GH_ENTERPRISE_TOKEN, plus one for KB_MCP_TOKEN when it is set (run_precommit_precheck unsets
-# it, so its container gets none; any earlier kb secret for the container is removed either
-# way). item_type and item_id (both set, checked by invoke_claude) select the
+# it, so its container gets none). Any earlier secret of each kind for the container is removed
+# either way. item_type and item_id (both set, checked by invoke_claude) select the
 # transcript directory and feed the WORK_ITEM_URL banner and the Discord error notifications.
 # Installs the EXIT trap before the first mktemp, so a die() from inside here cannot leak a
 # tmpfile or a secret (#1103). Bash traps replace rather than append, so the one trap also stops
@@ -1394,11 +1394,17 @@ prepare_claude_container_args() {
     # by a run that crashed between create and its EXIT trap would otherwise never be swept
     # again after the self-update, leaving a live token in the store. Best-effort, every launch.
     podman secret rm "claude-oauth-${OWNER}" "gh-enterprise-token" >/dev/null 2>&1 || true
+    # Removed on every launch, token or not: a run killed before its EXIT trap leaves the secret
+    # behind, and once the owner's token file is gone nothing else would ever sweep it.
+    remove_podman_secret "claude-oauth-${container_name}"
     if [ -n "${owner_token}" ]; then
         PODMAN_SECRET_NAME="claude-oauth-${container_name}"
         create_podman_env_secret "${item_type}" "${item_id}" "${PODMAN_SECRET_NAME}" "${owner_token}" \
             "CLAUDE_CODE_OAUTH_TOKEN" "Claude OAuth token"
     fi
+    # Removed on every launch, set or not: a run killed before its EXIT trap leaves the secret
+    # behind, and once GH_ENTERPRISE_TOKEN is dropped from .env nothing else would ever sweep it.
+    remove_podman_secret "gh-enterprise-token-${container_name}"
     if [ -n "${GH_ENTERPRISE_TOKEN:-}" ]; then
         # gh only honours GH_ENTERPRISE_TOKEN for a non-github.com GH_HOST; for a direct
         # github.com login (an unproxied .env) the same token has to arrive as GH_TOKEN or every
