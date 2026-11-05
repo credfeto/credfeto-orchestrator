@@ -176,6 +176,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         bubblewrap \
         ca-certificates \
+        clang \
         curl \
         dash \
         git \
@@ -195,6 +196,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         fontconfig \
         ttf-mscorefonts-installer \
         libxml2-utils \
+        zlib1g-dev \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         -t trixie-backports \
         devscripts \
@@ -526,7 +528,7 @@ RUN set -e; \
     echo "== binary presence + version probe =="; \
     for cmd in git gpg curl jq dotnet shellcheck shfmt bats sqlite3 gh \
                hadolint dotenv-linter sqlcmd actionlint trufflehog trivy \
-               python3 ansible-lint flake8 pylint \
+               python3 ansible-lint flake8 pylint clang \
                yamllint pre-commit xmllint bwrap checkbashisms; do \
         if ! command -v "$cmd" >/dev/null 2>&1; then \
             echo "FATAL sanity: required binary '$cmd' is missing" >&2; exit 1; \
@@ -535,6 +537,10 @@ RUN set -e; \
             echo "FATAL sanity: '$cmd --version' did not exit 0" >&2; exit 1; \
         fi; \
     done; \
+    echo "== Native AOT prerequisites (clang linker driver + zlib headers for ILCompiler) =="; \
+    if [ ! -f /usr/include/zlib.h ]; then \
+        echo "FATAL sanity: /usr/include/zlib.h is missing — zlib1g-dev not installed?" >&2; exit 1; \
+    fi; \
     echo "== shellcheck minimum version (0.11, matching developer machines) =="; \
     shellcheck_version=$(shellcheck --version | sed -n 's/^version: //p'); \
     if ! dpkg --compare-versions "${shellcheck_version}" ge 0.11; then \

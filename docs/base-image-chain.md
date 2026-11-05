@@ -18,7 +18,7 @@ development-tools → development-node → development-python
 
 | Stage | Image | Adds |
 | --- | --- | --- |
-| 1 | `development-tools` | The base OS (`debian:trixie-slim`) plus the full CI/CD and linting toolchain: shellcheck, bats, hadolint, actionlint, and everything else the orchestrator's own pre-commit hooks and the agent's own linting need. |
+| 1 | `development-tools` | The base OS (`debian:trixie-slim`) plus the full CI/CD and linting toolchain: shellcheck, bats, hadolint, actionlint, the Native AOT linker prerequisites (`clang`, `zlib1g-dev`), and everything else the orchestrator's own pre-commit hooks and the agent's own linting need. |
 | 2 | `development-node` | Node.js and the Bun runtime, plus global npm packages. |
 | 3 | `development-python` | Python tooling too new or unusual for Debian's own packages (`uv`, `ruff`, a newer `sqlfluff`), installed via pip. |
 | 4 | `development-dotnet-tools` | `claude-code` itself, plus the stable, genuinely-third-party (not org-owned) .NET global tools. |
