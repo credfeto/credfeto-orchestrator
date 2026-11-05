@@ -4375,7 +4375,7 @@ assert_set_to_development() {
         # shellcheck disable=SC2086  # each invocation is split into its words on purpose
         run "${SCRIPT}" ${invocation}
         [ "${status}" -eq 0 ]
-        [[ "${output}" == "Usage: cfwf pr checks"*$'\n'"Run 'cfwf pr create --help' for pr create, which creates a draft pull request on the Workflow board."$'\n'"Run 'cfwf pr edit --help' for pr edit, which changes a pull request's title, body or priority, or assigns the agent."$'\n'"Run 'cfwf pr close --help' for pr close, which closes the agent's own pull request without merging it."$'\n'"Run 'cfwf pr reopen --help' for pr reopen, which reopens the agent's own closed pull request."$'\n'"Run 'cfwf pr block --help' for pr block, which posts a question on a pull request and adds Blocked."$'\n'"Run 'cfwf help pr unblock' for pr unblock, for humans only, which posts a comment on a pull request"$'\n'"and removes Blocked."$'\n'"Run 'cfwf branch required-checks --help' for branch required-checks, which lists the checks a branch"$'\n'"requires without judging them." ]]
+        [[ "${output}" == "Usage: cfwf pr checks"*$'\n'"Run 'cfwf pr create --help' for pr create, which creates a draft pull request on the Workflow board."$'\n'"Run 'cfwf pr edit --help' for pr edit, which changes a pull request's title, body or priority, or assigns the agent."$'\n'"Run 'cfwf pr close --help' for pr close, which closes a pull request without merging it."$'\n'"Run 'cfwf pr reopen --help' for pr reopen, which reopens a closed pull request."$'\n'"Run 'cfwf pr block --help' for pr block, which posts a question on a pull request and adds Blocked."$'\n'"Run 'cfwf help pr unblock' for pr unblock, for humans only, which posts a comment on a pull request"$'\n'"and removes Blocked."$'\n'"Run 'cfwf branch required-checks --help' for branch required-checks, which lists the checks a branch"$'\n'"requires without judging them." ]]
     done
 
     run "${SCRIPT}" help
@@ -13392,7 +13392,7 @@ commit_reads() {
     issue_create_called_with "pr edit ${EDIT_PR} --repo ${REPO} --title ${EDIT_TITLE} --body-file BODY --add-assignee ${AGENT}"
     cmp "${TEST_TMP}/edit-body.md" "${GH_FIXTURES}/edit-body.txt"
     [ "$(gh_call_count "--body-file ${TEST_TMP}/edit-body.md")" -eq 0 ]
-    # The agent's own pull request needs no look at its commits.
+    # pr edit has no ownership rule, so the commits are never read.
     [ "$(commit_reads)" -eq 0 ]
     [ "$(edits_made)" -eq 1 ]
 }
@@ -13436,93 +13436,50 @@ commit_reads() {
     [ ! -f "${GH_LOG}" ]
 }
 
-@test "pr edit edits a bot's pull request whose commits are all the agent's: the PR create bot's or a GitHub App's, whatever the case of the logins" {
-    prepare_pr_edit prpixie User 2
+@test "pr edit edits a pull request a human opened, whoever wrote its commits, without reading the commits" {
+    prepare_pr_edit credfeto User 2 credfeto someone-else
+    run_pr_edit --title "${EDIT_TITLE}" --body-file "${TEST_TMP}/edit-body.md" --assign-self
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_PR_URL}" ]
+    [ -z "${stderr}" ]
+    issue_create_called_with "pr edit ${EDIT_PR} --repo ${REPO} --title ${EDIT_TITLE} --body-file BODY --add-assignee ${AGENT}"
+    cmp "${TEST_TMP}/edit-body.md" "${GH_FIXTURES}/edit-body.txt"
+    [ "$(commit_reads)" -eq 0 ]
+    [ "$(edits_made)" -eq 1 ]
+
+    # Without --assign-self the agent's login is not needed, so it is not read.
+    rm -f "${GH_LOG}"
+    run_pr_edit --title "${EDIT_TITLE}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_PR_URL}" ]
+    issue_create_called_with "pr edit ${EDIT_PR} --repo ${REPO} --title ${EDIT_TITLE}"
+    [ "$(gh_call_count "api user")" -eq 0 ]
+    [ "$(commit_reads)" -eq 0 ]
+}
+
+@test "pr edit edits a bot's pull request with commits by people, by an author GitHub does not know, none by the agent, or more than GitHub lists, without reading the commits" {
+    prepare_pr_edit prpixie User 21 "${AGENT}" "${AGENT}" "${AGENT}" credfeto credfeto ""
+    run_pr_edit --title "${EDIT_TITLE}" --body-file "${TEST_TMP}/edit-body.md" --assign-self
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_PR_URL}" ]
+    [ -z "${stderr}" ]
+    issue_create_called_with "pr edit ${EDIT_PR} --repo ${REPO} --title ${EDIT_TITLE} --body-file BODY --add-assignee ${AGENT}"
+
+    rm -f "${GH_LOG}"
+    prepare_pr_edit "github-actions[bot]" Bot 1 credfeto
     run_pr_edit --assign-self
     [ "${status}" -eq 0 ]
     [ "${output}" = "${EDIT_PR_URL}" ]
-    [ "$(commit_reads)" -eq 1 ]
-    [ "$(edits_made)" -eq 1 ]
+    issue_create_called_with "pr edit ${EDIT_PR} --repo ${REPO} --add-assignee ${AGENT}"
 
     rm -f "${GH_LOG}"
-    prepare_pr_edit "github-actions[bot]" Bot 2 DNYW4L3N13 "${AGENT}"
-    run_pr_edit --title "${EDIT_TITLE}"
+    prepare_pr_edit prpixie User 251 credfeto
+    run_pr_edit --body-file "${TEST_TMP}/edit-body.md"
     [ "${status}" -eq 0 ]
-    [ "$(edits_made)" -eq 1 ]
-
-    rm -f "${GH_LOG}"
-    prepare_pr_edit PRPixie User 1
-    run_pr_edit --assign-self
-    [ "${status}" -eq 0 ]
-}
-
-@test "pr edit refuses (exit 8) a bot's pull request with a commit by another author, or one whose author GitHub does not know, writing nothing" {
-    prepare_pr_edit prpixie User 2 "${AGENT}" credfeto
-    run_pr_edit --title "${EDIT_TITLE}" --assign-self
-    [ "${status}" -eq 8 ]
-    [ -z "${output}" ]
-    [ "${stderr}" = "cfwf: edit refused: the pull request has commits by another author" ]
-    [ "$(edits_made)" -eq 0 ]
-
-    rm -f "${GH_LOG}"
-    prepare_pr_edit prpixie User 2 "${AGENT}" ""
-    run_pr_edit --assign-self
-    [ "${status}" -eq 8 ]
-    [ "${stderr}" = "cfwf: edit refused: the pull request has commits by another author" ]
-    [ "$(edits_made)" -eq 0 ]
-
-    rm -f "${GH_LOG}"
-    prepare_pr_edit prpixie User 1 credfeto
-    run_pr_edit --assign-self
-    [ "${status}" -eq 8 ]
-    [ "${stderr}" = "cfwf: edit refused: the pull request has no commit by the agent" ]
-    [ "$(edits_made)" -eq 0 ]
-}
-
-@test "pr edit refuses (exit 8) a pull request a human other than the agent opened, without reading its commits, even when they are all the agent's" {
-    prepare_pr_edit credfeto User 1
-    run_pr_edit --body-file "${TEST_TMP}/edit-body.md" --assign-self
-    [ "${status}" -eq 8 ]
-    [ -z "${output}" ]
-    [ "${stderr}" = "cfwf: edit refused: the pull request was opened by someone other than the agent" ]
+    [ "${output}" = "${EDIT_PR_URL}" ]
+    issue_create_called_with "pr edit ${EDIT_PR} --repo ${REPO} --body-file BODY"
     [ "$(commit_reads)" -eq 0 ]
-    [ "$(edits_made)" -eq 0 ]
-}
-
-@test "pr edit takes the PR create bot's login from PR_CREATOR_LOGIN, and falls back to prpixie when it is not a login" {
-    prepare_pr_edit other-pr-bot User 1
-    PR_CREATOR_LOGIN=other-pr-bot run_pr_edit --assign-self
-    [ "${status}" -eq 0 ]
-
-    prepare_pr_edit prpixie User 1
-    PR_CREATOR_LOGIN=other-pr-bot run_pr_edit --assign-self
-    [ "${status}" -eq 8 ]
-    [ "${stderr}" = "cfwf: edit refused: the pull request was opened by someone other than the agent" ]
-
-    PR_CREATOR_LOGIN='bad login;' run_pr_edit --assign-self
-    [ "${status}" -eq 0 ]
-}
-
-@test "pr edit reads every page of a bot's pull request's commits, and fails (exit 1) when they are more than GitHub lists or not as many as the pull request has" {
-    prepare_pr_edit prpixie User 3
-    jq -n --arg a "${AGENT}" '[[{author: {login: $a}}, {author: {login: $a}}], [{author: {login: $a}}]]' \
-        > "$(api_fixture "repos/${REPO}/pulls/${EDIT_PR}/commits").pages"
-    run_pr_edit --assign-self
-    [ "${status}" -eq 0 ]
-    [ "$(gh_call_count "api repos/${REPO}/pulls/${EDIT_PR}/commits?per_page=100 --paginate")" -eq 1 ]
-
-    rm -f "${GH_LOG}" "$(api_fixture "repos/${REPO}/pulls/${EDIT_PR}/commits").pages"
-    prepare_pr_edit prpixie User 251
-    run_pr_edit --assign-self
-    [ "${status}" -eq 1 ]
-    [ "${stderr}" = "cfwf: ${REPO}#${EDIT_PR} has more than 250 commits, so their authors cannot all be checked" ]
-    [ "$(commit_reads)" -eq 0 ]
-
-    prepare_pr_edit prpixie User 3 "${AGENT}" "${AGENT}"
-    run_pr_edit --assign-self
-    [ "${status}" -eq 1 ]
-    [ "${stderr}" = "cfwf: gh listed 2 commits for ${REPO}#${EDIT_PR}, which has 3" ]
-    [ "$(edits_made)" -eq 0 ]
+    [ "$(edits_made)" -eq 1 ]
 }
 
 @test "pr edit exits 9 for a pull request that is not there, and 1 when the repository is not there or a read fails" {
@@ -13645,22 +13602,23 @@ commit_reads() {
     [ ! -f "${GH_LOG}" ]
 }
 
-@test "pr edit help, from help pr edit, pr edit --help and pr edit -h, gives the usage, the ownership rule and the exit codes; help pr and the general help point to it; none calls gh" {
+@test "pr edit help, from help pr edit, pr edit --help and pr edit -h, gives the usage, says any pull request can be edited and gives the exit codes; help pr and the general help point to it; none calls gh" {
     local invocation
     for invocation in "help pr edit" "pr edit --help" "pr edit -h"; do
         # shellcheck disable=SC2086  # the invocation is split into its words on purpose
         run --separate-stderr "${SCRIPT}" ${invocation}
         [ "${status}" -eq 0 ]
         [[ "${output}" == "Usage: cfwf pr edit --repo <owner/repo> --pr <n> [--title <title>] [--body-file <file|->] [--priority <priority>] [--assign-self]"* ]]
-        [[ "${output}" == *"PR_CREATOR_LOGIN, default prpixie"* ]]
-        [[ "${output}" == *'"cfwf: edit refused: <rule>"'* ]]
+        [[ "${output}" == *"Any pull request in"*"the repository can be edited, whoever opened it and whoever wrote its commits"* ]]
+        [[ "${output}" != *"edit refused"* ]]
+        [[ "${output}" != *"PR_CREATOR_LOGIN"* ]]
         [[ "${output}" == *"Exit codes: 0 edited, or nothing to write; 1 a runtime failure"*"or the priority by the Security rule;"*"9 the pull request does not exist"* ]]
         [[ "${output}" == *"--priority     Make the pull request's priority Security, Urgent, High, Medium or Low"*"Security is never replaced"* ]]
     done
     run --separate-stderr "${SCRIPT}" help pr
     [[ "${output}" == *$'\n'"Run 'cfwf pr edit --help' for pr edit, which changes a pull request's title, body or priority, or assigns the agent."$'\n'* ]]
     run --separate-stderr "${SCRIPT}" help
-    [[ "${output}" == *$'\n'"  pr edit                  Change the agent's own PR's title, body or priority, or assign the agent (exit 8 when refused, 9 when not found)"$'\n'* ]]
+    [[ "${output}" == *$'\n'"  pr edit                  Change a PR's title, body or priority, or assign the agent (exit 8 when refused, 9 when not found)"$'\n'* ]]
     [ ! -f "${GH_LOG}" ]
 }
 
@@ -14169,15 +14127,16 @@ prepare_issue_priority() {
     [ "$(issue_edits_made)" -eq 0 ]
 }
 
-@test "pr edit --priority still applies the ownership rule first: someone else's pull request is refused (exit 8) with nothing written" {
+@test "pr edit --priority changes the priority of a pull request someone else opened, with no ownership refusal" {
     prepare_pr_priority Medium
     jq '.user.login = "someone-else"' < "$(api_fixture "repos/${REPO}/pulls/${EDIT_PR}").json" > "${TEST_TMP}/pull.json"
     write_api "repos/${REPO}/pulls/${EDIT_PR}" < "${TEST_TMP}/pull.json"
     run_pr_edit --priority Low
-    [ "${status}" -eq 8 ]
-    [ "${stderr}" = "cfwf: edit refused: the pull request was opened by someone other than the agent" ]
-    [ "$(edits_made)" -eq 0 ]
-    [ "$(gh_call_count "label ")" -eq 0 ]
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "${EDIT_PR_URL}"$'\n'"priority Medium -> Low" ]
+    issue_create_called_with "pr edit ${EDIT_PR} --repo ${REPO} --add-label Low --remove-label Medium"
+    [ "$(edits_made)" -eq 1 ]
 }
 
 # --- pr hand-off ---------------------------------------------------------------
@@ -15151,12 +15110,12 @@ prepare_issue_reopen() {
 STATE_PR=1700
 STATE_PR_URL="https://github.com/${REPO}/pull/${STATE_PR}"
 
-# Writes the fixtures of a pr close or pr reopen run: the agent's login and the pull request in the
-# state $1 (open or closed), merged $2 (false by default), opened by $3 (the agent by default) of the
-# account type $4 (User by default), with one commit by $5 (the agent by default).
+# Writes the fixtures of a pr close or pr reopen run: the pull request in the state $1 (open or
+# closed), merged $2 (false by default), opened by $3 (the agent by default) of the account type $4
+# (User by default), with one commit by $5 (the agent by default). There is no fixture for the
+# agent's login: pr close and pr reopen have no ownership rule, so they never read it.
 prepare_pr_state() {
     local state="$1" merged="${2:-false}" author="${3:-${AGENT}}" type="${4:-User}" committer="${5:-${AGENT}}"
-    jq -n --arg login "${AGENT}" '{login: $login}' > "${GH_FIXTURES}/api-user.json"
     jq -n --arg author "${author}" --arg type "${type}" --arg url "${STATE_PR_URL}" --arg state "${state}" --argjson merged "${merged}" \
         '{number: 1700, user: {login: $author, type: $type}, html_url: $url, commits: 1, state: $state, merged: $merged}' \
         | write_api "repos/${REPO}/pulls/${STATE_PR}"
@@ -15225,27 +15184,61 @@ run_pr_state() {
     [ "$(gh_call_count "pr reopen")" -eq 0 ]
 }
 
-@test "pr close refuses (exit 8) a pull request someone else opened, and a bot's with another author's commit, writing nothing" {
-    prepare_pr_state open false someone-else
+@test "pr close and pr reopen act on a pull request a person opened, without reading the agent's login or the commits" {
+    prepare_pr_state open false credfeto User credfeto
     run_pr_state close --body-file "${TEST_TMP}/reason.md"
-    [ "${status}" -eq 8 ]
-    [ "${stderr}" = "cfwf: close refused: the pull request was opened by someone other than the agent" ]
-    prepare_pr_state open false prpixie User someone-else
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "${STATE_PR_URL} closed" ]
+    cmp "${TEST_TMP}/reason.md" "${GH_FIXTURES}/comment-body.txt"
+    grep -qxF "pr close ${STATE_PR} --repo ${REPO}" "${GH_LOG}"
+
+    prepare_pr_state closed false someone-else User someone-else
     run_pr_state reopen
     [ "${status}" -eq 0 ]
-    [ "${output}" = "${STATE_PR_URL} already open" ]
-    run_pr_state close
-    [ "${status}" -eq 8 ]
-    [ "${stderr}" = "cfwf: close refused: the pull request has no commit by the agent" ]
-    [ "$(gh_call_count "pr comment")" -eq 0 ]
-    [ "$(gh_call_count "pr close")" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "${STATE_PR_URL} open" ]
+    grep -qxF "pr reopen ${STATE_PR} --repo ${REPO}" "${GH_LOG}"
+    [ "$(gh_call_count "api user")" -eq 0 ]
+    [ "$(gh_call_count "api repos/${REPO}/pulls/${STATE_PR}/commits")" -eq 0 ]
 }
 
-@test "pr close closes a bot's pull request whose commits are all the agent's" {
-    prepare_pr_state open false "dependabot[bot]" Bot
+# Makes the pull request of prepare_pr_state have $1 commits, listed as one for each further
+# argument, each the login of that commit's author ("" for none).
+write_state_pr_commits() {
+    local count="$1"
+    shift
+    jq --argjson count "${count}" '.commits = $count' < "$(api_fixture "repos/${REPO}/pulls/${STATE_PR}").json" > "${TEST_TMP}/pull.json"
+    write_api "repos/${REPO}/pulls/${STATE_PR}" < "${TEST_TMP}/pull.json"
+    printf '%s\n' "$@" \
+        | jq -R -s 'split("\n")[:-1] | map(if . == "" then {sha: "abc", author: null} else {sha: "abc", author: {login: .}} end)' \
+        | write_api "repos/${REPO}/pulls/${STATE_PR}/commits"
+}
+
+@test "pr close and pr reopen act on a bot's pull request with commits by people, by an author GitHub does not know, none by the agent, or more than GitHub lists, without reading the commits" {
+    prepare_pr_state open false prpixie User
+    write_state_pr_commits 21 "${AGENT}" "${AGENT}" "${AGENT}" credfeto credfeto ""
+    run_pr_state close
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "${STATE_PR_URL} closed" ]
+
+    prepare_pr_state closed false "dependabot[bot]" Bot credfeto
+    run_pr_state reopen --body-file "${TEST_TMP}/reason.md"
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "${STATE_PR_URL} open" ]
+    cmp "${TEST_TMP}/reason.md" "${GH_FIXTURES}/comment-body.txt"
+    [ "$(gh_line_of "pr comment ${STATE_PR}")" -lt "$(gh_line_of "pr reopen ${STATE_PR}")" ]
+
+    prepare_pr_state open false prpixie User credfeto
+    write_state_pr_commits 251 credfeto
     run_pr_state close
     [ "${status}" -eq 0 ]
     [ "${output}" = "${STATE_PR_URL} closed" ]
+    [ "$(gh_call_count "pr close ${STATE_PR} --repo ${REPO}")" -eq 2 ]
+    [ "$(gh_call_count "api user")" -eq 0 ]
+    [ "$(gh_call_count "api repos/${REPO}/pulls/${STATE_PR}/commits")" -eq 0 ]
 }
 
 @test "pr close exits 9 for a pull request that does not exist, and refuses a body with a leak (exit 8) before reading it" {
@@ -15272,11 +15265,15 @@ run_pr_state() {
     run "${SCRIPT}" pr close --help
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"Usage: cfwf pr close --repo <owner/repo> --pr <n> [--body-file <file|->]"* ]]
+    [[ "${output}" == *"Any pull request in the repository can be closed, whoever opened it"*"there is no ownership rule."* ]]
+    [[ "${output}" != *"PR_CREATOR_LOGIN"* ]]
     run "${SCRIPT}" help pr reopen
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"Usage: cfwf pr reopen"* ]]
+    [[ "${output}" == *"repository can be reopened, whoever opened it and whoever wrote its commits: there is no ownership"* ]]
+    [[ "${output}" != *"anyone"*"else's is refused"* ]]
     run "${SCRIPT}" help
-    [[ "${output}" == *"  pr close                 Close the agent's own PR without merging it"* ]]
+    [[ "${output}" == *"  pr close                 Close a PR without merging it, with an optional comment first (exit 8 refused, 9 not found)"* ]]
     [[ "${output}" == *"  issue reopen             Reopen a closed issue"* ]]
     [[ "${output}" == *"  issue comments           Print an issue's or PR's top-level comments"* ]]
     [ ! -f "${GH_LOG}" ]
@@ -16953,7 +16950,7 @@ block_usage_cases() {
     [[ "${output}" == *$'\n'"Run 'cfwf pr block --help' for pr block, which posts a question on a pull request and adds Blocked."$'\n'* ]]
     run "${SCRIPT}" help
     [[ "${output}" == *$'\n'"  issue post-plan          Post an issue's implementation plan, add Blocked, then move the board to Planning (exit 8 when refused)"$'\n'"  issue block              Post a question on an issue, then add Blocked, leaving the board as it is (exit 8 when refused)"$'\n'* ]]
-    [[ "${output}" == *$'\n'"  pr reopen                Reopen the agent's own closed PR, with an optional comment first (exit 8 refused, 9 not found)"$'\n'"  pr block                 Post a question on a PR, then add Blocked, leaving the board as it is (exit 8 when refused)"$'\n'* ]]
+    [[ "${output}" == *$'\n'"  pr reopen                Reopen a closed PR, with an optional comment first (exit 8 refused, 9 not found)"$'\n'"  pr block                 Post a question on a PR, then add Blocked, leaving the board as it is (exit 8 when refused)"$'\n'* ]]
     [ ! -f "${GH_LOG}" ]
 }
 
