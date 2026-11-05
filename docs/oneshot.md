@@ -25,6 +25,16 @@ done next.
 
 ## What one run actually does
 
+Before any of this, `oneshot` asks [githubstatus.com](https://www.githubstatus.com) whether
+GitHub has an open incident on a part the agent needs: Git Operations, Pull Requests, Issues,
+API Requests or Webhooks. If it has, the whole run is skipped with one log line and a clean
+exit, because during such an incident a session can't push, comment or move a board card: it
+would only fail or be charged for "making no progress". If githubstatus.com itself can't be
+reached or answers with something unreadable, the run goes ahead as normal. The same applies
+when a session's container fails its start-up check because GitHub refused the SSH key: that is
+most often a GitHub outage the status page has not reported yet, so the rest of the run is
+skipped with one log line and a clean exit. See [the README](../README.md#github-health-gate).
+
 1. **Fetch the priorities list.** A separate web service (not part of this repo) returns a
    sorted list of "here are the open Issues and Pull Requests across all the repos you look
    after, in priority order." See `PRIORITIES_URL` in `lib/globals`.

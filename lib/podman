@@ -13,9 +13,12 @@
 # Claude-level one; the caller must not count it against the item's invocation budget and must
 # not die the whole run over it — return a distinguishable code instead so main() can skip just
 # this item and retry it next tick (#1133).
+# On a return of 2, PREFLIGHT_GITHUB_SSH_AUTH_FAILED is 1 when the container's stderr holds the
+# entrypoint's GitHub SSH-auth message (PREFLIGHT_GITHUB_SSH_AUTH_TEXT), and 0 otherwise (#1846).
 run_claude_fresh() {
     local tmpfile="$1" item_type="${2:-}" item_id="${3:-}"
-    local stderrfile podman_exit=0
+    local stderrfile podman_exit=0 ssh_auth_failed=0
+    PREFLIGHT_GITHUB_SSH_AUTH_FAILED=0
     stderrfile=$(mktemp --suffix=.stderr) || die "Failed to create temp file for podman stderr"
     [ -n "${CLAUDE_PROMPT}" ] || die "Prompt is empty — refusing to start container"
     validate_bind_mounts
@@ -70,6 +73,9 @@ run_claude_fresh() {
             return 2
         fi
         cat "${stderrfile}" >&2
+        if grep -qF -- "${PREFLIGHT_GITHUB_SSH_AUTH_TEXT}" "${stderrfile}" 2> /dev/null; then
+            ssh_auth_failed=1
+        fi
         rm -f "${stderrfile}"
         # Claude CLI exits non-zero for API-level errors (e.g. 429 rate-limit) even
         # when it has written a valid result JSON to stdout.  Return 0 whenever a valid
@@ -86,6 +92,7 @@ run_claude_fresh() {
         fi
         jq -r '.result // ""' "${tmpfile}" 2>/dev/null >&2 || true
         rm -f "${tmpfile}"
+        PREFLIGHT_GITHUB_SSH_AUTH_FAILED="${ssh_auth_failed}"
         return 2
     fi
     cat "${stderrfile}" >&2
@@ -112,6 +119,10 @@ PRECHECK_STATUS=""
 PRECHECK_ERROR=""
 PRECHECK_SECTION=""
 PRECHECK_SESSION_LOG=""
+# 1 when the last run_claude_fresh failed pre-flight on GitHub SSH auth, else 0 (#1846): main()
+# then treats it as a likely GitHub outage and skips the rest of the tick.
+# shellcheck disable=SC2034  # read by oneshot after sourcing
+PREFLIGHT_GITHUB_SSH_AUTH_FAILED=0
 
 # Handles is_error=true in the Claude JSON response.
 # On blocking_limit: every run is already a fresh single-phase session, so there is nothing
