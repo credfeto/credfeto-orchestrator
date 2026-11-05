@@ -623,8 +623,19 @@ STUBEOF
 
         invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
         [ "$(grep -c 'KB_MCP_TOKEN' "${TEST_TMP}/podman_args")" -eq 0 ]
-        [ "$(cat "${TEST_TMP}/podman_secret" 2>/dev/null | grep -c 'kb-mcp-token')" -eq 0 ]
+        [ "$(grep -c 'kb-mcp-token' "${TEST_TMP}/podman_args")" -eq 0 ]
+        [ "$(grep -A1 -x 'create' "${TEST_TMP}/podman_secret" | grep -c 'kb-mcp-token')" -eq 0 ]
     done
+}
+
+@test "invoke_claude removes a leftover kb secret for the container even when KB_MCP_TOKEN is unset (#1791)" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    unset KB_MCP_TOKEN
+    make_secret_logging_podman_stub
+
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
+    [ "$(grep -A1 -x 'rm' "${TEST_TMP}/podman_secret" | grep -cx 'kb-mcp-token-orchestrator-credfeto')" -eq 1 ]
+    [ -z "${KB_MCP_SECRET_NAME}" ]
 }
 
 @test "invoke_claude notifies Discord before dying when creating the KB_MCP_TOKEN Podman secret fails" {

@@ -163,7 +163,7 @@ write_failing_run_body() {
     [ "$(grep -c 'kb-mcp-token' "${args}")" -eq 0 ]
     [ "$(grep -c 'KB_MCP_TOKEN' "${args}")" -eq 0 ]
     [ "$(grep -c 'kb-secret-token' "${args}")" -eq 0 ]
-    [ "$(grep -c 'kb-mcp-token' "${TEST_TMP}/podman_secret")" -eq 0 ]
+    [ "$(grep -c '^secret create kb-mcp-token' "${TEST_TMP}/podman_secret")" -eq 0 ]
     # The unset is scoped to the pre-check, so the agent launch that follows still has the token.
     [ "${KB_MCP_TOKEN}" = "kb-secret-token" ]
 }

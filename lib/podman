@@ -1287,7 +1287,8 @@ ensure_agent_container_ready() {
 # persistent CLAUDE_STATE_DIR/ORCHESTRATOR_CACHE_DIR subdirectories, the work item's transcript
 # directory (transcript_dir_path), and the Podman secrets for the Claude OAuth token and
 # GH_ENTERPRISE_TOKEN, plus one for KB_MCP_TOKEN when it is set (run_precommit_precheck unsets
-# it, so its container gets none). item_type and item_id (both set, checked by invoke_claude) select the
+# it, so its container gets none; any earlier kb secret for the container is removed either
+# way). item_type and item_id (both set, checked by invoke_claude) select the
 # transcript directory and feed the WORK_ITEM_URL banner and the Discord error notifications.
 # Installs the EXIT trap before the first mktemp, so a die() from inside here cannot leak a
 # tmpfile or a secret (#1103). Bash traps replace rather than append, so the one trap also stops
@@ -1446,7 +1447,10 @@ prepare_claude_container_args() {
             "${gh_token_target}" "GH_ENTERPRISE_TOKEN"
     fi
     # Read by the kb MCP server's headersHelper (kb-mcp-headers). Unset, the container gets
-    # nothing and the kb server simply fails to connect.
+    # nothing and the kb server simply fails to connect. Removed on every launch, set or not: a
+    # run killed before its EXIT trap leaves the secret behind, and once KB_MCP_TOKEN is dropped
+    # from .env nothing else would ever sweep it.
+    remove_podman_secret "kb-mcp-token-${container_name}"
     if [ -n "${KB_MCP_TOKEN:-}" ]; then
         KB_MCP_SECRET_NAME="kb-mcp-token-${container_name}"
         create_podman_env_secret "${item_type}" "${item_id}" "${KB_MCP_SECRET_NAME}" "${KB_MCP_TOKEN}" \
