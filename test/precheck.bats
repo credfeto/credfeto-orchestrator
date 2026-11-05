@@ -14,7 +14,8 @@ load oneshot_helper
 
 # Writes a podman stub. "podman run" logs its argv (one per line, then a "----" separator) to
 # ${TEST_TMP}/podman_run_args, counts itself in ${TEST_TMP}/podman_runs, and runs
-# ${TEST_TMP}/run_body.sh (write_run_body) with the argv; every other subcommand succeeds,
+# ${TEST_TMP}/run_body.sh (write_run_body) with the argv; "podman secret" logs its argv on one
+# line to ${TEST_TMP}/podman_secret; every other subcommand succeeds,
 # except inspect (no leftover container), "container exists" (the container is still there
 # unless ${TEST_TMP}/no_container exists) and rm, which is logged to ${TEST_TMP}/podman_rm and
 # fails when ${TEST_TMP}/podman_rm_fails exists.
@@ -37,6 +38,10 @@ case "$1" in
         printf -- '----\n' >> "${TEST_TMP}/podman_run_args"
         printf 'run\n' >> "${TEST_TMP}/podman_runs"
         [ -f "${TEST_TMP}/run_body.sh" ] && exec bash "${TEST_TMP}/run_body.sh" "$@"
+        exit 0
+        ;;
+    secret)
+        printf '%s\n' "$*" >> "${TEST_TMP}/podman_secret"
         exit 0
         ;;
     *) exit 0 ;;
@@ -134,6 +139,33 @@ write_failing_run_body() {
     grep -qF "Pre-commit checks passed" "${PRECHECK_SESSION_LOG}"
     # The clone is back on main afterwards.
     [ "$(git -C "${REPO_WORK_DIR}" branch --show-current)" = "main" ]
+}
+
+@test "the pre-check container gets no kb token secret even when KB_MCP_TOKEN is set (#1791)" {
+    setup_precheck_repo
+    stub_precheck_podman
+    write_run_body \
+        'printf "\n-> orchestrator-precheck: running pre-commit-check\n"' \
+        'exit 0'
+    export KB_MCP_TOKEN="kb-secret-token"
+    export GH_ENTERPRISE_TOKEN="gh-secret-token"
+
+    prepare_precheck_section pr "PullRequest_7" "${HEAD_SHA}" PullRequest 7 2> /dev/null
+
+    [ "${PRECHECK_STATUS}" = "pass" ]
+    local args="${TEST_TMP}/podman_run_args"
+    # The pre-check launch itself happened, with the other secrets untouched.
+    grep -qx -- "ORCHESTRATOR_PRECHECK=1" "${args}"
+    grep -q -- ":/home/developer/.claude/CLAUDE.md:ro$" "${args}"
+    grep -q -- "^gh-enterprise-token-orchestrator-credfeto,type=env," "${args}"
+    grep -qx -- "secret create gh-enterprise-token-orchestrator-credfeto -" "${TEST_TMP}/podman_secret"
+    # No kb secret is created for it or passed to it, and the token never reaches its argv.
+    [ "$(grep -c 'kb-mcp-token' "${args}")" -eq 0 ]
+    [ "$(grep -c 'KB_MCP_TOKEN' "${args}")" -eq 0 ]
+    [ "$(grep -c 'kb-secret-token' "${args}")" -eq 0 ]
+    [ "$(grep -c 'kb-mcp-token' "${TEST_TMP}/podman_secret")" -eq 0 ]
+    # The unset is scoped to the pre-check, so the agent launch that follows still has the token.
+    [ "${KB_MCP_TOKEN}" = "kb-secret-token" ]
 }
 
 @test "the pre-check runs with the PR head checked out, and fixer changes are reset afterwards (#1785)" {

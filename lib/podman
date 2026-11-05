@@ -1051,7 +1051,8 @@ precheck_log_tail() {
 # Runs pre-commit-check non-agentically in the agent image (#1785) on whatever REPO_WORK_DIR has
 # checked out, writing its output to log_file, and sets PRECHECK_STATUS (and PRECHECK_ERROR).
 # The launch is the agent's own: the same ensure_agent_container_ready pre-flight and the same
-# prepare_claude_container_args mounts, environment and secrets, plus ORCHESTRATOR_PRECHECK=1,
+# prepare_claude_container_args mounts, environment and secrets (except the kb token secret,
+# which only the agent session uses), plus ORCHESTRATOR_PRECHECK=1,
 # which makes containers/agent/entrypoint.sh exec pre-commit-check instead of claude. No model
 # runs and no prompt is given. The container gets its own limit, PRECHECK_TIMEOUT_SECS, and has
 # exited before the agent's container starts, so the agent's AGENT_TIMEOUT_MINUTES are untouched.
@@ -1084,6 +1085,9 @@ run_precommit_precheck() {
         # which the agent session after this check still needs; in here it must only clean up.
         # shellcheck disable=SC2329  # called by the EXIT trap prepare_claude_container_args installs
         stop_ssh_agent() { return 0; }
+        # Nothing in the pre-check uses kb, and its hooks run from the PR head, so the container
+        # gets no kb token secret. Unset here only: the agent launch after the check still has it.
+        unset KB_MCP_TOKEN
         prepare_claude_container_args "Pre-commit pre-check (#1785): no agent session runs in this container." \
             "${owner_token}" "${container_name}" "${item_type}" "${item_id}"
         PODMAN_RUN_ARGS+=(--env "ORCHESTRATOR_PRECHECK=1")
@@ -1282,7 +1286,8 @@ ensure_agent_container_ready() {
 # (the generated CLAUDE.md), CLAUDE_SCRATCH_TMPDIR (the /workspace/tmp scratch mount), the
 # persistent CLAUDE_STATE_DIR/ORCHESTRATOR_CACHE_DIR subdirectories, the work item's transcript
 # directory (transcript_dir_path), and the Podman secrets for the Claude OAuth token and
-# GH_ENTERPRISE_TOKEN, plus one for KB_MCP_TOKEN when it is set. item_type and item_id (both set, checked by invoke_claude) select the
+# GH_ENTERPRISE_TOKEN, plus one for KB_MCP_TOKEN when it is set (run_precommit_precheck unsets
+# it, so its container gets none). item_type and item_id (both set, checked by invoke_claude) select the
 # transcript directory and feed the WORK_ITEM_URL banner and the Discord error notifications.
 # Installs the EXIT trap before the first mktemp, so a die() from inside here cannot leak a
 # tmpfile or a secret (#1103). Bash traps replace rather than append, so the one trap also stops
