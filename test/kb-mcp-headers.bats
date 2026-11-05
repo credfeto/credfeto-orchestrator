@@ -79,6 +79,35 @@ write_token_file() {
     [[ "${output}" != *$'\r'* ]]
 }
 
+@test "a token file line's trailing spaces and tabs are stripped" {
+    write_token_file $'kb_padded \t \t\n' 600
+    run_helper
+    [ "${status}" -eq 0 ]
+    [ "${output}" = '{"Authorization":"Bearer kb_padded"}' ]
+}
+
+@test "blank lines before the token in the token file are skipped" {
+    write_token_file $'\n \t\r\n  kb_after_blank\n' 600
+    run_helper
+    [ "${status}" -eq 0 ]
+    [ "${output}" = '{"Authorization":"Bearer kb_after_blank"}' ]
+}
+
+@test "only the first non-blank line of the token file is the token" {
+    write_token_file $'kb_first\nkb_second\n' 600
+    run_helper
+    [ "${status}" -eq 0 ]
+    [ "${output}" = '{"Authorization":"Bearer kb_first"}' ]
+}
+
+@test "a token file holding only whitespace counts as no token" {
+    write_token_file $' \t\r\n\n' 600
+    run_helper
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == *'no kb token'* ]]
+}
+
 @test "a token file that is not mode 0600 is refused and not read" {
     local mode
     for mode in 644 640 604 400 700; do

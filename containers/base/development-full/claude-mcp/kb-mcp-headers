@@ -6,12 +6,12 @@
 #
 #   {"Authorization":"Bearer <token>"}
 #
-# The token is KB_MCP_TOKEN or, when that is unset or empty, the first line of
-# ${XDG_CONFIG_HOME:-$HOME/.config}/kb-mcp/token. The file is only read when it
-# is a regular file owned by the current user with mode 0600, so a token other
-# local users can read or replace is never sent. Only Claude Code's MCP client
-# reads stdout, so the token is never written anywhere else, and no failure
-# message names it.
+# The token is KB_MCP_TOKEN or, when that is unset or empty, the first non-blank
+# line of ${XDG_CONFIG_HOME:-$HOME/.config}/kb-mcp/token. The file is only read
+# when it is a regular file owned by the current user with mode 0600, so a token
+# other local users can read or replace is never sent. Only Claude Code's MCP
+# client reads stdout, so the token is never written anywhere else, and no
+# failure message names it.
 #
 # With no token it prints nothing on stdout and exits 1. It never prints `{}`
 # instead, because a helper output without Authorization lets Claude Code fall
@@ -31,11 +31,14 @@ token_file_is_private() {
 token_from_file() {
     [ -e "${token_file}" ] || [ -L "${token_file}" ] || return 0
     token_file_is_private || fail "${token_file} must be a regular file owned by you with mode 0600"
-    line=""
-    IFS= read -r line <"${token_file}" || [ -n "${line}" ] || return 0
-    # A file saved with CRLF line endings leaves a carriage return on the line.
-    cr=$(printf '\r')
-    printf '%s' "${line%"${cr}"}"
+    # Only the first non-blank line is the token, so a second line is never joined onto it.
+    # Its surrounding whitespace (including the carriage return a CRLF file leaves) is
+    # stripped; whitespace inside it is kept, so the token68 check below refuses it.
+    while IFS= read -r line || [ -n "${line}" ]; do
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [ -z "${line}" ] || { printf '%s' "${line}"; return 0; }
+    done <"${token_file}"
 }
 
 token="${KB_MCP_TOKEN:-}"
