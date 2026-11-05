@@ -239,6 +239,21 @@ fetch_branch_requires_status_checks() {
     ' 2>/dev/null
 }
 
+# Returns 0 when a check run on commit head_sha in repository repo_full is still running: its status
+# is queued, in_progress, waiting, pending or requested and it has no conclusion yet (a run whose
+# conclusion is set is done, whatever its status says, as pr_json_has_pending_ci_checks also
+# assumes). Returns 1 when every check run on the commit has finished, or there is none, and 2 when
+# the lookup fails. The REST check-runs endpoint lists every run on the commit, including
+# push-triggered ones that are not in the PR's statusCheckRollup (#1860). It is paginated at 100
+# per page, so a commit with many runs is read in full.
+head_commit_has_running_check_runs() {
+    local repo_full="$1" head_sha="$2" statuses
+    [ -n "${repo_full}" ] && [ -n "${head_sha}" ] || return 2
+    statuses=$(gh api --paginate "repos/${repo_full}/commits/${head_sha}/check-runs?per_page=100" \
+        --jq '.check_runs[] | select(.conclusion == null) | .status' 2> /dev/null) || return 2
+    printf '%s\n' "${statuses}" | grep -qxE 'queued|in_progress|waiting|pending|requested'
+}
+
 # Returns 0 when the PR's head branch is behind its base branch (the compare API's behind_by is
 # above zero), 1 when it is not, or when the PR comes from a fork or names no base/head branch, and
 # 2 when the lookup fails. Used only once a PR's merge state has stayed UNKNOWN past its timeout

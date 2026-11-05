@@ -111,6 +111,110 @@ load oneshot_helper
     [ "${status}" -ne 0 ]
 }
 
+@test "pr_json_has_pending_ci_checks returns true when a head-commit check run is still running, whatever the rollup says (#1860)" {
+    run pr_json_has_pending_ci_checks '{"headCheckRunsRunning":true,"statusCheckRollup":[]}'
+    [ "${status}" -eq 0 ]
+    run pr_json_has_pending_ci_checks '{"headCheckRunsRunning":true,"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true}]}'
+    [ "${status}" -eq 0 ]
+}
+
+# A gh stand-in for the REST check-runs endpoint: records its arguments and applies the --jq
+# filter it was given to ${TEST_TMP}/check_runs.json with the real jq, so the filter
+# head_commit_has_running_check_runs hands to gh is exercised against real-shaped JSON.
+_stub_gh_check_runs() {
+    make_stub_multiline gh \
+        "printf '%s\\n' \"\$*\" >> '${TEST_TMP}/gh_args'" \
+        "[ -f '${TEST_TMP}/gh_fail' ] && exit 1" \
+        "filter=''" \
+        "while [ \$# -gt 0 ]; do [ \"\$1\" = '--jq' ] && filter=\"\$2\"; shift; done" \
+        "jq -r \"\${filter}\" '${TEST_TMP}/check_runs.json'"
+}
+
+@test "head_commit_has_running_check_runs reads every page of the head commit's check runs and finds one still running (#1860)" {
+    _stub_gh_check_runs
+    local status_name
+    for status_name in queued in_progress waiting pending requested; do
+        printf '{"total_count":2,"check_runs":[{"name":"build","status":"completed","conclusion":"success"},{"name":"build-pre-release","status":"%s","conclusion":null}]}\n' "${status_name}" > "${TEST_TMP}/check_runs.json"
+        run head_commit_has_running_check_runs "org/repo" "abc123"
+        [ "${status}" -eq 0 ]
+    done
+    grep -qF 'api --paginate repos/org/repo/commits/abc123/check-runs?per_page=100 --jq' "${TEST_TMP}/gh_args"
+}
+
+@test "head_commit_has_running_check_runs returns 1 when every head-commit check run has completed, or there is none (#1860)" {
+    _stub_gh_check_runs
+    printf '{"total_count":2,"check_runs":[{"name":"build","status":"completed","conclusion":"success"},{"name":"lint","status":"completed","conclusion":"failure"}]}\n' > "${TEST_TMP}/check_runs.json"
+    run head_commit_has_running_check_runs "org/repo" "abc123"
+    [ "${status}" -eq 1 ]
+    # A run whose conclusion is already set is done, even if its status has not caught up.
+    printf '{"total_count":1,"check_runs":[{"name":"build","status":"in_progress","conclusion":"success"}]}\n' > "${TEST_TMP}/check_runs.json"
+    run head_commit_has_running_check_runs "org/repo" "abc123"
+    [ "${status}" -eq 1 ]
+    printf '{"total_count":0,"check_runs":[]}\n' > "${TEST_TMP}/check_runs.json"
+    run head_commit_has_running_check_runs "org/repo" "abc123"
+    [ "${status}" -eq 1 ]
+}
+
+@test "head_commit_has_running_check_runs returns 2 when the lookup fails or the response is not a check-runs listing (#1860)" {
+    _stub_gh_check_runs
+    printf '{"total_count":1,"check_runs":[{"name":"build","status":"queued","conclusion":null}]}\n' > "${TEST_TMP}/check_runs.json"
+    : > "${TEST_TMP}/gh_fail"
+    run head_commit_has_running_check_runs "org/repo" "abc123"
+    [ "${status}" -eq 2 ]
+    rm -f "${TEST_TMP}/gh_fail"
+    printf '{"message":"Not Found"}\n' > "${TEST_TMP}/check_runs.json"
+    run head_commit_has_running_check_runs "org/repo" "abc123"
+    [ "${status}" -eq 2 ]
+    run head_commit_has_running_check_runs "org/repo" ""
+    [ "${status}" -eq 2 ]
+}
+
+@test "annotate_pr_json_head_check_runs marks a PR whose head commit has a running check run as CI-pending, even with an empty or terminal rollup (#1860)" {
+    head_commit_has_running_check_runs() { printf '%s %s\n' "$1" "$2" >> "${TEST_TMP}/lookups"; return 0; }
+    local pr
+    for pr in '{"headRefOid":"abc","statusCheckRollup":[]}' '{"headRefOid":"abc","statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true}]}'; do
+        run annotate_pr_json_head_check_runs "${pr}" 5 "org/repo"
+        [ "${status}" -eq 0 ]
+        [ "$(printf '%s' "${output}" | jq -r '.headCheckRunsRunning')" = "true" ]
+        run pr_json_has_pending_ci_checks "${output}"
+        [ "${status}" -eq 0 ]
+    done
+    [ "$(sort -u "${TEST_TMP}/lookups")" = "org/repo abc" ]
+}
+
+@test "annotate_pr_json_head_check_runs leaves a PR whose head-commit check runs have all completed not pending (#1860)" {
+    head_commit_has_running_check_runs() { return 1; }
+    local pr='{"headRefOid":"abc","statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true}]}'
+    run --separate-stderr annotate_pr_json_head_check_runs "${pr}" 5 "org/repo"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${pr}" ]
+    [ -z "${stderr}" ]
+    run pr_json_has_pending_ci_checks "${output}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "annotate_pr_json_head_check_runs warns and falls back to the rollup alone when the lookup fails (#1860)" {
+    head_commit_has_running_check_runs() { return 2; }
+    local pr='{"headRefOid":"abc","statusCheckRollup":[]}'
+    run --separate-stderr annotate_pr_json_head_check_runs "${pr}" 5 "org/repo"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${pr}" ]
+    [[ "${stderr}" == *"Failed to look up the check runs on the head commit of PR #5 in org/repo: judging CI from the PR's check rollup alone this time"* ]]
+    run pr_json_has_pending_ci_checks "${output}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "annotate_pr_json_head_check_runs makes no lookup when the rollup is already pending or there is no head commit (#1860)" {
+    head_commit_has_running_check_runs() { printf 'called\n' >> "${TEST_TMP}/lookups"; return 0; }
+    local pr='{"headRefOid":"abc","statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null,"isRequired":true}]}'
+    run annotate_pr_json_head_check_runs "${pr}" 5 "org/repo"
+    [ "${output}" = "${pr}" ]
+    pr='{"statusCheckRollup":[]}'
+    run annotate_pr_json_head_check_runs "${pr}" 5 "org/repo"
+    [ "${output}" = "${pr}" ]
+    [ ! -f "${TEST_TMP}/lookups" ]
+}
+
 @test "clear_pr_ci_pending_state removes the state file when it exists" {
     save_pr_head_oid 42 "deadbeef" "1700000000"
     local state_file
@@ -1150,6 +1254,83 @@ cat "'"${TEST_TMP}"'/behind"'
     [[ "${output}" == *"PR #5 in org/repo: still CI-pending after this session — not counting it against the idle budget"* ]]
     load_pr_invocation_counts 5
     [ "${PR_INVOCATION_IDLE}" -eq 2 ]
+    [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
+}
+
+@test "main defers agent invocation when only a head-commit check run is still running and the rollup is empty, in direct-PR path (#1860)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    head_commit_has_running_check_runs() { printf '%s %s\n' "$1" "$2" >> "${TEST_TMP}/head_lookups"; return 0; }
+    fingerprint_pr_json() { printf 'fp-same\n'; }
+    load_pr_fingerprint()  { printf 'fp-same\n'; }
+    save_pr_invocation_counts 5 2 2
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+    CI_CHECK_TIMEOUT_MINUTES=60
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"CI checks pending"* ]]
+    [ "$(cat "${TEST_TMP}/head_lookups")" = "org/repo abc" ]
+    load_pr_invocation_counts 5
+    [ "${PR_INVOCATION_IDLE}" -eq 2 ]
+    [ "${PR_INVOCATION_TOTAL}" -eq 2 ]
+}
+
+@test "main does not charge the idle budget when a head-commit check run is still running after the session with a terminal rollup, in direct-PR path (#1860)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    local _head_call_file="${TEST_TMP}/_head_calls"
+    printf '0' > "${_head_call_file}"
+    head_commit_has_running_check_runs() {
+        local _count
+        _count=$(cat "${_head_call_file}")
+        _count=$((_count + 1))
+        printf '%d' "${_count}" > "${_head_call_file}"
+        # Nothing running before the session, so the agent is invoked; a push-triggered run
+        # absent from the rollup is running by the time the session ends.
+        [ "${_count}" -ge 2 ]
+    }
+    fingerprint_pr_json() { printf 'fp-same\n'; }
+    load_pr_fingerprint()  { printf 'fp-same\n'; }
+    save_pr_invocation_counts 5 2 2
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"PR #5 in org/repo: still CI-pending after this session — not counting it against the idle budget"* ]]
+    [ "$(cat "${_head_call_file}")" -eq 2 ]
+    load_pr_invocation_counts 5
+    [ "${PR_INVOCATION_IDLE}" -eq 2 ]
+    [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
+}
+
+@test "main invokes the agent and charges the idle budget as before when the head-commit check-run lookup fails, with a warning, in direct-PR path (#1860)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    head_commit_has_running_check_runs() { return 2; }
+    fingerprint_pr_json() { printf 'fp-same\n'; }
+    load_pr_fingerprint()  { printf 'fp-same\n'; }
+    save_pr_invocation_counts 5 2 2
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"Failed to look up the check runs on the head commit of PR #5 in org/repo: judging CI from the PR's check rollup alone this time"* ]]
+    [[ "${output}" != *"still CI-pending after this session"* ]]
+    load_pr_invocation_counts 5
+    [ "${PR_INVOCATION_IDLE}" -eq 3 ]
     [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
 }
 

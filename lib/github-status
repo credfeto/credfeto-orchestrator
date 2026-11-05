@@ -15,7 +15,13 @@ pr_json_has_placeholder_file() {
 # Prints pr_json with each statusCheckRollup entry's isRequired set from required_names_json (the
 # output of fetch_pr_required_check_names), matched on the check's name or legacy context.
 # GitHub's own required-check rules are keyed on that name, so a name match is the same test it
-# applies. When required_names_json is "[]" (the lookup succeeded but nothing on this commit is
+# applies. When a required name has no statusCheckRollup entry at all (a required check that has
+# not reported on this commit yet, for example while the Actions queue is backed up),
+# requiredChecksNotYetReported is also set, so pr_json_has_pending_ci_checks waits for it rather
+# than treating CI as finished because every entry that is there is terminal (#1847). The same
+# names are reused for the post-session re-read, so after a push to a new commit they are missing
+# again until they report.
+# When required_names_json is "[]" (the lookup succeeded but nothing on this commit is
 # required) base_requires_checks (fetch_branch_requires_status_checks: "true", "false", or empty
 # when unknown) says which of two cases that is:
 # - "false", the base branch requires nothing (no branch protection): every entry is marked
@@ -47,7 +53,12 @@ annotate_pr_json_required_checks() {
     printf '%s' "${pr_json}" | jq -c --argjson required "${required_names_json}" --argjson baseRequires "${base_requires_checks:-false}" '
         if (.statusCheckRollup | type) != "array" then .
         elif ($required | length) > 0
-        then .statusCheckRollup |= map(. + {isRequired: ((.name // .context) as $n | $required | index($n) != null)})
+        then (.statusCheckRollup |= map(. + {isRequired: ((.name // .context) as $n | $required | index($n) != null)}))
+            | [.statusCheckRollup[] | (.name // .context)] as $present
+            | if any($required[]; . as $r | $present | index($r) == null)
+              then .requiredChecksNotYetReported = true
+              else .
+              end
         elif $baseRequires
         then (.statusCheckRollup |= map(. + {isRequired: false})) | .requiredChecksNotYetReported = true
         else .statusCheckRollup |= map(. + {isRequired: true})
@@ -922,9 +933,12 @@ issue_should_advance_unchanged() {
 # required entry is terminal. Non-required (optional) checks are ignored so they cannot gate agent
 # invocation. Also returns 0 when annotate_pr_json_required_checks set requiredChecksNotYetReported
 # (the base branch requires checks but none has reported on this commit): those required checks
-# are pending even though no rollup entry stands for them. Right after a push that is a short wait.
-# For a required workflow whose paths filter this PR does not match it never ends, but GitHub will
-# not merge such a PR either, so the ci_checks_timed_out escalation to a human is the right outcome.
+# are pending even though no rollup entry stands for them. The same flag is set when the required
+# names are known and one of them has no rollup entry (#1847). Right after a push that is a short
+# wait. For a required workflow whose paths filter this PR does not match it never ends, but GitHub
+# will not merge such a PR either, so the ci_checks_timed_out escalation to a human is the right
+# outcome. Also returns 0 when annotate_pr_json_head_check_runs set headCheckRunsRunning: a check
+# run on the PR's head commit is still running, whether or not the rollup shows it (#1860).
 pr_json_has_pending_ci_checks() {
     local pr_json="$1"
     # statusCheckRollup mixes two GraphQL node types: CheckRun (modern GitHub Actions
@@ -943,6 +957,7 @@ pr_json_has_pending_ci_checks() {
     # "" in `gh pr view --json statusCheckRollup` (what this is fed), so both count (#1483).
     printf '%s' "${pr_json}" | jq -e '
         .requiredChecksNotYetReported == true
+        or .headCheckRunsRunning == true
         or ((.statusCheckRollup // [])
         | (length > 0) and any(.[];
             .isRequired != false
@@ -954,6 +969,38 @@ pr_json_has_pending_ci_checks() {
             )
         ))
     ' > /dev/null
+}
+
+# Prints pr_json with headCheckRunsRunning set to true when a check run on the PR's head commit
+# (headRefOid) is still running (head_commit_has_running_check_runs, lib/github), so
+# pr_json_has_pending_ci_checks treats the PR as CI-pending: a check that is still running is never
+# a reason to charge the idle budget (#1860). This catches what the PR's statusCheckRollup misses: a
+# push-triggered run on a draft PR, whose PR-triggered workflows were skipped, is not attached to the
+# rollup, and a required check is not marked required at all when the base branch's protection
+# cannot be read. pr_json is printed unchanged, with no API call, when it is already CI-pending or
+# names no head commit. A failed lookup is warned about (with PR #item_id) and leaves pr_json
+# unchanged, so CI is judged from the rollup alone, as before, and a GitHub blip cannot hide a PR
+# for ever. A run that never finishes keeps the PR pending until ci_checks_timed_out escalates it.
+annotate_pr_json_head_check_runs() {
+    local pr_json="$1" item_id="$2" repo_full="${3:-${REPO_FULL}}" head rc=0
+    if pr_json_has_pending_ci_checks "${pr_json}" 2> /dev/null; then
+        printf '%s' "${pr_json}"
+        return 0
+    fi
+    head=$(printf '%s' "${pr_json}" | jq -r '.headRefOid // empty' 2> /dev/null)
+    if [ -z "${head}" ]; then
+        printf '%s' "${pr_json}"
+        return 0
+    fi
+    head_commit_has_running_check_runs "${repo_full}" "${head}" || rc=$?
+    case "${rc}" in
+        0) printf '%s' "${pr_json}" | jq -c '.headCheckRunsRunning = true' 2> /dev/null || printf '%s' "${pr_json}" ;;
+        1) printf '%s' "${pr_json}" ;;
+        *)
+            warn "Failed to look up the check runs on the head commit of PR #${item_id} in ${repo_full}: judging CI from the PR's check rollup alone this time"
+            printf '%s' "${pr_json}"
+            ;;
+    esac
 }
 
 # Posts a Blocked-marking comment and label when a PR's CI checks have been pending past the
