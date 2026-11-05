@@ -98,6 +98,7 @@ CLAUDE_PROMPT=""
 GPG_PUBKEY_TMPDIR=""
 PODMAN_SECRET_NAME=""
 GH_ENTERPRISE_SECRET_NAME=""
+KB_MCP_SECRET_NAME=""
 # Host-side per-invocation scratch dir bind-mounted read-write at CONTAINER_SCRATCH_PATH and
 # exposed to the agent via TMPDIR/TMP/TEMP (#1351) — throwaway space, wiped every invocation,
 # distinct from the persistent sessions/plans/cache/backups state dirs.
@@ -801,7 +802,7 @@ validate_bind_mounts() {
 # globals. Shared by every invoke_claude exit path (success, infra-failure early-return, and
 # the "no result object" die) so cleanup cannot drift between them (#1133).
 # Removes the per-invocation CLAUDE.md tempfile, GPG pubkey tempdir, and any podman secrets
-# created for this invocation (Claude OAuth / GH Enterprise tokens), resetting their globals.
+# created for this invocation (Claude OAuth / GH Enterprise tokens, plus the kb token secret KB_MCP_SECRET_NAME when KB_MCP_TOKEN is set), resetting their globals.
 # Shared by every invoke_claude exit path (success, infra-failure early-return, and the "no
 # result object" die) so cleanup cannot drift between them, AND by the EXIT trap — which used
 # to be the ONLY thing that removed the podman secrets, firing only when the whole oneshot
@@ -824,14 +825,32 @@ cleanup_claude_invocation_tmpfiles() {
         rm -rf "${CLAUDE_SCRATCH_TMPDIR}"
         CLAUDE_SCRATCH_TMPDIR=""
     fi
-    if [ -n "${PODMAN_SECRET_NAME}" ]; then
-        podman secret rm "${PODMAN_SECRET_NAME}" >/dev/null 2>&1 || true
-        PODMAN_SECRET_NAME=""
-    fi
-    if [ -n "${GH_ENTERPRISE_SECRET_NAME}" ]; then
-        podman secret rm "${GH_ENTERPRISE_SECRET_NAME}" >/dev/null 2>&1 || true
-        GH_ENTERPRISE_SECRET_NAME=""
-    fi
+    remove_podman_secret "${PODMAN_SECRET_NAME}"
+    PODMAN_SECRET_NAME=""
+    remove_podman_secret "${GH_ENTERPRISE_SECRET_NAME}"
+    GH_ENTERPRISE_SECRET_NAME=""
+    remove_podman_secret "${KB_MCP_SECRET_NAME}"
+    KB_MCP_SECRET_NAME=""
+}
+
+# Removes the named podman secret, ignoring any error; does nothing for an empty name.
+remove_podman_secret() {
+    local secret_name="$1"
+    [ -n "${secret_name}" ] || return 0
+    podman secret rm "${secret_name}" >/dev/null 2>&1 || true
+}
+
+# Recreates the podman secret <secret_name> from <token> and appends its --secret argument
+# (type=env, target <target>) to PODMAN_RUN_ARGS. On failure it notifies Discord and dies with
+# "Failed to create Podman secret for <label>". The token reaches podman only on stdin, never as
+# an argument. Call it directly, never in a pipeline or $(...): a subshell would lose the
+# PODMAN_RUN_ARGS append and turn die into a subshell exit.
+create_podman_env_secret() {
+    local item_type="$1" item_id="$2" secret_name="$3" token="$4" target="$5" label="$6"
+    remove_podman_secret "${secret_name}"
+    printf '%s' "${token}" | podman secret create "${secret_name}" - \
+        || { notify_discord_claude_error "${item_type}" "${item_id}" "Failed to create Podman secret for ${label}"; die "Failed to create Podman secret for ${label}"; }
+    PODMAN_RUN_ARGS+=( --secret "${secret_name},type=env,target=${target}" )
 }
 
 # Runs a single FRESH claude session for one workflow phase and returns 0 on success.
@@ -1032,7 +1051,8 @@ precheck_log_tail() {
 # Runs pre-commit-check non-agentically in the agent image (#1785) on whatever REPO_WORK_DIR has
 # checked out, writing its output to log_file, and sets PRECHECK_STATUS (and PRECHECK_ERROR).
 # The launch is the agent's own: the same ensure_agent_container_ready pre-flight and the same
-# prepare_claude_container_args mounts, environment and secrets, plus ORCHESTRATOR_PRECHECK=1,
+# prepare_claude_container_args mounts, environment and secrets (except the kb token secret,
+# which only the agent session uses), plus ORCHESTRATOR_PRECHECK=1,
 # which makes containers/agent/entrypoint.sh exec pre-commit-check instead of claude. No model
 # runs and no prompt is given. The container gets its own limit, PRECHECK_TIMEOUT_SECS, and has
 # exited before the agent's container starts, so the agent's AGENT_TIMEOUT_MINUTES are untouched.
@@ -1065,6 +1085,9 @@ run_precommit_precheck() {
         # which the agent session after this check still needs; in here it must only clean up.
         # shellcheck disable=SC2329  # called by the EXIT trap prepare_claude_container_args installs
         stop_ssh_agent() { return 0; }
+        # Nothing in the pre-check uses kb, and its hooks run from the PR head, so the container
+        # gets no kb token secret. Unset here only: the agent launch after the check still has it.
+        unset KB_MCP_TOKEN
         prepare_claude_container_args "Pre-commit pre-check (#1785): no agent session runs in this container." \
             "${owner_token}" "${container_name}" "${item_type}" "${item_id}"
         PODMAN_RUN_ARGS+=(--env "ORCHESTRATOR_PRECHECK=1")
@@ -1263,7 +1286,9 @@ ensure_agent_container_ready() {
 # (the generated CLAUDE.md), CLAUDE_SCRATCH_TMPDIR (the /workspace/tmp scratch mount), the
 # persistent CLAUDE_STATE_DIR/ORCHESTRATOR_CACHE_DIR subdirectories, the work item's transcript
 # directory (transcript_dir_path), and the Podman secrets for the Claude OAuth token and
-# GH_ENTERPRISE_TOKEN. item_type and item_id (both set, checked by invoke_claude) select the
+# GH_ENTERPRISE_TOKEN, plus one for KB_MCP_TOKEN when it is set (run_precommit_precheck unsets
+# it, so its container gets none). Any earlier secret of each kind for the container is removed
+# either way. item_type and item_id (both set, checked by invoke_claude) select the
 # transcript directory and feed the WORK_ITEM_URL banner and the Discord error notifications.
 # Installs the EXIT trap before the first mktemp, so a die() from inside here cannot leak a
 # tmpfile or a secret (#1103). Bash traps replace rather than append, so the one trap also stops
@@ -1309,6 +1334,7 @@ prepare_claude_container_args() {
     fi
     PODMAN_SECRET_NAME=""
     GH_ENTERPRISE_SECRET_NAME=""
+    KB_MCP_SECRET_NAME=""
     for d in sessions session-env plans cache backups; do
         mkdir -p "${CLAUDE_STATE_DIR}/${d}" || die "Failed to create persistent Claude state directory: ${CLAUDE_STATE_DIR}/${d}"
     done
@@ -1405,13 +1431,17 @@ prepare_claude_container_args() {
     # by a run that crashed between create and its EXIT trap would otherwise never be swept
     # again after the self-update, leaving a live token in the store. Best-effort, every launch.
     podman secret rm "claude-oauth-${OWNER}" "gh-enterprise-token" >/dev/null 2>&1 || true
+    # Removed on every launch, token or not: a run killed before its EXIT trap leaves the secret
+    # behind, and once the owner's token file is gone nothing else would ever sweep it.
+    remove_podman_secret "claude-oauth-${container_name}"
     if [ -n "${owner_token}" ]; then
         PODMAN_SECRET_NAME="claude-oauth-${container_name}"
-        podman secret rm "${PODMAN_SECRET_NAME}" >/dev/null 2>&1 || true
-        printf '%s' "${owner_token}" | podman secret create "${PODMAN_SECRET_NAME}" - \
-            || { notify_discord_claude_error "${item_type}" "${item_id}" "Failed to create Podman secret for Claude OAuth token"; die "Failed to create Podman secret for Claude OAuth token"; }
-        PODMAN_RUN_ARGS+=( --secret "${PODMAN_SECRET_NAME},type=env,target=CLAUDE_CODE_OAUTH_TOKEN" )
+        create_podman_env_secret "${item_type}" "${item_id}" "${PODMAN_SECRET_NAME}" "${owner_token}" \
+            "CLAUDE_CODE_OAUTH_TOKEN" "Claude OAuth token"
     fi
+    # Removed on every launch, set or not: a run killed before its EXIT trap leaves the secret
+    # behind, and once GH_ENTERPRISE_TOKEN is dropped from .env nothing else would ever sweep it.
+    remove_podman_secret "gh-enterprise-token-${container_name}"
     if [ -n "${GH_ENTERPRISE_TOKEN:-}" ]; then
         # gh only honours GH_ENTERPRISE_TOKEN for a non-github.com GH_HOST; for a direct
         # github.com login (an unproxied .env) the same token has to arrive as GH_TOKEN or every
@@ -1419,10 +1449,18 @@ prepare_claude_container_args() {
         local gh_token_target="GH_ENTERPRISE_TOKEN"
         [ "$(normalize_gh_host "${GH_HOST:-}")" = "github.com" ] && gh_token_target="GH_TOKEN"
         GH_ENTERPRISE_SECRET_NAME="gh-enterprise-token-${container_name}"
-        podman secret rm "${GH_ENTERPRISE_SECRET_NAME}" >/dev/null 2>&1 || true
-        printf '%s' "${GH_ENTERPRISE_TOKEN}" | podman secret create "${GH_ENTERPRISE_SECRET_NAME}" - \
-            || { notify_discord_claude_error "${item_type}" "${item_id}" "Failed to create Podman secret for GH_ENTERPRISE_TOKEN"; die "Failed to create Podman secret for GH_ENTERPRISE_TOKEN"; }
-        PODMAN_RUN_ARGS+=( --secret "${GH_ENTERPRISE_SECRET_NAME},type=env,target=${gh_token_target}" )
+        create_podman_env_secret "${item_type}" "${item_id}" "${GH_ENTERPRISE_SECRET_NAME}" "${GH_ENTERPRISE_TOKEN}" \
+            "${gh_token_target}" "GH_ENTERPRISE_TOKEN"
+    fi
+    # Read by the kb MCP server's headersHelper (kb-mcp-headers). Unset, the container gets
+    # nothing and the kb server simply fails to connect. Removed on every launch, set or not: a
+    # run killed before its EXIT trap leaves the secret behind, and once KB_MCP_TOKEN is dropped
+    # from .env nothing else would ever sweep it.
+    remove_podman_secret "kb-mcp-token-${container_name}"
+    if [ -n "${KB_MCP_TOKEN:-}" ]; then
+        KB_MCP_SECRET_NAME="kb-mcp-token-${container_name}"
+        create_podman_env_secret "${item_type}" "${item_id}" "${KB_MCP_SECRET_NAME}" "${KB_MCP_TOKEN}" \
+            "KB_MCP_TOKEN" "KB_MCP_TOKEN"
     fi
     [ -n "${GH_HOST:-}" ]                && PODMAN_RUN_ARGS+=( --env "GH_HOST=$(normalize_gh_host "${GH_HOST}")" )
     PODMAN_RUN_ARGS+=( --env "CLAUDE_CODE_AUTO_COMPACT_WINDOW=${CLAUDE_CODE_AUTO_COMPACT_WINDOW}" )

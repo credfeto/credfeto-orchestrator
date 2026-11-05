@@ -5,6 +5,11 @@
       "url": "https://workflow-mcp.markridgwell.com/mcp",
       "headersHelper": "/etc/claude-code/mcp/cfwf-mcp-headers"
     },
+    "kb": {
+      "type": "http",
+      "url": "https://memory.markridgwell.com/dev/mcp",
+      "headersHelper": "/etc/claude-code/mcp/kb-mcp-headers"
+    },
     "build-dotnet": {
       "type": "stdio",
       "command": "/home/developer/.dotnet/tools/credfeto-build-dotnet",
@@ -20,6 +25,5 @@
       "url": "http://127.0.0.1:64542/stream",
       "type": "http"
     }
-
   }
 }

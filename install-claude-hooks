@@ -23,13 +23,13 @@
 # as settings.json.bak.
 #
 # It also installs /etc/claude-code/managed-mcp.json, which takes exclusive
-# control of the MCP servers Claude Code loads, and the cfwf-mcp-headers
-# helper it names. The installed file is the container's shipped servers
-# (cfwf, build-dotnet and any others listed) merged with the MCP servers in
-# ~/.claude.json (user scope and every project scope), so a host keeps its own
-# servers; see merge_host_mcp_servers for what is left out. The merge is a
-# snapshot: a server added to ~/.claude.json later only takes effect once this
-# script is run again.
+# control of the MCP servers Claude Code loads, and the cfwf-mcp-headers and
+# kb-mcp-headers helpers it names. The installed file is the container's
+# shipped servers (cfwf, kb, build-dotnet and any others listed) merged with
+# the MCP servers in ~/.claude.json (user scope and every project scope), so a
+# host keeps its own servers; see merge_host_mcp_servers for what is left out.
+# The merge is a snapshot: a server added to ~/.claude.json later only takes
+# effect once this script is run again.
 #
 # The first argument, when given, is a file of allowed directory roots for
 # this host; it is installed as the root-owned allowed-dirs.local next to the
@@ -78,7 +78,8 @@ SOURCE_USER_SETTINGS="${SOURCE_DIR}/claude-user-settings.json"
 SOURCE_HOOKS_DIR="${SOURCE_DIR}/claude-hooks"
 SOURCE_CFWF="${SOURCE_DIR}/scripts/cfwf"
 SOURCE_MANAGED_MCP="${SOURCE_DIR}/claude-managed-mcp.json"
-SOURCE_MCP_HEADERS="${SOURCE_DIR}/claude-mcp/cfwf-mcp-headers"
+SOURCE_CFWF_MCP_HEADERS="${SOURCE_DIR}/claude-mcp/cfwf-mcp-headers"
+SOURCE_KB_MCP_HEADERS="${SOURCE_DIR}/claude-mcp/kb-mcp-headers"
 CFWF_BIN_DIR="${CFWF_BIN_DIR:-/usr/local/bin}"
 CLAUDE_MANAGED_DIR="${CLAUDE_MANAGED_DIR:-/etc/claude-code}"
 
@@ -160,7 +161,8 @@ install_managed_files() {
         root_install -m "${mode}" "${src}" "${hooks_dir}/$(basename "${src}")"
     done < <(find "${SOURCE_HOOKS_DIR}" -mindepth 1 -maxdepth 1 -type f ! -name allowed-dirs.local ! -name secret-files.local | sort)
     root_install -m 0444 "${SOURCE_MANAGED_SETTINGS}" "${CLAUDE_MANAGED_DIR}/managed-settings.json"
-    root_install -m 0755 "${SOURCE_MCP_HEADERS}" "${mcp_dir}/$(basename "${SOURCE_MCP_HEADERS}")"
+    root_install -m 0755 "${SOURCE_CFWF_MCP_HEADERS}" "${mcp_dir}/$(basename "${SOURCE_CFWF_MCP_HEADERS}")"
+    root_install -m 0755 "${SOURCE_KB_MCP_HEADERS}" "${mcp_dir}/$(basename "${SOURCE_KB_MCP_HEADERS}")"
     root_install -m 0444 "${merged_mcp_file}" "${CLAUDE_MANAGED_DIR}/managed-mcp.json"
     [ -n "${allowed_dirs_file}" ] && root_install -m 0444 "${allowed_dirs_file}" "${hooks_dir}/allowed-dirs.local"
 
@@ -174,14 +176,20 @@ install_managed_files() {
     return 1
 }
 
-# Prints a JSON report of merging the shipped servers (cfwf, build-dotnet and
-# any others listed, copied as they are: they are reviewed here, so none of the
-# checks below apply to them) with the host's own MCP servers from the given
+# Prints a JSON report of merging the shipped servers (cfwf, kb, build-dotnet
+# and any others listed, copied as they are: they are reviewed here, so none of
+# the checks below apply to them) with the host's own MCP servers from the given
 # ~/.claude.json (a missing or empty file has none):
 #
 #   merged      the managed-mcp.json to install
-#   duplicates  host servers left out because their URL is cfwf's, which
-#               replaces them
+#   duplicates  host servers left out because their URL is a shipped http
+#               server's, which replaces them, keyed by that shipped server's
+#               name; one with that server's own name and definition is the
+#               same server, so it is merged silently instead
+#   duplicate_secrets
+#               duplicates that may hold a secret, by the same test as refused:
+#               left out all the same, but named so the plaintext secret in
+#               ~/.claude.json can be rotated or moved
 #   refused     host servers left out because they may hold a secret: a headers
 #               or env value holds literal text rather than only ${VAR}
 #               references (an optional Bearer/Basic/Token scheme word is
@@ -236,17 +244,30 @@ merge_host_mcp_servers() {
             or command_has_credentials;
 
         ($hosts[0] // {}) as $host
-        | (.mcpServers.cfwf.url) as $cfwf_url
         | (.mcpServers | to_entries) as $shipped
+        | ($shipped | map(select(.value.type == "http" and (.value.url | type == "string")))) as $shipped_http
         | [($host | objects | .mcpServers // {} | objects | to_entries[]),
            ($host | objects | .projects // {} | objects | .[] | objects | .mcpServers // {} | objects | to_entries[])]
-        | map(select(.value | type == "object")) as $hosted
-        | ($hosted | map(select(same_url(.value.url // "" | tostring; $cfwf_url)))) as $duplicates
+        # A host entry with the name and definition of a shipped server is that
+        # server, already kept, so it is neither a duplicate nor refused.
+        | (map(select(.value | type == "object")) - $shipped) as $hosted
+        # Matched by URL once, so the servers left out and the servers named
+        # in the report cannot drift apart; a host server matching no shipped
+        # server yields nothing from first() and so drops out of the list.
+        | ($hosted
+            | map((.value.url // "" | tostring) as $url
+                | first($shipped_http[] | select(same_url($url; .value.url)) | .key) as $replaced_by
+                | . + {replaced_by: $replaced_by})) as $replaced
+        | ($replaced | map(del(.replaced_by))) as $duplicates
         | ($hosted - $duplicates | map(select(.value | holds_literal_secret))) as $refused
         | (($shipped + ($hosted - $duplicates - $refused)) | unique) as $kept
         | {
             merged: {mcpServers: ($kept | from_entries)},
-            duplicates: ($duplicates | map(.key) | unique),
+            duplicates: ($replaced
+                | group_by(.replaced_by)
+                | map({key: .[0].replaced_by, value: (map(.key) | unique)})
+                | from_entries),
+            duplicate_secrets: ($duplicates | map(select(.value | holds_literal_secret) | .key) | unique),
             refused: ($refused | map(.key) | unique),
             collisions: ($kept | group_by(.key) | map(select(length > 1) | .[0].key))
           }
@@ -260,8 +281,12 @@ write_merged_mcp() {
     local report="$1" merged_mcp_file="$2" host_claude_json="$3"
     local names
 
-    names=$(jq -r '.duplicates | join(", ")' <<<"${report}")
-    [ -z "${names}" ] || info "Left out ${names} from ${host_claude_json}: same URL as cfwf, which replaces them. Remove them from ${host_claude_json}, as they are no longer used."
+    local shipped
+    while IFS=$'\t' read -r shipped names; do
+        info "Left out ${names} from ${host_claude_json}: same URL as ${shipped}, which replaces them. Remove them from ${host_claude_json}, as they are no longer used."
+    done < <(jq -r '.duplicates | to_entries[] | [.key, (.value | join(", "))] | @tsv' <<<"${report}")
+    names=$(jq -r '.duplicate_secrets | join(", ")' <<<"${report}")
+    [ -z "${names}" ] || info "WARNING: ${names} in ${host_claude_json}, left out above, may hold a secret in plain text: a headers or env value holds literal text, the url carries userinfo or a query string, or the command or args look like a credential. Rotate that secret, and remove the entry or supply the secret through a headersHelper or a \${VAR} reference instead."
     names=$(jq -r '.refused | join(", ")' <<<"${report}")
     [ -z "${names}" ] || info "WARNING: did not copy ${names} from ${host_claude_json}: a headers or env value holds literal text, the url carries userinfo or a query string, or the command or args look like a credential, and ${CLAUDE_MANAGED_DIR}/managed-mcp.json is readable by every user. Supply the secret through a headersHelper or a \${VAR} reference instead, then re-run."
 
@@ -339,6 +364,23 @@ warn_if_no_allowed_dirs_override() {
     info "No ${CLAUDE_MANAGED_DIR}/hooks/allowed-dirs.local found - enforce-allowed-dirs will block every directory-taking command on this host until one exists. Write a file with one allowed root per line (e.g. '~/work' and '\$TMPDIR') and re-run: ${BASH_SOURCE[0]} <file>"
 }
 
+# kb-mcp-headers reads the kb server's token at connect time, from KB_MCP_TOKEN
+# or from a token file only its owner can read. This script never reads,
+# prompts for or stores the token; it only says how to supply one when it
+# finds neither, or that the file is not private when kb-mcp-headers would
+# refuse it. The privacy test is a copy of kb-mcp-headers' token_file_is_private,
+# and test/install-claude-hooks.bats fails if the two copies drift apart.
+warn_if_no_kb_token() {
+    local token_file="${XDG_CONFIG_HOME:-${HOME}/.config}/kb-mcp/token"
+    [ -n "${KB_MCP_TOKEN:-}" ] && return 0
+    if [ -e "${token_file}" ] || [ -L "${token_file}" ]; then
+        [ -n "$(find "${token_file}" -prune -type f -user "$(id -u)" -perm 600 2>/dev/null)" ] && return 0
+        info "kb MCP token file ${token_file} is not private - kb-mcp-headers refuses it until it is a regular file owned by you with mode 0600"
+        return 0
+    fi
+    info "No kb MCP token found - the kb server will fail to connect until you export KB_MCP_TOKEN where claude runs, or write the token to ${token_file} (chmod 600)"
+}
+
 main() {
     is_ai_agent && die "install-claude-hooks must not be run inside a Claude Code session"
 
@@ -349,7 +391,8 @@ main() {
     [ -d "${SOURCE_HOOKS_DIR}" ] || die "Source hooks directory not found: ${SOURCE_HOOKS_DIR}"
     [ -f "${SOURCE_CFWF}" ] || die "Source cfwf script not found: ${SOURCE_CFWF}"
     [ -f "${SOURCE_MANAGED_MCP}" ] || die "Source managed MCP servers not found: ${SOURCE_MANAGED_MCP}"
-    [ -f "${SOURCE_MCP_HEADERS}" ] || die "Source MCP headers helper not found: ${SOURCE_MCP_HEADERS}"
+    [ -f "${SOURCE_CFWF_MCP_HEADERS}" ] || die "Source MCP headers helper not found: ${SOURCE_CFWF_MCP_HEADERS}"
+    [ -f "${SOURCE_KB_MCP_HEADERS}" ] || die "Source MCP headers helper not found: ${SOURCE_KB_MCP_HEADERS}"
     if [ -n "${allowed_dirs_file}" ] && { [ ! -f "${allowed_dirs_file}" ] || [ ! -r "${allowed_dirs_file}" ]; }; then
         die "Allowed directories file not found or not readable: ${allowed_dirs_file}"
     fi
@@ -386,6 +429,7 @@ main() {
     install_user_files "${target_claude_dir}" "${managed_installed}"
     install_cfwf
     warn_if_no_allowed_dirs_override "${allowed_dirs_file}"
+    warn_if_no_kb_token
 
     success "Claude Code settings/hooks installed for local testing outside the container"
 }

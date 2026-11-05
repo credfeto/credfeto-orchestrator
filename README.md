@@ -113,6 +113,26 @@ placeholder token, so without both keys `gh` in the container is unauthenticated
 unproxied access set `GH_HOST=github.com` with a real token; it then reaches the container as
 `GH_TOKEN` rather than `GH_ENTERPRISE_TOKEN`, which `gh` ignores for github.com.
 
+### Knowledge-base MCP token (`KB_MCP_TOKEN`, optional)
+
+The agent container's `kb` MCP server (`https://memory.markridgwell.com/dev/mcp`) needs a bearer
+token. Set it in `.env`:
+
+```dotenv
+KB_MCP_TOKEN=<your-kb-token>
+```
+
+`oneshot` passes it to each container as a per-container Podman secret, mapped to the
+`KB_MCP_TOKEN` environment variable that the server's root-owned `headersHelper` reads, and removes
+the secret when the container exits. It is never written to the image or to `managed-mcp.json`.
+Without it, sessions still start, and `kb` shows as failed to connect. A value holding a character
+a bearer token cannot contain (a space, a trailing `# comment`, a stray quote) is ignored with a
+one-line warning that names the key but never prints the value, as if it were unset.
+
+On a developer machine set up with `install-claude-hooks`, export `KB_MCP_TOKEN` where `claude`
+runs, or write the token to `${XDG_CONFIG_HOME:-$HOME/.config}/kb-mcp/token` with mode `600`; the
+helper refuses that file if it is not a regular file you own with exactly that mode.
+
 ### Discord notifications (`DISCORD_WEBHOOK`)
 
 To enable, add a `DISCORD_WEBHOOK` entry:

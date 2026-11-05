@@ -56,19 +56,24 @@ On top of all of that, this final image:
 
 Claude Code can reach only the MCP servers pinned by `development-full` in a root-owned
 `/etc/claude-code/managed-mcp.json`, so the agent cannot add a server or point one anywhere else. The
-image requires two:
+image requires three:
 
 - `cfwf`, the workflow MCP server at `https://workflow-mcp.markridgwell.com/mcp`. The file holds
   no token. A root-owned helper hands Claude Code's MCP client the GitHub token the container
   already has, at connect time, so the token is never written to the image or to disk. Nothing
   routes work to the server yet.
+- `kb`, the knowledge-base MCP server at `https://memory.markridgwell.com/dev/mcp`. Its token is
+  the optional `KB_MCP_TOKEN` in `orchestrator/.env`, which `oneshot` passes in as a per-container
+  Podman secret and removes on exit; a root-owned helper hands it to the MCP client at connect
+  time. Without it, the session starts with `kb` shown as failed to connect. A malformed value (one
+  holding a character a bearer token cannot contain) is ignored with a warning that never prints it.
 - `build-dotnet`, the .NET build, test and coverage server (`credfeto-build-dotnet`, a local stdio
   process), working on the repository at `/workspace/repo` (#1818). It is registered for every
   session, whatever the repository's language.
 
 The file may list others, such as `rider` and `webstorm`, the JetBrains IDEs' own MCP servers over
-`http` on the loopback address. The image build checks only the two required servers (and a `kb`
-server, when present), so adding a server does not break it (#1850).
+`http` on the loopback address. The image build checks only the three required servers, so adding
+another server does not break it (#1850).
 
 ## What the entrypoint checks before the agent ever starts
 
