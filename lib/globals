@@ -568,8 +568,12 @@ GH_COLLABORATORS_RETRY_DELAY_SECS="${GH_COLLABORATORS_RETRY_DELAY_SECS:-2}"
 # rather than run until it hits the "Prompt is too long" wall (#1051/#1070). Passed into the
 # container as CLAUDE_CODE_AUTO_COMPACT_WINDOW, which Claude Code documents as taking precedence
 # over any settings.json value. Override with CLAUDE_CODE_AUTO_COMPACT_WINDOW in the environment.
-CLAUDE_CODE_AUTO_COMPACT_WINDOW="${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-100000}"
-[[ "${CLAUDE_CODE_AUTO_COMPACT_WINDOW}" =~ ^[1-9][0-9]*$ ]] || CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000
+# A session's fixed context (system prompt, tool definitions, skill listing and instructions) is
+# about 60k tokens before any work, and auto-compaction fires about 33k below the window, so the
+# default leaves about 60k tokens of working room. At 100k it left about 7k, and sessions
+# compacted within a few turns and could end with "Autocompact is thrashing" (#1866).
+CLAUDE_CODE_AUTO_COMPACT_WINDOW="${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-160000}"
+[[ "${CLAUDE_CODE_AUTO_COMPACT_WINDOW}" =~ ^[1-9][0-9]*$ ]] || CLAUDE_CODE_AUTO_COMPACT_WINDOW=160000
 
 # Login of the PR create bot: the account that opens the PRs for the AI's work, deliberately a
 # different account from the AI agent (the one _GH_ME resolves to) so each can tell what the other

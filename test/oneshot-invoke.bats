@@ -1572,7 +1572,7 @@ STUBEOF
     grep -qx 'GIT_USER_NAME=Alice' "${args_log}"
 }
 
-@test "invoke_claude passes CLAUDE_CODE_AUTO_COMPACT_WINDOW as container env var (#1070)" {
+@test "invoke_claude passes CLAUDE_CODE_AUTO_COMPACT_WINDOW as container env var (#1070, #1866)" {
     local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     cat > "${STUB_BIN}/podman" << STUBEOF
@@ -1586,7 +1586,7 @@ STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
     invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
-    grep -qx 'CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000' "${args_log}"
+    grep -qx 'CLAUDE_CODE_AUTO_COMPACT_WINDOW=160000' "${args_log}"
 }
 
 @test "invoke_claude respects a CLAUDE_CODE_AUTO_COMPACT_WINDOW override from the environment (#1070)" {
@@ -1605,6 +1605,15 @@ STUBEOF
 
     invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     grep -qx 'CLAUDE_CODE_AUTO_COMPACT_WINDOW=50000' "${args_log}"
+}
+
+@test "CLAUDE_CODE_AUTO_COMPACT_WINDOW defaults to 160000 and falls back to it for an invalid value (#1866)" {
+    run bash -c 'BASEDIR="$1"; unset CLAUDE_CODE_AUTO_COMPACT_WINDOW; source "$1/lib/globals"; printf "%s" "${CLAUDE_CODE_AUTO_COMPACT_WINDOW}"' _ "${REPO_ROOT}"
+    [ "${output}" = "160000" ]
+    run bash -c 'BASEDIR="$1"; CLAUDE_CODE_AUTO_COMPACT_WINDOW=abc; source "$1/lib/globals"; printf "%s" "${CLAUDE_CODE_AUTO_COMPACT_WINDOW}"' _ "${REPO_ROOT}"
+    [ "${output}" = "160000" ]
+    run bash -c 'BASEDIR="$1"; CLAUDE_CODE_AUTO_COMPACT_WINDOW=0; source "$1/lib/globals"; printf "%s" "${CLAUDE_CODE_AUTO_COMPACT_WINDOW}"' _ "${REPO_ROOT}"
+    [ "${output}" = "160000" ]
 }
 
 @test "invoke_claude passes GIT_USER_EMAIL as container env var when set" {
