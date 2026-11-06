@@ -90,6 +90,7 @@ setup_main_mocks() {
     # Default: the required-check lookup fails, leaving each fixture's own isRequired values (or
     # their absence) exactly as written. Tests of the annotation path override this.
     fetch_pr_required_check_names() { return 1; }
+    head_commit_has_running_check_runs() { return 1; }
     notify_discord_work_item()         { return 0; }
     notify_discord_pr_waiting()        { return 0; }
     notify_discord_no_work()           { return 0; }

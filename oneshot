@@ -623,6 +623,9 @@ main() {
                 # notification actually needs to fire, not there (a #1375 review-time bug: the
                 # notification was originally added to the unreachable copy instead of here, so a
                 # pivoted PR with pending CI never actually got notified).
+                # A check run still running on the head commit, even one the rollup does not show,
+                # also counts as pending CI (#1860); see annotate_pr_json_head_check_runs.
+                pr_json=$(annotate_pr_json_head_check_runs "${pr_json}" "${open_pr}" "${item_repo}")
                 if pr_json_has_pending_ci_checks "${pr_json}"; then
                     if ci_checks_timed_out "${open_pr}" "${pr_json}"; then
                         block_pr_for_ci_timeout "${open_pr}" "${item_repo}"
@@ -1118,6 +1121,8 @@ main() {
             # through MAX_PR_TOTAL_INVOCATIONS before the more specific idle-exhausted escalations
             # below ever got a chance to fire (confirmed live on credfeto-changlog-manager#359,
             # #1256).
+            # See the matching comment on the issue-pivot path above (#1860).
+            pr_json=$(annotate_pr_json_head_check_runs "${pr_json}" "${item_id}" "${item_repo}")
             if pr_json_has_pending_ci_checks "${pr_json}"; then
                 if ci_checks_timed_out "${item_id}" "${pr_json}"; then
                     block_pr_for_ci_timeout "${item_id}" "${item_repo}"
@@ -1596,11 +1601,13 @@ main() {
                 # the tick as before, rather than risk the budget never advancing at all. The
                 # re-read is annotated with the required check names, and whether the base branch
                 # requires any check, fetched before the session, so it judges pending CI exactly
-                # as the pre-invocation check did.
+                # as the pre-invocation check did, and is checked for check runs still running on its
+                # head commit, as that check was (#1860).
                 local post_run_pr_json="" post_run_ok=1
                 if post_run_pr_json=$(fetch_pr_json "${item_id}"); then
                     post_run_ok=0
                     post_run_pr_json=$(annotate_pr_json_required_checks "${post_run_pr_json}" "${pr_required_checks}" "${pr_base_requires_checks}")
+                    post_run_pr_json=$(annotate_pr_json_head_check_runs "${post_run_pr_json}" "${item_id}" "${item_repo}")
                 fi
                 if [ "${post_run_ok}" -eq 0 ] && pr_json_has_pending_ci_checks "${post_run_pr_json}"; then
                     info "PR #${item_id} in ${item_repo}: still CI-pending after this session — not counting it against the idle budget"

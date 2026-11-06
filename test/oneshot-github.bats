@@ -1457,6 +1457,43 @@ esac'
     [ "${output}" = "${pr}" ]
 }
 
+@test "annotate_pr_json_required_checks flags a known required check with no rollup entry as not yet reported, so CI is pending (#1847)" {
+    local pr='{"statusCheckRollup":[{"name":"a","status":"COMPLETED","conclusion":"SUCCESS"}]}'
+    run annotate_pr_json_required_checks "${pr}" '["a","b"]'
+    [ "${status}" -eq 0 ]
+    [ "$(printf '%s' "${output}" | jq -c '[.statusCheckRollup[].isRequired]')" = '[true]' ]
+    [ "$(printf '%s' "${output}" | jq -r '.requiredChecksNotYetReported')" = "true" ]
+    run pr_json_has_pending_ci_checks "${output}"
+    [ "${status}" -eq 0 ]
+    # A legacy StatusContext is matched on its context.
+    pr='{"statusCheckRollup":[{"context":"legacy/ci","state":"SUCCESS"}]}'
+    run annotate_pr_json_required_checks "${pr}" '["legacy/ci","b"]'
+    [ "$(printf '%s' "${output}" | jq -r '.requiredChecksNotYetReported')" = "true" ]
+}
+
+@test "annotate_pr_json_required_checks leaves CI not pending when every known required check has reported and finished (#1847)" {
+    local pr='{"statusCheckRollup":[{"name":"a","status":"COMPLETED","conclusion":"SUCCESS"},{"context":"b","state":"SUCCESS"},{"name":"badge","status":"IN_PROGRESS","conclusion":""}]}'
+    run annotate_pr_json_required_checks "${pr}" '["a","b"]'
+    [ "${status}" -eq 0 ]
+    [ "$(printf '%s' "${output}" | jq -r '.requiredChecksNotYetReported // "unset"')" = "unset" ]
+    run pr_json_has_pending_ci_checks "${output}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "annotate_pr_json_required_checks keeps the unknown-names branches as they were (#1847)" {
+    local pr='{"statusCheckRollup":[{"name":"a","status":"COMPLETED","conclusion":"SUCCESS"}]}'
+    run annotate_pr_json_required_checks "${pr}" ""
+    [ "${output}" = "${pr}" ]
+    run annotate_pr_json_required_checks "${pr}" "[]" ""
+    [ "${output}" = "${pr}" ]
+    run annotate_pr_json_required_checks "${pr}" "[]" false
+    [ "$(printf '%s' "${output}" | jq -r '.requiredChecksNotYetReported // "unset"')" = "unset" ]
+    run pr_json_has_pending_ci_checks "${output}"
+    [ "${status}" -ne 0 ]
+    run annotate_pr_json_required_checks "${pr}" "[]" true
+    [ "$(printf '%s' "${output}" | jq -r '.requiredChecksNotYetReported')" = "true" ]
+}
+
 @test "a failing optional check on a branch whose required checks have not reported is not failed-required and still waits for CI (#1557)" {
     local pr
     pr=$(annotate_pr_json_required_checks '{"isDraft":false,"autoMergeRequest":null,"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[{"name":"badge","status":"COMPLETED","conclusion":"FAILURE"}]}' "[]" true)

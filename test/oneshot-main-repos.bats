@@ -976,6 +976,35 @@ main_dependency_flag() {
     [ -f "${_invoke_log}" ]
 }
 
+@test "main defers a pivot PR whose only running check is a head-commit run absent from the rollup, without charging it (#1860)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SKIPPED"}]}\n'; }
+    head_commit_has_running_check_runs() { printf '%s %s\n' "$1" "$2" >> "${TEST_TMP}/head_lookups"; return 0; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    fingerprint_issue_json()    { printf 'issue-fp-same\n'; }
+    load_issue_fingerprint()    { printf 'issue-fp-same\n'; }
+    save_pr_invocation_counts 99 2 2
+    CI_CHECK_TIMEOUT_MINUTES=60
+    local _invoke_log="${TEST_TMP}/invoke_log"
+    invoke_claude() { printf 'invoked\n' >> "${_invoke_log}"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${_invoke_log}" ]
+    [[ "${output}" == *"PR #99 in org/repo: CI checks pending — deferring"* ]]
+    [ "$(cat "${TEST_TMP}/head_lookups")" = "org/repo abc" ]
+    load_pr_invocation_counts 99
+    [ "${PR_INVOCATION_IDLE}" -eq 2 ]
+    [ "${PR_INVOCATION_TOTAL}" -eq 2 ]
+}
+
 @test "main does not charge the idle budget when a required check is still pending after the session, via issue pivot (#1463)" {
     # Same race as the direct-PR path equivalent test: the pre-invocation CI-pending check can
     # miss a check that is still genuinely running by the time the agent's own session checks
