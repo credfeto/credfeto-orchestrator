@@ -69,9 +69,9 @@ ARG TRUFFLEHOG_SHA256_AMD64=7c3b02f160f28929a467e29e20fba98746e0729f6e37c3c25761
 ARG TRUFFLEHOG_SHA256_ARM64=a0382d83dd58c967af5dd0175cc732c62c836ab1d15dc9ae71b01a2d3f0911b2
 # trivy: pinned to a specific release for reproducible, verifiable builds.
 # Update TRIVY_VERSION and both SHA256 ARGs together when bumping.
-ARG TRIVY_VERSION=0.76.1
-ARG TRIVY_SHA256_AMD64=c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0
-ARG TRIVY_SHA256_ARM64=e174dff2a6dba5e3ae41f8d0537a6324405bd08132497340304c6b20e0f16a1f
+ARG TRIVY_VERSION=0.76.2
+ARG TRIVY_SHA256_AMD64=bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf
+ARG TRIVY_SHA256_ARM64=ab9d51f86e6a5fb936f605faff6b593ac51bc378fff4d3e8b9d58358b9c367c3
 # bats: bats-core publishes no release assets or checksums, so it is pinned to a
 # release tag plus the commit that tag resolves to (the peeled commit, not the
 # annotated tag object). Update BATS_REF and BATS_COMMIT together when bumping.
