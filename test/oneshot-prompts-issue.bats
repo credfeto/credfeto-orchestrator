@@ -611,7 +611,8 @@ declare -gA _WF_OPTION_IDS
     [[ "${output}" == *"COVERAGE.md conflicts: take origin/main's copy"* ]]
     [[ "${output}" == *"checkout --ours -- COVERAGE.md"* ]]
     [[ "${output}" == *"rebase reverses ours/theirs vs a merge"* ]]
-    [[ "${output}" == *"once the build/tests pass re-run the coverage extraction"* ]]
+    [[ "${output}" == *"once the build/tests pass have Code Tester re-measure coverage"* ]]
+    [[ "${output}" != *"re-run the coverage extraction"* ]]
 }
 
 @test "build_pr_claude_md uses provided repo_path in rebase notice" {

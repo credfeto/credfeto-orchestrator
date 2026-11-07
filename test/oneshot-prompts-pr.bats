@@ -321,6 +321,21 @@ load oneshot_helper
     [[ "${output}" != *"credfeto/cs-template#992"* ]]
 }
 
+@test "build_pr_claude_md PHASE G delegates the coverage measurement to Code Tester" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"have Code Tester measure the branch's coverage"* ]]
+    [[ "${output}" == *"build MCP coverage tool"* ]]
+    [[ "${output}" == *"with the numbers Code Tester just measured"* ]]
+}
+
+@test "build_pr_claude_md PHASE G never tells the main session to measure coverage itself" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Never run test or coverage commands in this session yourself"* ]]
+    [[ "${output}" != *"re-run the same per-language extraction"* ]]
+}
+
 @test "build_pr_claude_md PHASE G bootstraps and passes when COVERAGE.md does not exist on main yet" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
     [ "${status}" -eq 0 ]
