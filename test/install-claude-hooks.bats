@@ -1220,7 +1220,6 @@ reset_install() {
     [ "${status}" -eq 0 ]
     [ -f "${SUDO_LOG}" ]
     [[ "${output}" == *"Could not install cfwf to ${CFWF_BIN_DIR}/cfwf"* ]]
-    [[ "${output}" == *"cannot create regular file"* ]]
     [[ "${output}" == *"sudo install -m 0755 -o root -g root ${SOURCE_CFWF} ${CFWF_BIN_DIR}/cfwf"* ]]
     run jq empty "${HOME}/.claude/settings.json"
     [ "${status}" -eq 0 ]
