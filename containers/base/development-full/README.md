@@ -195,9 +195,9 @@ hooks can be exercised directly outside the container: the managed settings and 
 copied root-owned into `/etc/claude-code` with `sudo install` (a copy, so re-run the script after a hook
 changes; `CLAUDE_MANAGED_DIR` overrides the directory for tests only), the preferences from
 `claude-user-settings.json` are copied to `~/.claude/settings.json` (keeping the previous file as
-`settings.json.bak`), and any `~/.claude/hooks` symlinks left pointing into this checkout are removed. An
-optional first argument names a file of host directory roots, installed as the root-owned
-`/etc/claude-code/hooks/allowed-dirs.local`. It installs `cfwf-mcp-headers`, `kb-mcp-headers` and a `managed-mcp.json` that
+`settings.json.bak`), and any `~/.claude/hooks` symlinks left pointing into this checkout are removed. Any
+arguments are ignored; the host directory roots in the root-owned
+`/etc/claude-code/hooks/allowed-dirs.local` are maintained by hand. It installs `cfwf-mcp-headers`, `kb-mcp-headers` and a `managed-mcp.json` that
 merges the shipped servers with the host's own MCP servers from `~/.claude.json` (user scope and every project scope).
 A server at a shipped `http` server's URL, such as `cfwf`'s or `kb`'s, is left out as a duplicate, whatever its name, with a suggestion to remove it. A server with a
 literal `headers` or `env` value, a `url` carrying userinfo or a query string, or a credential-like `command` or

@@ -31,9 +31,9 @@
 # The merge is a snapshot: a server added to ~/.claude.json later only takes
 # effect once this script is run again.
 #
-# The first argument, when given, is a file of allowed directory roots for
-# this host; it is installed as the root-owned allowed-dirs.local next to the
-# hooks, because the shipped allowed-dirs lists the container's mounts.
+# Every argument is ignored: the install is always the same. The host's
+# allowed-dirs.local, which the shipped allowed-dirs (the container's mounts)
+# needs on a host, is maintained by hand and never written by this script.
 #
 # It also installs the cfwf workflow helper into a shared bin directory
 # (/usr/local/bin by default, override with CFWF_BIN_DIR) with `install`, so
@@ -140,15 +140,14 @@ root_install() {
 # Copies every file directly under SOURCE_HOOKS_DIR into the root-owned hooks
 # directory (scripts 0755, data files 0444), discovered via find rather than a
 # hardcoded name list so a newly added hook or data file is picked up
-# automatically, then the managed settings and any allowed-dirs.local.
+# automatically, then the managed settings.
 # An allowed-dirs.local or secret-files.local sitting in the checkout is never
 # copied: the agent can write there, and enforce-allowed-dirs and
 # block-secret-file-reads prefer those files to the shipped lists, so copying
 # one would let the agent widen its own directory roots or shrink its own
-# secret-file patterns without a reviewed change. allowed-dirs.local is
-# installed only from the path given as the argument.
+# secret-file patterns without a reviewed change.
 install_managed_files() {
-    local allowed_dirs_file="$1" merged_mcp_file="$2"
+    local merged_mcp_file="$1"
     local hooks_dir="${CLAUDE_MANAGED_DIR}/hooks"
     local mcp_dir="${CLAUDE_MANAGED_DIR}/mcp"
     local src mode
@@ -164,7 +163,6 @@ install_managed_files() {
     root_install -m 0755 "${SOURCE_CFWF_MCP_HEADERS}" "${mcp_dir}/$(basename "${SOURCE_CFWF_MCP_HEADERS}")"
     root_install -m 0755 "${SOURCE_KB_MCP_HEADERS}" "${mcp_dir}/$(basename "${SOURCE_KB_MCP_HEADERS}")"
     root_install -m 0444 "${merged_mcp_file}" "${CLAUDE_MANAGED_DIR}/managed-mcp.json"
-    [ -n "${allowed_dirs_file}" ] && root_install -m 0444 "${allowed_dirs_file}" "${hooks_dir}/allowed-dirs.local"
 
     if [ "${#PENDING_ROOT_COMMANDS[@]}" -eq 0 ]; then
         info "Installed managed settings and hooks into ${CLAUDE_MANAGED_DIR}"
@@ -358,10 +356,8 @@ install_user_settings() {
 # enforce-allowed-dirs fails closed on every cd/git -C/npm --prefix/find/rm/mv/cp
 # here. Point it out rather than guessing a host layout.
 warn_if_no_allowed_dirs_override() {
-    local allowed_dirs_file="$1"
-    [ -n "${allowed_dirs_file}" ] && return 0
     [ -f "${CLAUDE_MANAGED_DIR}/hooks/allowed-dirs.local" ] && return 0
-    info "No ${CLAUDE_MANAGED_DIR}/hooks/allowed-dirs.local found - enforce-allowed-dirs will block every directory-taking command on this host until one exists. Write a file with one allowed root per line (e.g. '~/work' and '\$TMPDIR') and re-run: ${BASH_SOURCE[0]} <file>"
+    info "No ${CLAUDE_MANAGED_DIR}/hooks/allowed-dirs.local found - enforce-allowed-dirs will block every directory-taking command on this host until one exists. Create it by hand, root-owned with mode 0444, with one allowed root per line (e.g. '~/work' and '\$TMPDIR')"
 }
 
 # kb-mcp-headers reads the kb server's token at connect time, from KB_MCP_TOKEN
@@ -384,8 +380,6 @@ warn_if_no_kb_token() {
 main() {
     is_ai_agent && die "install-claude-hooks must not be run inside a Claude Code session"
 
-    local allowed_dirs_file="${1:-}"
-
     [ -f "${SOURCE_MANAGED_SETTINGS}" ] || die "Source managed settings not found: ${SOURCE_MANAGED_SETTINGS}"
     [ -f "${SOURCE_USER_SETTINGS}" ] || die "Source user settings not found: ${SOURCE_USER_SETTINGS}"
     [ -d "${SOURCE_HOOKS_DIR}" ] || die "Source hooks directory not found: ${SOURCE_HOOKS_DIR}"
@@ -393,16 +387,8 @@ main() {
     [ -f "${SOURCE_MANAGED_MCP}" ] || die "Source managed MCP servers not found: ${SOURCE_MANAGED_MCP}"
     [ -f "${SOURCE_CFWF_MCP_HEADERS}" ] || die "Source MCP headers helper not found: ${SOURCE_CFWF_MCP_HEADERS}"
     [ -f "${SOURCE_KB_MCP_HEADERS}" ] || die "Source MCP headers helper not found: ${SOURCE_KB_MCP_HEADERS}"
-    if [ -n "${allowed_dirs_file}" ] && { [ ! -f "${allowed_dirs_file}" ] || [ ! -r "${allowed_dirs_file}" ]; }; then
-        die "Allowed directories file not found or not readable: ${allowed_dirs_file}"
-    fi
 
     check_required_tools
-
-    # Absolute, so a printed fallback command still works from another directory.
-    if [ -n "${allowed_dirs_file}" ]; then
-        allowed_dirs_file=$(realpath -- "${allowed_dirs_file}") || die "Failed to resolve ${allowed_dirs_file}"
-    fi
 
     jq empty "${SOURCE_MANAGED_SETTINGS}" 2>/dev/null || die "Managed settings are not valid JSON: ${SOURCE_MANAGED_SETTINGS}"
     jq empty "${SOURCE_USER_SETTINGS}" 2>/dev/null || die "User settings are not valid JSON: ${SOURCE_USER_SETTINGS}"
@@ -425,15 +411,15 @@ main() {
     mkdir -p "${target_claude_dir}" || die "Failed to create ${target_claude_dir}"
     write_merged_mcp "${mcp_report}" "${merged_mcp_file}" "${host_claude_json}"
     local managed_installed=1
-    install_managed_files "${allowed_dirs_file}" "${merged_mcp_file}" || managed_installed=0
+    install_managed_files "${merged_mcp_file}" || managed_installed=0
     install_user_files "${target_claude_dir}" "${managed_installed}"
     install_cfwf
-    warn_if_no_allowed_dirs_override "${allowed_dirs_file}"
+    warn_if_no_allowed_dirs_override
     warn_if_no_kb_token
 
     success "Claude Code settings/hooks installed for local testing outside the container"
 }
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
-    main "$@"
+    main
 fi

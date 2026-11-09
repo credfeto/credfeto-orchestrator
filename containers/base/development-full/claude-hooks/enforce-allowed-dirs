@@ -345,7 +345,7 @@
 # (installed root:root read-only, listing /workspace/repo, /workspace/rules
 # and /workspace/tmp). On a host, where those do not exist, an
 # `allowed-dirs.local` in the same directory takes precedence when present
-# (created by install-claude-hooks from a path argument, never shipped; the
+# (maintained by hand, never shipped or written by install-claude-hooks; the
 # hooks directory is root-owned, so it cannot be planted there). One path per
 # line, `#` comments and blank lines ignored, a leading `~` expands to $HOME
 # and a `$NAME` prefix to that environment variable - a line whose variable

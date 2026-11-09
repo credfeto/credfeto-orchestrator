@@ -833,40 +833,55 @@ run_dockerfile_mcp_checks() {
 
 # --- allowed-dirs.local --------------------------------------------------------
 
-@test "an allowed-dirs file argument is installed via sudo as the root-owned allowed-dirs.local" {
+# Every file the install wrote, with its mode and checksum, and every root command it asked sudo
+# for, so two runs can be compared for an identical install.
+install_snapshot() {
+    (cd "${TEST_TMP}" && find etc home bin -printf '%y %m %P\n' | sort)
+    (cd "${TEST_TMP}" && find etc home bin -type f -exec sha256sum {} + | sort)
+    cat "${SUDO_LOG}"
+}
+
+reset_install() {
+    rm -rf "${CLAUDE_MANAGED_DIR}" "${HOME}/.claude" "${SUDO_LOG}"
+    rm -f "${CFWF_BIN_DIR}"/*
+}
+
+@test "install-claude-hooks ignores every argument and does the same full install as with none" {
+    allow_sudo
+    local baseline args
+    run "${REPO_ROOT}/install-claude-hooks"
+    [ "${status}" -eq 0 ]
+    baseline=$(install_snapshot)
+    [ -f "${CLAUDE_MANAGED_DIR}/managed-settings.json" ]
+
+    for args in '--system' 'hello world' '--help'; do
+        reset_install
+        # shellcheck disable=SC2086  # split on purpose: each word is a separate argument
+        run "${REPO_ROOT}/install-claude-hooks" ${args}
+        [ "${status}" -eq 0 ]
+        [ ! -e "${CLAUDE_MANAGED_DIR}/hooks/allowed-dirs.local" ]
+        [ "$(install_snapshot)" = "${baseline}" ]
+    done
+}
+
+@test "a readable file named as an argument is never installed as allowed-dirs.local" {
     allow_sudo
     printf '%s\n' "${HOME}/work" > "${TEST_TMP}/my-dirs"
-    run main "${TEST_TMP}/my-dirs"
+    run "${REPO_ROOT}/install-claude-hooks" "${TEST_TMP}/my-dirs"
     [ "${status}" -eq 0 ]
-    diff "${TEST_TMP}/my-dirs" "${CLAUDE_MANAGED_DIR}/hooks/allowed-dirs.local"
-    [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/hooks/allowed-dirs.local")" = "444" ]
-    grep -qxF "install -o root -g root -m 0444 ${TEST_TMP}/my-dirs ${CLAUDE_MANAGED_DIR}/hooks/allowed-dirs.local" "${SUDO_LOG}"
-    [[ "${output}" != *'will block every directory-taking command'* ]]
+    [ ! -e "${CLAUDE_MANAGED_DIR}/hooks/allowed-dirs.local" ]
+    run grep -c 'allowed-dirs.local' "${SUDO_LOG}"
+    [ "${output}" = "0" ]
 }
 
-@test "a relative allowed-dirs file argument is installed by its absolute path" {
-    allow_sudo
-    printf '%s\n' "${HOME}/work" > "${TEST_TMP}/my-dirs"
-    cd "${TEST_TMP}"
-    run main my-dirs
-    [ "${status}" -eq 0 ]
-    grep -qxF "install -o root -g root -m 0444 ${TEST_TMP}/my-dirs ${CLAUDE_MANAGED_DIR}/hooks/allowed-dirs.local" "${SUDO_LOG}"
-}
-
-@test "a missing allowed-dirs file argument is fatal before anything is installed" {
-    allow_sudo
-    run main "${TEST_TMP}/no-such-file"
-    [ "${status}" -eq 1 ]
-    [[ "${output}" == *'Allowed directories file not found'* ]]
-    [ ! -e "${CLAUDE_MANAGED_DIR}" ]
-}
-
-@test "with no argument and no allowed-dirs.local, main warns rather than fabricating one" {
+@test "with no allowed-dirs.local installed, main warns to create one by hand rather than fabricating one" {
     allow_sudo
     run main
     [ "${status}" -eq 0 ]
     [ ! -e "${CLAUDE_MANAGED_DIR}/hooks/allowed-dirs.local" ]
     [[ "${output}" == *"No ${CLAUDE_MANAGED_DIR}/hooks/allowed-dirs.local found"* ]]
+    [[ "${output}" == *"Create it by hand, root-owned with mode 0444, with one allowed root per line"* ]]
+    [[ "${output}" != *'<file>'* ]]
 }
 
 @test "an already installed allowed-dirs.local is left alone and not warned about" {
@@ -1205,7 +1220,6 @@ run_dockerfile_mcp_checks() {
     [ "${status}" -eq 0 ]
     [ -f "${SUDO_LOG}" ]
     [[ "${output}" == *"Could not install cfwf to ${CFWF_BIN_DIR}/cfwf"* ]]
-    [[ "${output}" == *"cannot create regular file"* ]]
     [[ "${output}" == *"sudo install -m 0755 -o root -g root ${SOURCE_CFWF} ${CFWF_BIN_DIR}/cfwf"* ]]
     run jq empty "${HOME}/.claude/settings.json"
     [ "${status}" -eq 0 ]

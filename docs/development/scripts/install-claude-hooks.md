@@ -11,10 +11,10 @@ The agent container bakes in a `claude-managed-settings.json`, a `claude-user-se
 ## Running it
 
 ```bash
-./install-claude-hooks [allowed-dirs-file]
+./install-claude-hooks
 ```
 
-The optional argument is a file of allowed directory roots for this host (one per line, the `allowed-dirs` format). It is installed as `/etc/claude-code/hooks/allowed-dirs.local`. Without it, and with no `allowed-dirs.local` already installed, the script warns that `enforce-allowed-dirs` will block every directory-taking command.
+It takes no arguments: any given are ignored, and the install is always the same. `/etc/claude-code/hooks/allowed-dirs.local`, the host's allowed directory roots (one per line, the `allowed-dirs` format, e.g. `~/work` and `$TMPDIR`), is maintained by hand, root-owned with mode 0444; the script never writes it. When it does not exist, the script warns that `enforce-allowed-dirs` will block every directory-taking command.
 
 Environment variables:
 
@@ -30,7 +30,6 @@ Writes:
 
 - `/etc/claude-code/`, `/etc/claude-code/hooks/` and `/etc/claude-code/mcp/` (root:root 0755), one copy per hook (root:root 0755) or data file (root:root 0444) in the hooks directory, `/etc/claude-code/managed-settings.json` and `/etc/claude-code/managed-mcp.json` (root:root 0444), and `/etc/claude-code/mcp/cfwf-mcp-headers` and `/etc/claude-code/mcp/kb-mcp-headers` (root:root 0755), all via `sudo install -o root -g root`.
 - `~/.claude/managed-mcp.merged.json`, the merged MCP servers that are installed as `managed-mcp.json`. It is overwritten on each run and kept afterwards, so a printed `sudo install` command can still find it.
-- `/etc/claude-code/hooks/allowed-dirs.local` (root:root 0444) when the argument is given.
 - `~/.claude/settings.json`, a verbatim copy of the user settings, plus `~/.claude/settings.json.bak` when a settings file already existed.
 - `${CFWF_BIN_DIR}/cfwf`, a copy with mode 0755.
 
@@ -42,8 +41,8 @@ Exit codes: 0 on success (including when the root-owned files or `cfwf` could no
 
 The script does not source `lib/core`. It defines its own `die`, `success`, `info` and `is_ai_agent`, which always print ANSI colour codes and have no TTY check. `main` runs these steps:
 
-1. `is_ai_agent` gate, existence checks for the seven source paths, and a readability check on the argument when one is given.
-2. `check_required_tools` checks every name in the `REQUIRED_TOOLS` array (`jq shfmt base64 realpath git gpg ssh-add sed grep`) and dies naming all missing ones at once, before anything is written. The argument is then made absolute, and the managed settings, user settings and managed MCP servers are each checked with `jq empty`, so an invalid file stops the script before anything is installed or removed.
+1. `is_ai_agent` gate, and existence checks for the seven source paths.
+2. `check_required_tools` checks every name in the `REQUIRED_TOOLS` array (`jq shfmt base64 realpath git gpg ssh-add sed grep`) and dies naming all missing ones at once, before anything is written. The managed settings, user settings and managed MCP servers are each checked with `jq empty`, so an invalid file stops the script before anything is installed or removed.
 3. `merge_host_mcp_servers` merges the shipped servers (the required `cfwf`, `kb` and `build-dotnet`, and any others the file lists), copied unchanged, with the servers in `~/.claude.json` (the top-level `mcpServers` and every `projects.<path>.mcpServers`) and prints a JSON report. A missing or empty `~/.claude.json` adds nothing; an invalid one is fatal. A host server is left out when:
    - its `url` is a shipped `http` server's, such as `cfwf`'s or `kb`'s (a trailing `/` is ignored), because that shipped server replaces it, whatever the host server is called. The script names it, with the shipped server that replaces it, and suggests removing it from `~/.claude.json`.
    - it may hold a secret, because `managed-mcp.json` is world-readable. The script warns, naming the server, and never prints the value. A server is refused when:
@@ -53,10 +52,10 @@ The script does not source `lib/core`. It defines its own `die`, `success`, `inf
 
    The same definition repeated in several scopes is kept once. Two different servers under one name, including a host server named `cfwf` or `kb` at another URL or one with any other shipped server's name and another definition (for example a host `rider` entry at a different port or `type`), are fatal, before anything is written.
 4. `mkdir -p ~/.claude`, then `write_merged_mcp` prints the left-out names, writes `~/.claude/managed-mcp.merged.json`, checks it with `jq empty`, and lists the servers it holds with a reminder that the merge is a snapshot.
-5. `install_managed_files` runs `root_install` (`sudo install -o root -g root ...`) for the three directories, each file found with `find ... -mindepth 1 -maxdepth 1 -type f` (mode 0755 when the source is executable, 0444 otherwise, so new hook files are picked up automatically) apart from an `allowed-dirs.local` sitting in the checkout, which the agent could have written and so is never copied, the managed settings, the two headers helpers, the merged `managed-mcp.json` and the optional `allowed-dirs.local`. Once sudo is missing or one call fails, it is not asked again: the remaining commands are collected and printed together.
+5. `install_managed_files` runs `root_install` (`sudo install -o root -g root ...`) for the three directories, each file found with `find ... -mindepth 1 -maxdepth 1 -type f` (mode 0755 when the source is executable, 0444 otherwise, so new hook files are picked up automatically) apart from an `allowed-dirs.local` sitting in the checkout, which the agent could have written and so is never copied, the managed settings, the two headers helpers, and the merged `managed-mcp.json`. Once sudo is missing or one call fails, it is not asked again: the remaining commands are collected and printed together.
 6. `install_user_files`: when every managed file was installed, `remove_stale_hook_symlinks` deletes the old symlinks described above and `install_user_settings` copies the user settings to a `mktemp` file, checks it with `jq empty`, copies any existing `settings.json` to `settings.json.bak`, then moves the temp file into place. When the managed install did not complete, an existing `settings.json` and the old symlinks are left as they were (so a declined sudo never leaves the previous guardrails removed with nothing in their place), and only a host with no `settings.json` yet gets the user settings.
 7. `install_cfwf` tries `install -m 0755`; if that fails and `sudo` exists it tries `sudo install -m 0755 -o root -g root`; if that also fails or `sudo` is missing it prints the exact `sudo install ...` command via `info` and carries on.
-8. `warn_if_no_allowed_dirs_override` prints a note when no argument was given and `/etc/claude-code/hooks/allowed-dirs.local` does not exist.
+8. `warn_if_no_allowed_dirs_override` prints a note, saying to create the file by hand, when `/etc/claude-code/hooks/allowed-dirs.local` does not exist.
 9. `warn_if_no_kb_token` prints a one-line note on how to supply the `kb` token (export `KB_MCP_TOKEN`, or write it to the token file with mode 0600) when `KB_MCP_TOKEN` is unset or empty and the token file does not exist. When the file exists but is not a regular file owned by the user with mode 0600 (another mode, another owner, or a symlink), it prints a separate one-line note naming the path and saying `kb-mcp-headers` refuses it until it is one, using `kb-mcp-headers`' own `find` test so the two always agree.
 
 The managed files are never installed with a plain `install`, even into a writable directory: a copy owned by the user would be writable by an agent running as that user, which is what the root ownership exists to prevent.
@@ -97,5 +96,5 @@ Run just this file with `bats test/install-claude-hooks.bats`.
 - The shipped `build-dotnet` server names the container's paths (`/home/developer/.dotnet/tools/credfeto-build-dotnet`, `BUILD_MCP_REPO_ROOT=/workspace/repo`), so on a host without them it fails to start and shows as failed in `claude mcp list`; the other servers are unaffected. Its literal `env` value is accepted only because it ships in this repository: the same value on a host server is still refused.
 - The script never removes hooks from `/etc/claude-code/hooks/` that have been deleted from the repository.
 - `settings.json.bak` has a single fixed name and is overwritten on each run, so a second run replaces the backup of your original settings with the previously installed copy.
-- `allowed-dirs` (shipped) lists container paths. On a host, `enforce-allowed-dirs` blocks directory-taking commands until an `allowed-dirs.local` is installed; the script only installs one from the file you name and never writes one of its own. An `allowed-dirs.local` left in `~/.claude/hooks/` by an earlier version is no longer read: pass it as the argument.
+- `allowed-dirs` (shipped) lists container paths. On a host, `enforce-allowed-dirs` blocks directory-taking commands until an `allowed-dirs.local` is installed; the script never writes one, so create it by hand. An `allowed-dirs.local` left in `~/.claude/hooks/` by an earlier version is no longer read: copy it to `/etc/claude-code/hooks/allowed-dirs.local` by hand.
 - GitHub API behaviour (listing lag, `gh project` having no single-item read, `-L` paging limits) does not affect this script: it makes no GitHub calls. Those concerns live in `cfwf`, which it merely installs.
