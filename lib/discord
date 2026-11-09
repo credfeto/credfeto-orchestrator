@@ -723,6 +723,32 @@ notify_discord_blocked_item() {
     printf '%s\n' "blocked" > "${marker_file}" 2>/dev/null || true
 }
 
+# Sends a Discord embed notification when a Blocked Issue with no plan is re-invoked to plan
+# (issue_blocked_without_plan_needs_replan, lib/github-status). No dedup of its own: the caller's
+# blocked-replan marker already limits it to once per Blocked spell. Routed like
+# notify_discord_blocked_item; silent when the resolved URL is empty, logs a warning on curl failure.
+notify_discord_blocked_issue_replanning() {
+    local webhook_url
+    _discord_webhook_for blocked
+    webhook_url="${DISCORD_RESOLVED_WEBHOOK_URL}"
+    [ -n "${webhook_url}" ] || return 0
+    local item_id="$1" payload
+
+    payload=$(jq --null-input \
+        --argjson color 3447003 \
+        --arg title "Re-planning Blocked Issue #${item_id}: ${REPO_FULL}" \
+        --arg url "$(build_item_url "Issue" "${item_id}")" \
+        '{embeds:[{title:$title,url:$url,color:$color,
+            description:"The Issue is Blocked but has no Implementation Plan comment, so nothing is waiting for approval. It is being re-invoked to plan once in this Blocked spell."}]}') \
+        || { warn "Discord: failed to build blocked-replan payload for Issue #${item_id}"; return 0; }
+
+    curl --silent --fail --max-time 5 \
+        -H "Content-Type: application/json" \
+        -d "${payload}" \
+        "${webhook_url}" > /dev/null 2>&1 \
+        || warn "Discord webhook notification failed"
+}
+
 # Sends a Discord embed notification when a PR is settled (auto-merge armed, nothing
 # failed/pending — see pr_json_is_terminal) but reviewDecision is REVIEW_REQUIRED: the PR is
 # mergeable in every way except a missing human approval, whether that approval was dismissed by

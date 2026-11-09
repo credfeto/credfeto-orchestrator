@@ -44,7 +44,14 @@ skipped with one log line and a clean exit. See [the README](../README.md#github
    - If it's an Issue with an already-open Pull Request driving it, switch to treating it as
      that Pull Request instead (the "pivot" — see below).
    - Skip it if it's already closed, carries the `Blocked` label, or is assigned to a human
-     other than the bot.
+     other than the bot. One exception: a `Blocked` Issue (with no open Pull Request) whose
+     Workflow board status is `Not Started` or `Planning` and which has no
+     `## Implementation Plan` comment has nothing for a human to approve, so it is re-invoked
+     with the planning prompt instead of skipped. This recovery runs at most once per `Blocked`
+     spell (a `.blocked-replan` marker, cleared when the Issue is next seen un-blocked), never
+     for an Issue the runaway caps blocked or whose invocation budget is spent, and never when
+     the board status cannot be read. A `Blocked` Issue that has a plan stays skipped, so the
+     human approval gate is unchanged.
    - Compute a **fingerprint** of its current state and compare it to the fingerprint saved the
      last time this item was looked at. If they match, nothing has changed since last time —
      skip it, unless the local checkout was left on an orphaned or stalled branch for this Issue

@@ -1868,6 +1868,119 @@ STUBEOF
     grep -q 'type=Issue id=10' "${_notif_log}"
 }
 
+# --- main() Blocked Issue with no plan is re-invoked to plan --------------------
+
+# main mocks for Issue 10, Blocked, with no open PR, on the given board status and comments.
+setup_main_blocked_issue_mocks() {
+    local board_status="$1" comments_json="$2"
+    setup_main_mocks
+    _BLOCKED_BOARD_STATUS="${board_status}"
+    _BLOCKED_ISSUE_JSON="{\"title\":\"T\",\"body\":\"\",\"state\":\"OPEN\",\"labels\":[{\"name\":\"Blocked\"}],\"comments\":${comments_json},\"assignees\":[],\"milestone\":null}"
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '%s\n' "${_BLOCKED_ISSUE_JSON}"; }
+    board_substatus_for_item() { printf '%s\n' "${_BLOCKED_BOARD_STATUS}"; }
+    invoke_claude() { printf 'invoked\n' >> "${TEST_TMP}/invoke_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+    notify_discord_blocked_issue_replanning() { printf 'replanning id=%s\n' "$1" >> "${TEST_TMP}/replan_notif_log"; }
+}
+
+@test "main re-invokes a Blocked Issue in Planning with no plan posted" {
+    setup_main_blocked_issue_mocks "Planning" '[]'
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Issue #10 in org/repo is blocked with no plan posted, re-invoking to plan"* ]]
+    [[ "${output}" != *"Issue #10 in org/repo is blocked — skipping"* ]]
+    grep -q 'invoked' "${TEST_TMP}/invoke_log"
+    grep -q 'replanning id=10' "${TEST_TMP}/replan_notif_log"
+    issue_blocked_replan_marked 10
+}
+
+@test "main re-invokes a Blocked Issue in Not Started with no plan posted" {
+    setup_main_blocked_issue_mocks "Not Started" '[{"body":"Waiting on a decision.","updatedAt":"2024-01-01"}]'
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Issue #10 in org/repo is blocked with no plan posted, re-invoking to plan"* ]]
+    grep -q 'invoked' "${TEST_TMP}/invoke_log"
+}
+
+@test "main still skips a Blocked Issue that has a plan posted" {
+    setup_main_blocked_issue_mocks "Planning" '[{"body":"## Implementation Plan\n\n1. Do it.","updatedAt":"2024-01-01"}]'
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Issue #10 in org/repo is blocked — skipping"* ]]
+    [[ "${output}" != *"re-invoking to plan"* ]]
+    [ ! -f "${TEST_TMP}/invoke_log" ]
+    [ ! -f "${TEST_TMP}/replan_notif_log" ]
+}
+
+@test "main still skips a Blocked Issue with no plan once it is past Planning on the board" {
+    setup_main_blocked_issue_mocks "Development" '[]'
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Issue #10 in org/repo is blocked — skipping"* ]]
+    [ ! -f "${TEST_TMP}/invoke_log" ]
+}
+
+@test "main still skips a Blocked Issue with no plan when its board status is unknown" {
+    setup_main_blocked_issue_mocks "Unknown" '[]'
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Issue #10 in org/repo is blocked — skipping"* ]]
+    [ ! -f "${TEST_TMP}/invoke_log" ]
+}
+
+@test "main re-invokes a Blocked Issue with no plan only once per Blocked spell" {
+    setup_main_blocked_issue_mocks "Planning" '[]'
+    mark_issue_blocked_replan 10
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Issue #10 in org/repo is blocked — skipping"* ]]
+    [ ! -f "${TEST_TMP}/invoke_log" ]
+}
+
+@test "main still skips a Blocked Issue with no plan that the runaway cap blocked" {
+    setup_main_blocked_issue_mocks "Planning" '[]'
+    mkdir -p "${SESSION_BASE_DIR}"
+    touch "$(runaway_blocked_marker_file_path "Issue" 10)"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Issue #10 in org/repo is blocked — skipping"* ]]
+    [ ! -f "${TEST_TMP}/invoke_log" ]
+}
+
+@test "main still skips a Blocked Issue with no plan whose idle budget is spent" {
+    setup_main_blocked_issue_mocks "Planning" '[]'
+    load_issue_invocation_counts() {
+        ISSUE_INVOCATION_TOTAL=0
+        ISSUE_INVOCATION_IDLE="${MAX_ISSUE_IDLE_INVOCATIONS}"
+    }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Issue #10 in org/repo is blocked — skipping"* ]]
+    [ ! -f "${TEST_TMP}/invoke_log" ]
+}
+
+@test "main clears the blocked-replan marker once the Issue is seen un-blocked" {
+    setup_main_blocked_issue_mocks "Planning" '[]'
+    _BLOCKED_ISSUE_JSON='{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}'
+    mark_issue_blocked_replan 10
+
+    run main
+    [ "${status}" -eq 0 ]
+    run issue_blocked_replan_marked 10
+    [ "${status}" -ne 0 ]
+}
+
 @test "main sends blocked notification for Issue when the Issue has a linked PR that is blocked" {
     setup_main_pivot_mocks
     fetch_pr_json()             { printf '{"state":"OPEN","title":"PR title","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
