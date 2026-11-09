@@ -23,6 +23,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - oneshot: the pre-commit pre-check runs with the agent marker (CLAUDECODE=1), so the global hook skips its installation freshness check as it does for the agent's own commits, and the pre-check no longer fails whenever the hooks have released since the image was built (#1843)
 - oneshot: the AI Coverage phase (PHASE G) and the COVERAGE.md conflict step of the rebase notice now have Code Tester measure coverage with the build MCP coverage tool. The main session, which has no build or coverage tools, used to run raw test commands itself, which gave figures that didn't match the baseline (#1868).
 - `install-claude-hooks` ignores every argument again instead of reading the first as an allowed-dirs file, so e.g. `install-claude-hooks --system` no longer fails with "Allowed directories file not found"; the host's `allowed-dirs.local` is now maintained by hand, and the script warns when it is missing (#1876)
+- shell-tests no longer depends on GNU coreutils' install error wording, so it passes on ubuntu-26.04 runners with uutils coreutils (#1879)
 ### Changed
 - The default `CLAUDE_CODE_AUTO_COMPACT_WINDOW` is now 160000 (was 100000). A session starts with about 60k tokens of fixed context, so at 100k it had about 7k tokens of working room before auto-compaction, and sessions compacted within a few turns and could end with "Autocompact is thrashing". The environment override is unchanged (#1866)
 ### Deprecated
