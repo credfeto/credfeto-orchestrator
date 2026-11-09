@@ -22,6 +22,7 @@ rule, matched to what actually makes sense for that alert:
 | Slow image pull (#1400) | A `podman pull` of `ORCHESTRATOR_IMAGE` takes longer than `PULL_DURATION_THRESHOLD_MULTIPLIER` times the owner's own rolling median pull duration (last `PULL_DURATION_HISTORY_SIZE` successful pulls). Skipped entirely until at least `PULL_DURATION_MIN_SAMPLES` pulls have been recorded for that owner; there is no fixed "normal" duration, since it legitimately varies with how many image layers actually changed. | At most one per hour, per owner. |
 | Priorities API unreachable | The priorities feed itself could not be reached after retrying (see [oneshot.md](oneshot.md)) — distinct from the feed answering with something that failed to parse, which is not treated as a connectivity problem. | At most one per hour, shared across all owners (see below). |
 | Item blocked | An Issue or Pull Request was just marked `Blocked` (see [github-integration.md](github-integration.md)). | Once per "blocked spell" — silent on every subsequent tick the item stays blocked, then re-armed the moment the item is next observed open and un-blocked. Not time-based at all. |
+| Blocked Issue re-planning (#1718) | A `Blocked` Issue in `Not Started` or `Planning` with no `## Implementation Plan` comment is re-invoked with the planning prompt instead of skipped (see [oneshot.md](oneshot.md)). The embed names the Issue and links to it. | Once per "blocked spell", through the Issue's `.blocked-replan` marker: the recovery itself runs at most once per spell, so this alert does too. Re-armed when the Issue is next observed un-blocked. |
 | PR needs approval | A Pull Request is "settled" (auto-merge armed, nothing failed/pending) but GitHub's `reviewDecision` is `REVIEW_REQUIRED` — it cannot merge purely because no approving review exists, whether one was dismissed by a later force-push or never requested at all. | At most one per hour, per repo-and-PR (not per owner, so the same PR number in two different repos never suppresses each other's alert). |
 | Self-update stale | Only when systemd-invoked (gated on `ORCHESTRATOR_SELF_UPDATE_MANAGED`, a variable the service unit `lib/systemd-units` generates declares explicitly — not systemd's generic `INVOCATION_ID`, which would also wrongly catch a manual shell descended from an unrelated systemd session — so `loop` and manual runs are unaffected): this checkout's own `HEAD` is behind `origin/main` — the systemd unit's self-update `ExecStartPre` steps did not converge (a stalled/unreachable remote is tolerated by design, but a permanently wedged merge, e.g. a stale git lock left by a killed process, previously had nothing surfacing it). The run refuses to continue this tick and exits non-zero, so `systemctl`/`journalctl` also show the unit as failed. | At most one per hour, per owner. |
 | Workflow board conversion failed (#1519) | Converting a repository's Workflow board to the built-in Status field was refused at some step (see [workflow-board.md](workflow-board.md)). The embed names the repository and the step; the repository is skipped until the conversion succeeds, and its Workflow Status field is kept. | At most one per hour, per repository. |
@@ -43,7 +44,7 @@ Four different suppression shapes are in play, not one universal rule:
    state file records the last time this alert actually sent, and a repeat within the hour is
    dropped. The no-work alert compares a hash of its title and item breakdown rather than the raw
    text, since the breakdown can now be long and multi-line.
-3. **A persistent latch** (item blocked; item observed waiting, since #1375) — not time-based at
+3. **A persistent latch** (item blocked; Blocked Issue re-planning; item observed waiting, since #1375) — not time-based at
    all: exactly one notification per *episode* the underlying condition holds, however long that
    episode lasts. Item blocked re-arms only when the item is later seen open and un-blocked again;
    item observed waiting re-arms the moment its content (substatus, progress reason, or priority)
@@ -81,7 +82,7 @@ key without the `_URL` infix; `load_env_config` sets the matching internal varia
 
 | Category | `.env` key | Internal variable | Covers |
 | --- | --- | --- | --- |
-| Blocked | `DISCORD_WEBHOOK_BLOCKED` | `DISCORD_WEBHOOK_URL_BLOCKED` | Item blocked |
+| Blocked | `DISCORD_WEBHOOK_BLOCKED` | `DISCORD_WEBHOOK_URL_BLOCKED` | Item blocked, Blocked Issue re-planning |
 | Awaiting Approval | `DISCORD_WEBHOOK_AWAITING_APPROVAL` | `DISCORD_WEBHOOK_URL_AWAITING_APPROVAL` | PR needs approval |
 | Permissions | `DISCORD_WEBHOOK_PERMISSIONS` | `DISCORD_WEBHOOK_URL_PERMISSIONS` | A run denying one or more tool calls (parsed from Claude Code's own `permission_denials`), a stalled session, and the daily session digest |
 | Slow image pull | `DISCORD_WEBHOOK_SLOW_PULL` | `DISCORD_WEBHOOK_URL_SLOW_PULL` | Slow image pull |

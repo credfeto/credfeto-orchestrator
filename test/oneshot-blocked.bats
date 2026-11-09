@@ -1079,6 +1079,78 @@ load oneshot_helper
     [ "${status}" -eq 0 ]
 }
 
+# --- issue_blocked_without_plan_needs_replan and the blocked-replan marker (#1718) ---
+
+_NO_PLAN_ISSUE_JSON='{"labels":[{"name":"Blocked"}],"comments":[{"body":"Which database should this use?"}]}'
+_PLAN_ISSUE_JSON='{"labels":[{"name":"Blocked"}],"comments":[{"body":"## Implementation Plan\n\n1. Do it."}]}'
+
+@test "issue_blocked_without_plan_needs_replan is true for a Planning Issue with no plan" {
+    board_substatus_for_item() { printf 'Planning\n'; }
+    run issue_blocked_without_plan_needs_replan 99 "${_NO_PLAN_ISSUE_JSON}"
+    [ "${status}" -eq 0 ]
+}
+
+@test "issue_blocked_without_plan_needs_replan is true for a Not Started Issue with no comments" {
+    board_substatus_for_item() { printf 'Not Started\n'; }
+    run issue_blocked_without_plan_needs_replan 99 '{"labels":[{"name":"Blocked"}],"comments":[]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "issue_blocked_without_plan_needs_replan is false when a plan is posted" {
+    board_substatus_for_item() { printf 'Planning\n'; }
+    run issue_blocked_without_plan_needs_replan 99 "${_PLAN_ISSUE_JSON}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "issue_blocked_without_plan_needs_replan is false for any other board status" {
+    local board_status
+    for board_status in "Approved" "Development" "Human Review" "Unknown" ""; do
+        _STUB_BOARD_STATUS="${board_status}"
+        board_substatus_for_item() { printf '%s\n' "${_STUB_BOARD_STATUS}"; }
+        run issue_blocked_without_plan_needs_replan 99 "${_NO_PLAN_ISSUE_JSON}"
+        [ "${status}" -ne 0 ]
+    done
+}
+
+@test "issue_blocked_without_plan_needs_replan is false once already re-invoked in this Blocked spell" {
+    board_substatus_for_item() { printf 'Planning\n'; }
+    mark_issue_blocked_replan 99
+    run issue_blocked_without_plan_needs_replan 99 "${_NO_PLAN_ISSUE_JSON}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "issue_blocked_without_plan_needs_replan is false when the runaway caps blocked the Issue" {
+    board_substatus_for_item() { printf 'Planning\n'; }
+    mkdir -p "${SESSION_BASE_DIR}"
+    touch "$(runaway_blocked_marker_file_path "Issue" 99)"
+    run issue_blocked_without_plan_needs_replan 99 "${_NO_PLAN_ISSUE_JSON}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "issue_blocked_without_plan_needs_replan is false when the idle or total budget is spent" {
+    board_substatus_for_item() { printf 'Planning\n'; }
+    save_issue_invocation_counts 99 4 "${MAX_ISSUE_IDLE_INVOCATIONS}"
+    run issue_blocked_without_plan_needs_replan 99 "${_NO_PLAN_ISSUE_JSON}"
+    [ "${status}" -ne 0 ]
+    save_issue_invocation_counts 99 "${MAX_ISSUE_TOTAL_INVOCATIONS}" 0
+    run issue_blocked_without_plan_needs_replan 99 "${_NO_PLAN_ISSUE_JSON}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "the blocked-replan marker is set by mark_issue_blocked_replan and removed by clear_issue_blocked_replan_marker" {
+    run issue_blocked_replan_marked 99
+    [ "${status}" -ne 0 ]
+    mark_issue_blocked_replan 99
+    issue_blocked_replan_marked 99
+    run issue_blocked_replan_marked 98
+    [ "${status}" -ne 0 ]
+    clear_issue_blocked_replan_marker 99
+    run issue_blocked_replan_marked 99
+    [ "${status}" -ne 0 ]
+    run clear_issue_blocked_replan_marker 99
+    [ "${status}" -eq 0 ]
+}
+
 @test "block_issue_for_idle_exhausted_no_plan does not post a comment when the label cannot be verified" {
     local call_log="${TEST_TMP}/gh_calls"
     # shellcheck disable=SC2016
