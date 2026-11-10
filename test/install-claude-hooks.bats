@@ -742,13 +742,11 @@ kb_token_privacy_predicates() {
     [ "$(jq -r '.permissions.deny[]' "${SOURCE_MANAGED_SETTINGS}" | grep -c '^mcp__codegraph__')" -eq 0 ]
 }
 
-# codegraph dispatches on a subcommand, so the shell allow entries name only the ones agents use
-# (explore, sync) and never the blanket Bash(codegraph *) that would also allow install, uninit
-# and upgrade.
-@test "the managed settings allow only codegraph explore and sync in the shell, with no blanket entry" {
+# Agents reach CodeGraph only through its MCP tools, so the shell has no codegraph entry at all.
+@test "the managed settings allow no codegraph shell command" {
     run jq -r '.permissions.allow[] | select(startswith("Bash(codegraph"))' "${SOURCE_MANAGED_SETTINGS}"
     [ "${status}" -eq 0 ]
-    [ "${output}" = $'Bash(codegraph explore *)\nBash(codegraph sync)\nBash(codegraph sync *)' ]
+    [ -z "${output}" ]
 }
 
 @test "the Dockerfile sanity block pins the codegraph server and its allow rule, and requires the binary" {
