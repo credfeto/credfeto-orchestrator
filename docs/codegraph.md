@@ -37,8 +37,9 @@ CodeGraph needs. Nothing has to be done by hand.
   runtime and the app, so no system Node.js is needed. It is unpacked into `/opt/codegraph`, owned
   by root, and `/usr/local/bin/codegraph` links to the launcher. The image's sanity stage checks
   that `codegraph` is on `PATH` and that `codegraph --version` runs.
-- **The pin.** The version is pinned by `ARG CODEGRAPH_VERSION` (currently `1.6.2`), with one
-  checksum per architecture in `CODEGRAPH_SHA256_AMD64` and `CODEGRAPH_SHA256_ARM64`.
+- **The pin.** The version is pinned by `ARG CODEGRAPH_VERSION`, with one checksum per
+  architecture in `CODEGRAPH_SHA256_AMD64` and `CODEGRAPH_SHA256_ARM64`. The Dockerfile is the only
+  place these values are kept; this guide does not copy them.
   `.github/workflows/bump-pinned-tool-versions.yml` runs daily at 02:00 UTC, and can be started by
   hand. Its `codegraph` matrix entry points the `bump-pinned-tool-version` action at the
   `development-full` Dockerfile. When a newer release exists, the action rewrites all three ARGs,
@@ -90,15 +91,20 @@ Each workstation is set up by hand. The steps below assume Linux on x64 or arm64
 the only platforms the pinned archives cover. Other platforms are listed on the
 [releases page](https://github.com/colbymchenry/codegraph/releases).
 
-1. **Install the pinned CLI.** Use the version and checksum from the `CODEGRAPH_*` ARGs in
-   `containers/base/development-full/Dockerfile`, so the workstation runs the same version as the
-   agents. This uses the same layout as upstream's installer, without its install script, which
-   verifies nothing:
+1. **Install the pinned CLI.** The script reads the version and checksum from the `CODEGRAPH_*`
+   ARGs in `containers/base/development-full/Dockerfile`, so the workstation runs the same version
+   as the agents. Run it from the root of an up-to-date checkout of this repository. This uses the
+   same layout as upstream's installer, without its install script, which verifies nothing:
 
    ```bash
-   version=1.6.2
+   dockerfile=containers/base/development-full/Dockerfile
    arch=x64      # or arm64
-   sha256=ef0af416092128fb1ccc723786000b7edf4a6971fe604acd08bf966e4f37b828   # arm64: CODEGRAPH_SHA256_ARM64
+   case "${arch}" in
+       x64) sha256_arg=CODEGRAPH_SHA256_AMD64 ;;
+       arm64) sha256_arg=CODEGRAPH_SHA256_ARM64 ;;
+   esac
+   version=$(grep '^ARG CODEGRAPH_VERSION=' "${dockerfile}" | cut -d= -f2)
+   sha256=$(grep "^ARG ${sha256_arg}=" "${dockerfile}" | cut -d= -f2)
    tmp=$(mktemp -d)
    curl -fsSL "https://github.com/colbymchenry/codegraph/releases/download/v${version}/codegraph-linux-${arch}.tar.gz" \
        -o "${tmp}/codegraph.tar.gz"
@@ -111,7 +117,7 @@ the only platforms the pinned archives cover. Other platforms are listed on the
    ```
 
    `~/.local/bin` must be on `PATH`, because the MCP entry runs a bare `codegraph`. To move to a
-   new pin, repeat this step with the new values from the Dockerfile. Do not run `codegraph upgrade`
+   new pin, pull the checkout and repeat this step. Do not run `codegraph upgrade`
    with no version, because it moves to upstream's latest release rather than the pin.
 
 1. **Turn telemetry off.** Run `codegraph telemetry off`, or set `CODEGRAPH_TELEMETRY=0` in the
