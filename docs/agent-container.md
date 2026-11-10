@@ -137,14 +137,16 @@ or `NotebookEdit` call that names a file matching the same patterns, including t
 or a symlink. A tool inside the container that needs one of these files therefore sees it as
 empty.
 
-Just before it starts `claude`, the entrypoint builds or refreshes the CodeGraph index that the
-managed `codegraph` MCP server reads. It runs in the repository checkout with stdin closed. When
-`.codegraph/codegraph.db` is missing it runs `codegraph init --yes -v`, which creates
-`.codegraph/` and builds the full index. Otherwise it runs `codegraph sync -q` to catch up with
-changes since the item's last session, because `.codegraph/` is the item's own host directory,
-which persists between that item's containers (see [The CodeGraph index](#the-codegraph-index)).
-This step is non-fatal: if `codegraph` fails, the entrypoint prints a warning and still starts
-`claude`, because a missing or stale index only makes code lookups slower. It is skipped when the
+Just before it starts `claude`, the entrypoint builds the CodeGraph index that the managed
+`codegraph` MCP server reads, but only when there is none. When `.codegraph/codegraph.db` is
+missing it runs `codegraph init --yes -v` in the repository checkout with stdin closed, which
+creates `.codegraph/` and builds the full index. Otherwise it leaves the index alone and runs no
+`codegraph` command: `.codegraph/` is the item's own host directory, which persists between that
+item's containers (see [The CodeGraph index](#the-codegraph-index)), and the MCP server catches
+the existing index up with changes since the item's last session when Claude connects, before it
+answers the first query. Its watcher then keeps the index current while the session runs. This
+step is non-fatal: if `codegraph init` fails, the entrypoint prints a warning and still starts
+`claude`, because a missing index only makes code lookups slower. It is skipped when the
 checkout has no `.git` directory, and in pre-check mode (below). Running it before `claude` keeps
 indexing from competing with the agent's own builds and tests for the container's memory.
 `codegraph init` writes `.codegraph/.gitignore`, which ignores everything else in that directory.
@@ -261,8 +263,8 @@ which deletes every ignored file. An index kept in the checkout would be deleted
 every session would start with a full `codegraph init`. Kept in the item's own directory, it
 follows the same lifecycle as the [session transcripts](#session-transcripts):
 
-- Every session for the same item mounts the same directory, so the entrypoint runs the
-  incremental `codegraph sync`.
+- Every session for the same item mounts the same directory, so the entrypoint runs nothing and
+  the MCP server catches the existing index up when Claude connects.
 - A session for a different item mounts that item's directory, which starts empty, so the
   entrypoint runs a fresh `codegraph init`. The other item's index is not touched.
 - On the Issue-to-PR pivot, `codegraph/PullRequest_<m>` becomes a link to `Issue_<n>`, by the
