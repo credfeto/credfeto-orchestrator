@@ -1638,3 +1638,96 @@ STUBEOF
     [ ! -e "${TEST_TMP}/codegraph_calls" ]
     [ ! -e "${TEST_TMP}/claude_ran" ]
 }
+
+# --- exclude_codegraph_from_git --------------------------------------------------
+
+@test "entrypoint adds .codegraph/ to the checkout's .git/info/exclude, creating .git/info" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${repo_dir}/.git/info/exclude")" = ".codegraph/" ]
+    [ ! -e "${repo_dir}/.gitignore" ]
+    [ -e "${TEST_TMP}/claude_ran" ]
+}
+
+@test "entrypoint does not duplicate the .codegraph/ exclude entry on a second run" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ "$(grep -cxF '.codegraph/' "${repo_dir}/.git/info/exclude")" -eq 1 ]
+}
+
+@test "entrypoint keeps existing exclude content and appends .codegraph/ on its own line" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git/info"
+    printf '# git ls-files --others --exclude-from=.git/info/exclude\n*.local' > "${repo_dir}/.git/info/exclude"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${repo_dir}/.git/info/exclude")" = "$(printf '# git ls-files --others --exclude-from=.git/info/exclude\n*.local\n.codegraph/')" ]
+}
+
+@test "entrypoint leaves the exclude file unchanged when it already lists .codegraph/" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git/info"
+    printf '.codegraph/\n*.local\n' > "${repo_dir}/.git/info/exclude"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${repo_dir}/.git/info/exclude")" = "$(printf '.codegraph/\n*.local')" ]
+}
+
+@test "entrypoint warns and still starts claude when .git/info cannot be created" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git"
+    touch "${repo_dir}/.git/info"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to create ${repo_dir}/.git/info, .codegraph/ is not excluded from git"* ]]
+    [ -e "${TEST_TMP}/claude_ran" ]
+}
+
+@test "entrypoint warns and still starts claude when the exclude file cannot be written" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git/info/exclude"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to add .codegraph/ to ${repo_dir}/.git/info/exclude, .codegraph/ is not excluded from git"* ]]
+    [ -e "${TEST_TMP}/claude_ran" ]
+}
+
+@test "entrypoint adds the .codegraph/ exclude entry in ORCHESTRATOR_PRECHECK mode" {
+    setup_entrypoint_stubs
+    make_stub pre-commit-check 'exit 0'
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git"
+
+    run_entrypoint_in_repo "${repo_dir}" ORCHESTRATOR_PRECHECK=1
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${repo_dir}/.git/info/exclude")" = ".codegraph/" ]
+}
+
+@test "entrypoint writes no exclude file when the repo directory is not a git checkout" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ ! -e "${repo_dir}/.git" ]
+    [ -e "${TEST_TMP}/claude_ran" ]
+}
