@@ -1,12 +1,13 @@
---- # Check one curl-pinned CLI tool in development-tools/Dockerfile against its latest GitHub release
+--- # Check one curl-pinned CLI tool in a base-image Dockerfile against its latest GitHub release
 name: "Bump Pinned Tool Version"
 description: "Checks a curl-installed, SHA256-pinned CLI tool (hadolint, dotenv-linter, sqlcmd,
-  actionlint, trufflehog, trivy) against its latest GitHub release and rewrites its Dockerfile
-  ARG pins in place if newer"
+  actionlint, trufflehog, trivy, codegraph) against its latest GitHub release and rewrites its
+  Dockerfile ARG pins in place if newer"
 
 inputs:
   tool:
-    description: "Tool key: hadolint, dotenv-linter, sqlcmd, actionlint, trufflehog, or trivy"
+    description: "Tool key: hadolint, dotenv-linter, sqlcmd, actionlint, trufflehog, trivy, or
+      codegraph"
     required: true
   github-token:
     description: "GitHub token with public-repo read access, for the releases API lookup"
@@ -46,15 +47,16 @@ runs:
           const fs = require("fs");
           const crypto = require("crypto");
 
-          // One entry per curl-pinned tool in development-tools/Dockerfile. `versionHasVPrefix`
+          // One entry per curl-pinned tool (in development-tools/Dockerfile, or for codegraph
+          // development-full/Dockerfile, passed in as dockerfile-path). `versionHasVPrefix`
           // records whether that tool's own ARG stores the full release tag (e.g. "v2.14.0") or
           // the bare number (e.g. "1.7.12") - the two conventions already coexist in the
           // Dockerfile today (see its own "Pin CLI versions" comment block), so this mirrors
           // each ARG's existing format rather than normalising it, keeping this bump a pure
           // value substitution with no unrelated reformatting. The three ARG names
           // (<PREFIX>_VERSION / <PREFIX>_SHA256_AMD64 / <PREFIX>_SHA256_ARM64) are derived from
-          // the tool key below rather than typed out per entry, since all six follow that
-          // convention with no exception (verified against the Dockerfile's own ARG block).
+          // the tool key below rather than typed out per entry, since every tool follows that
+          // convention with no exception (verified against each Dockerfile's own ARG block).
           // `assetName` returns just the release asset's filename for one arch - the download
           // URL itself is always `https://github.com/<repo>/releases/download/<tag>/<name>`,
           // built once below from `repo` and the release's own tag_name, so `repo` is never
@@ -96,6 +98,12 @@ runs:
               archTokens: { amd64: "64bit", arm64: "ARM64" },
               assetName: (version, arch) => `trivy_${version}_Linux-${arch}.tar.gz`,
             },
+            codegraph: {
+              repo: "colbymchenry/codegraph",
+              versionHasVPrefix: false,
+              archTokens: { amd64: "x64", arm64: "arm64" },
+              assetName: (_version, arch) => `codegraph-linux-${arch}.tar.gz`,
+            },
           };
 
           const toolKey = process.env.TOOL;
@@ -132,7 +140,7 @@ runs:
 
           core.info(`ℹ️ ${toolKey}: pinned ${currentVersion}, latest release ${newVersion}`);
 
-          // Plain numeric semver compare, not just !==: all six tools publish bare X.Y[.Z] tags
+          // Plain numeric semver compare, not just !==: every tool publishes bare X.Y[.Z] tags
           // (verified against each one's actual release history), so this never needs to handle
           // pre-release suffixes. A <= 0 comparison (not just ===) also guards the case
           // getLatestRelease ever returns something that isn't actually newer - e.g. a point

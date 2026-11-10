@@ -35,11 +35,45 @@ ARG WSHOBSON_AGENTS_COMMIT=5cc2549a50fc672230efd0a0307e2fd27ffba792
 ARG CC_DEVOPS_SKILLS_COMMIT=7fe7595e4512f8ce43dcf956aa5190b96d627dd1
 ARG MARKDOWN_LINTER_FIXER_COMMIT=72aedc7915a0918d897b63b28d935989c054585e
 ARG DOTNET_SKILLS_COMMIT=874ff14cff1015104cf343ed480a6879020b4820
+# codegraph: pinned to a specific release for reproducible, verifiable builds.
+# Update CODEGRAPH_VERSION and both SHA256 ARGs together when bumping
+# (.github/workflows/bump-pinned-tool-versions.yml does this).
+ARG CODEGRAPH_VERSION=1.6.2
+ARG CODEGRAPH_SHA256_AMD64=ef0af416092128fb1ccc723786000b7edf4a6971fe604acd08bf966e4f37b828
+ARG CODEGRAPH_SHA256_ARM64=c8c6be292be21d00dea26bad8b28d434731cf612fb8cc475dc10f5b3038b5b64
 
 # NuGet.Config, NUGET_PACKAGES, claude-code, all twelve .NET global tools, their
 # dotnet-* subcommand aliases, and the PSScriptAnalyzer module are already baked
 # in by development-dotnet-tools / development-credfeto-tools (this image's
 # base chain) — nothing to redo here.
+
+# ---- codegraph — code knowledge graph CLI (colbymchenry/codegraph) ----------
+# The standalone release is a directory, not a single binary: a launcher in
+# bin/, its own bundled Node runtime and the app under lib/. It is unpacked
+# whole into /opt/codegraph and the launcher, which resolves its own symlink,
+# is linked onto PATH. The archive is verified against the pinned SHA256
+# before extraction; upstream's install.sh does no verification, so it is not
+# used. Telemetry is on by default upstream, so it is switched off here.
+# hadolint ignore=DL3059
+RUN ARCH=$(dpkg --print-architecture) \
+    && case "$ARCH" in \
+         amd64) CG_ARCH=x64;   SHA256="${CODEGRAPH_SHA256_AMD64}" ;; \
+         arm64) CG_ARCH=arm64; SHA256="${CODEGRAPH_SHA256_ARM64}" ;; \
+         *) echo "unsupported arch: $ARCH" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL \
+        "https://github.com/colbymchenry/codegraph/releases/download/v${CODEGRAPH_VERSION}/codegraph-linux-${CG_ARCH}.tar.gz" \
+        -o /tmp/codegraph.tar.gz \
+    && echo "${SHA256}  /tmp/codegraph.tar.gz" | sha256sum -c - \
+    && mkdir -p /opt/codegraph \
+    && tar -xzf /tmp/codegraph.tar.gz -C /opt/codegraph --strip-components=1 --no-same-owner \
+    && rm /tmp/codegraph.tar.gz \
+    && chown -R root:root /opt/codegraph \
+    && chmod -R go-w /opt/codegraph \
+    && ln -s /opt/codegraph/bin/codegraph /usr/local/bin/codegraph \
+    && codegraph --version
+
+ENV CODEGRAPH_TELEMETRY=0
 
 # ---- dotnet-claude-kit repo (cloned for the Claude Code plugin side) ---------
 # Fetches the exact pinned commit directly (not the moving default-branch
@@ -342,7 +376,7 @@ RUN ln -sf /usr/bin/gpg /usr/bin/gpg2
 # Overwrites (not appends) the report inherited from development-credfeto-tools,
 # so this stage's report covers only what development-full itself adds: the
 # pinned/resolved refs for each cloned repo (ARGs for the pinned third-party
-# ones) plus the linked skill count. credfeto-ai-skills and
+# ones), the installed codegraph version, plus the linked skill count. credfeto-ai-skills and
 # credfeto-global-pre-commit are deliberately not repeated here — on the
 # push path, the workflow's "Summarise" step already prints both from the
 # pre-build git ls-remote resolution, and showing both there risks
@@ -357,6 +391,7 @@ RUN { \
       echo "cc-devops-skills: ${CC_DEVOPS_SKILLS_REF} @ ${CC_DEVOPS_SKILLS_COMMIT}"; \
       echo "markdown-linter-fixer: ${MARKDOWN_LINTER_FIXER_REF} @ ${MARKDOWN_LINTER_FIXER_COMMIT}"; \
       echo "dotnet-skills: ${DOTNET_SKILLS_COMMIT}"; \
+      echo "codegraph: $(codegraph --version || echo 'version unknown')"; \
       echo "claude skills linked: $(cat /opt/.claude-skill-count || echo 'unknown')"; \
       echo "claude agents linked: $(cat /opt/.claude-agent-count || echo 'unknown')"; \
       echo "pre-commit-check: present-only, no --version support"; \
@@ -373,13 +408,13 @@ RUN { \
 # hook wiring is incorrect.
 # hadolint ignore=DL3059,DL3001
 RUN set -e; \
-    echo "== binary presence + version probe (stage 1+2+3 inherited binaries) =="; \
+    echo "== binary presence + version probe (stage 1+2+3 inherited binaries, plus codegraph from this stage) =="; \
     for cmd in git gh dotnet python3 gpg curl jq sqlite3 \
                shellcheck bats shfmt checkbashisms uv ruff sqlfluff actionlint markdownlint-cli2 pre-commit \
                trufflehog hadolint dotenv-linter sqlcmd pwsh \
                yamllint ansible-lint flake8 pylint cfn-lint \
                markdownlint stylelint eslint \
-               xmllint; do \
+               xmllint codegraph; do \
         if ! command -v "$cmd" >/dev/null 2>&1; then \
             echo "FATAL sanity: required binary '$cmd' is missing" >&2; exit 1; \
         fi; \
