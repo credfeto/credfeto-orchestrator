@@ -7,8 +7,9 @@ builds a local graph of its symbols and the calls between them, stored in `.code
 repository root. `codegraph serve --mcp` hands that graph to Claude Code as MCP tools, such as
 `codegraph_explore`. One `codegraph_explore` call returns the relevant symbols' source together
 with the call paths between them, including dynamic-dispatch hops that grep cannot follow. With
-grep and file reads, the same answer takes several calls. The shell command
-`codegraph explore "<question>"` prints the same output.
+grep and file reads, the same answer takes several calls. Agents use only the MCP tools: they
+have no shell access to the `codegraph` CLI, which the entrypoint uses to build the index before
+Claude starts, and which a person can run in their own terminal.
 
 The aim is fewer tool calls and tokens when agents explore code. That gain has not been measured
 here, so the rollout is built to be undone in one go (see [Rollback checklist](#rollback-checklist)).
@@ -20,7 +21,7 @@ TypeScript/JavaScript.
 
 | Place | What it needs | Status |
 | --- | --- | --- |
-| [Agent container](#agent-container) | Pinned CLI, managed MCP server, permissions, hook allowlist, index at start | Done in this repository |
+| [Agent container](#agent-container) | Pinned CLI, managed MCP server, MCP permission, index at start | Done in this repository |
 | [Developer workstations](#developer-workstations) | Pinned CLI, Claude Code wiring, `install-claude-hooks` re-run, per-repository index | Manual, per workstation |
 | [Every repository](#every-repository) | `.codegraph/` in `.gitignore` | Templates done; reaches each repository through the `.gitignore` sync. The agent container also excludes it in every checkout it works on |
 | [Agent definitions](#agent-definitions) | `mcp__codegraph__*` in the agents' tool lists, plus a usage note | [credfeto/credfeto-ai-skills#60](https://github.com/credfeto/credfeto-ai-skills/issues/60) |
@@ -59,13 +60,13 @@ CodeGraph needs. Nothing has to be done by hand.
   }
   ```
 
-- **Permissions.** `claude-managed-settings.json` allows `mcp__codegraph__*`, and in the shell
-  only `codegraph explore` and `codegraph sync` (`Bash(codegraph explore *)`,
-  `Bash(codegraph sync)` and `Bash(codegraph sync *)`). It has no blanket `Bash(codegraph *)`, so
-  `install`, `uninstall`, `upgrade`, `uninit` and `telemetry` are not allowed, and `init` is left
-  to the entrypoint (in the container) or the user (on a workstation). The hook allowlist,
-  `claude-hooks/command-allowlist`, lists `codegraph` as a `writer`, because `init` and `sync`
-  write the repository's `.codegraph/` index.
+- **Permissions.** `claude-managed-settings.json` allows `mcp__codegraph__*` and no
+  `Bash(codegraph ...)` entry, and the hook allowlist, `claude-hooks/command-allowlist`, does not
+  list `codegraph`, so `reject-obfuscated-commands` rejects every `codegraph` shell command an
+  agent runs. Agents explore code only through the `codegraph_explore` MCP tool. They need no
+  `sync` either: the MCP server's watcher updates the index as files change, and the entrypoint
+  syncs before Claude starts. The entrypoint's own `codegraph init` and `codegraph sync` run
+  before Claude, outside the hooks and permissions, so they are unaffected.
 - **The index.** The entrypoint builds or refreshes the index just before it starts `claude`. With
   no `.codegraph/codegraph.db` it runs `codegraph init --yes -v`; otherwise it runs
   `codegraph sync -q`. The index does not live in the host's checkout, where the `git clean -fdX`
@@ -160,13 +161,11 @@ the only platforms the pinned archives cover. Other platforms are listed on the
    to make it identical or remove it.
 
 1. **Re-run `install-claude-hooks` after the container change is merged.** Pull this repository's
-   checkout first. The re-run installs the managed files that now include CodeGraph: `codegraph`
-   in the hook allowlist, `mcp__codegraph__*` and the `codegraph explore` and `codegraph sync`
-   entries in the managed permissions, and the `codegraph` server in
-   `/etc/claude-code/managed-mcp.json`. Until then, the host's hooks refuse every `codegraph`
-   shell command with
-   `command is not permitted - no legitimate need for it in this workflow`. Start a new Claude Code
-   session to pick up the change.
+   checkout first. The re-run installs the managed files that now include CodeGraph:
+   `mcp__codegraph__*` in the managed permissions and the `codegraph` server in
+   `/etc/claude-code/managed-mcp.json`. Claude Code sessions reach CodeGraph only through the MCP
+   tools; the host's hooks still refuse every `codegraph` shell command a session runs, because
+   `codegraph` is not on the hook allowlist. Start a new Claude Code session to pick up the change.
 
 1. **Index the repositories you want.** On a workstation, indexing is the user's decision. First
    check that the repository ignores `.codegraph/` (see [Every repository](#every-repository)):
@@ -175,8 +174,9 @@ the only platforms the pinned archives cover. Other platforms are listed on the
    git check-ignore -q .codegraph/ && echo ignored
    ```
 
-   Then run `codegraph init --yes` at the repository root. The MCP server's watcher keeps the
-   index current while a session runs; `codegraph sync` catches up by hand.
+   Then run `codegraph init --yes` at the repository root, in your own terminal rather than
+   through Claude Code, whose hooks refuse `codegraph`. The MCP server's watcher keeps the index
+   current while a session runs; `codegraph sync`, run the same way, catches up by hand.
    `codegraph uninit --force` deletes the index.
 
 To undo a workstation, see [Rollback checklist](#rollback-checklist).
@@ -219,8 +219,8 @@ To undo this part, leave the ignore line in place. It does nothing when no index
 
 The agent definitions come from `credfeto/credfeto-ai-skills` and are linked into the image at
 build time. Agents whose definitions have an explicit `tools:` list cannot call MCP tools that the
-list does not name. The six code-review lenses only have `Read`, `Grep`, `Glob` and `Skill`, so
-they cannot use the `codegraph explore` shell fallback either.
+list does not name. The six code-review lenses only have `Read`, `Grep`, `Glob` and `Skill`, and
+no agent has a `codegraph` shell fallback, so they cannot use CodeGraph at all.
 [credfeto/credfeto-ai-skills#60](https://github.com/credfeto/credfeto-ai-skills/issues/60) adds
 `mcp__codegraph__*` to those tool lists, including the six lenses, and adds a shared
 `credfeto-codegraph` skill with the usage note. Until it lands, only the main session and agents
@@ -238,7 +238,8 @@ This is described here only; none of it has been done.
 The CodeGraph section is in each user's own `~/.claude/CLAUDE.md`, written by `codegraph install`,
 so agents in the container never see it. It should move into cs-template's global instructions
 (a file under `ai/global`, listed in `ai/global/index.md`). Its last line also has to change,
-because the container now indexes automatically. Suggested text:
+because the container now indexes automatically, and its shell bullet is dropped, because agents
+have no shell access to `codegraph`. Suggested text:
 
 ```markdown
 ## CodeGraph
@@ -246,7 +247,6 @@ because the container now indexes automatically. Suggested text:
 In a repository indexed by CodeGraph (a `.codegraph/` directory exists at the repository root), use it before grep, find or reading files to understand or locate code:
 
 - **MCP tool** (when available): `codegraph_explore` answers most code questions in one call, returning the relevant symbols' source and the call paths between them. Name a file or symbol in the query to read its current line-numbered source. If it is listed but deferred, load it by name through tool search.
-- **Shell**: `codegraph explore "<symbol names or question>"` prints the same output.
 
 The agent container indexes every repository automatically before the session starts. On a workstation, indexing is the user's decision: if there is no `.codegraph/` directory, skip CodeGraph.
 ```
@@ -289,7 +289,7 @@ If agents rarely call it, or the counts do not drop, roll it back.
 ## Rollback checklist
 
 1. **Container.** Revert this repository's PR (#1885) as one revert. That removes the CLI, the
-   managed MCP entry, the permissions, the allowlist entry, the indexing at start, the per-item
+   managed MCP entry, the MCP permission, the indexing at start, the per-item
    index mount and its 14-day purge, the entrypoint's `.git/info/exclude` entry, the bump
    workflow entry, this guide and the CodeGraph notes in the other docs. The image rebuilds
    without CodeGraph. Two things stay, both harmless: the `.codegraph/` lines already written to

@@ -184,6 +184,3 @@ du                                    read-only
 
 ## Static web publishing
 hugo                                  writer
-
-# Code navigation (init, index and sync write the repo's .codegraph/ index)
-codegraph                             writer

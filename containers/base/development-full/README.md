@@ -232,7 +232,9 @@ owner and mode, both `ENV` values and the global tool. See
 `PATH` (the `codegraph` CLI above), with `alwaysLoad` set. The entry is exactly the one `codegraph install` writes
 for Claude Code, so a host's own entry merges as the same server in `install-claude-hooks`. It has no `env`, as
 the image already sets `CODEGRAPH_TELEMETRY=0`, and `mcp__codegraph__*` in `permissions.allow` allows all of its
-tools. In a repository with no `.codegraph/` index its tools answer that the project is not indexed. See
+tools. Agents use only those MCP tools: `codegraph` is not on the hook `command-allowlist` and has no
+`Bash(codegraph ...)` allow entry, so the hooks reject it in an agent's shell. The entrypoint's own `codegraph init`
+and `codegraph sync` run before Claude starts, outside the hooks and permissions. In a repository with no `.codegraph/` index its tools answer that the project is not indexed. See
 [docs/development/claude-hooks.md](../../../docs/development/claude-hooks.md#the-codegraph-mcp-server).
 
 The repo-root `install-claude-hooks` script installs this same layout onto the current host, so the
