@@ -1502,6 +1502,232 @@ cat "'"${TEST_TMP}"'/behind"'
     [ ! -f "${TEST_TMP}/claude_log" ]
 }
 
+@test "pr_merge_state_allows_settled never allows a DIRTY PR, allows a BEHIND PR only when review is required, and allows any other state (#1654)" {
+    run pr_merge_state_allows_settled '{"reviewDecision":"REVIEW_REQUIRED"}' "DIRTY"
+    [ "${status}" -ne 0 ]
+    run pr_merge_state_allows_settled '{"reviewDecision":"REVIEW_REQUIRED"}' "BEHIND"
+    [ "${status}" -eq 0 ]
+    run pr_merge_state_allows_settled '{"reviewDecision":"APPROVED"}' "BEHIND"
+    [ "${status}" -ne 0 ]
+    run pr_merge_state_allows_settled '{"reviewDecision":"CHANGES_REQUESTED"}' "BEHIND"
+    [ "${status}" -ne 0 ]
+    run pr_merge_state_allows_settled '{}' "BEHIND"
+    [ "${status}" -ne 0 ]
+    local state
+    for state in CLEAN BLOCKED UNSTABLE HAS_HOOKS UNKNOWN; do
+        run pr_merge_state_allows_settled '{"reviewDecision":"APPROVED"}' "${state}"
+        [ "${status}" -eq 0 ]
+    done
+}
+
+@test "pr_within_idle_budget is true below MAX_PR_IDLE_INVOCATIONS and false at it, and loads the counters (#1654)" {
+    save_pr_invocation_counts 5 7 "$((MAX_PR_IDLE_INVOCATIONS - 1))"
+    pr_within_idle_budget 5
+    [ "${PR_INVOCATION_IDLE}" -eq "$((MAX_PR_IDLE_INVOCATIONS - 1))" ]
+    [ "${PR_INVOCATION_TOTAL}" -eq 7 ]
+    save_pr_invocation_counts 5 7 "${MAX_PR_IDLE_INVOCATIONS}"
+    run pr_within_idle_budget 5
+    [ "${status}" -ne 0 ]
+}
+
+@test "main treats a handed-off BEHIND PR that only waits on human review as settled, with no rebase and no agent (#1654)" {
+    # The live case: a push to main left every handed-off PR in the repository BEHIND, and each
+    # one was re-run on every tick although nothing needed doing.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true}],"mergeable":"MERGEABLE","mergeStateStatus":"BEHIND","autoMergeRequest":{"enabledAt":"now"}}\n'; }
+    local fp_case
+    for fp_case in changed unchanged; do
+        rm -f "${TEST_TMP}/rebase_log" "${TEST_TMP}/claude_log"
+        if [ "${fp_case}" = "changed" ]; then
+            fingerprint_pr_json() { printf 'fp-new\n'; }
+        else
+            fingerprint_pr_json() { printf 'fp-old\n'; }
+        fi
+        load_pr_fingerprint() { printf 'fp-old\n'; }
+        try_nonagentic_rebase() { printf 'rebased\n' >> "${TEST_TMP}/rebase_log"; return 0; }
+        invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+        notify_discord_pr_needs_approval() { printf 'needs approval %s\n' "$1" >> "${TEST_TMP}/approval_log"; }
+        save_pr_invocation_counts 5 3 2
+
+        run main
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == *"PR #5 in org/repo: settled (ready to merge, nothing failed/pending; BEHIND, left for auto-merge or a human to update) — no agent needed"* ]]
+        [[ "${output}" != *"re-running"* ]]
+        [ ! -f "${TEST_TMP}/rebase_log" ]
+        [ ! -f "${TEST_TMP}/claude_log" ]
+        grep -qx 'needs approval 5' "${TEST_TMP}/approval_log"
+        load_pr_invocation_counts 5
+        [ "${PR_INVOCATION_IDLE}" -eq 2 ]
+        [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
+    done
+}
+
+@test "main does not treat a BEHIND PR as settled once it is approved, without auto-merge, or with an unaddressed trusted comment (#1654)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint() { printf 'fp-old\n'; }
+    try_nonagentic_rebase() { printf 'rebased\n' >> "${TEST_TMP}/rebase_log"; return 0; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+    local review auto_merge comments variant
+    for variant in approved no-auto-merge comment; do
+        rm -f "${TEST_TMP}/rebase_log" "${TEST_TMP}/claude_log"
+        review="REVIEW_REQUIRED"
+        auto_merge='{"enabledAt":"now"}'
+        comments='[]'
+        case "${variant}" in
+            approved) review="APPROVED" ;;
+            no-auto-merge) auto_merge="null" ;;
+            comment) comments='[{"author":{"login":"credfeto"},"updatedAt":"2026-08-12T10:05:07Z"}]' ;;
+        esac
+        export FIXTURE_PR_JSON='{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":'"${comments}"',"reviews":[],"reviewDecision":"'"${review}"'","statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"BEHIND","autoMergeRequest":'"${auto_merge}"'}'
+        fetch_pr_json() { printf '%s\n' "${FIXTURE_PR_JSON}"; }
+
+        run main
+        [ "${status}" -eq 0 ]
+        [[ "${output}" != *"settled"* ]]
+        if [ "${variant}" = "comment" ]; then
+            # An unaddressed trusted comment goes to an agent, never to the non-agentic rebase (#1307).
+            [ ! -f "${TEST_TMP}/rebase_log" ]
+            [ -f "${TEST_TMP}/claude_log" ]
+        else
+            [[ "${output}" == *"rebased non-agentically"* ]]
+            [ ! -f "${TEST_TMP}/claude_log" ]
+        fi
+    done
+}
+
+@test "main charges the idle budget for an unchanged BEHIND PR that is not handed off when its re-run makes no progress (#1654)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    # Review required but no auto-merge: not handed off, so it is re-run, and the non-agentic rebase
+    # fails (setup_main_mocks), so the agent gets it; its session pushes nothing.
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"BEHIND"}\n'; }
+    fingerprint_pr_json() { printf 'fp-same\n'; }
+    load_pr_fingerprint() { printf 'fp-same\n'; }
+    save_pr_invocation_counts 5 2 2
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #5 in org/repo unchanged but BEHIND — re-running (idle budget 2/${MAX_PR_IDLE_INVOCATIONS})"* ]]
+    [[ "${output}" == *"PR #5 in org/repo: no progress this session"*"idle budget charged (3/${MAX_PR_IDLE_INVOCATIONS})"* ]]
+    [ -f "${TEST_TMP}/claude_log" ]
+    load_pr_invocation_counts 5
+    [ "${PR_INVOCATION_IDLE}" -eq 3 ]
+    [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
+}
+
+@test "main still re-runs an unchanged DIRTY PR, even a handed-off one, and charges a session that resolves nothing (#1654)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    # Auto-merge on and review required, as a handed-off PR: DIRTY is never settled, because its
+    # conflicts need the rebase or an agent.
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","autoMergeRequest":{"enabledAt":"now"}}\n'; }
+    fingerprint_pr_json() { printf 'fp-same\n'; }
+    load_pr_fingerprint() { printf 'fp-same\n'; }
+    try_nonagentic_rebase() { printf 'rebase-attempted\n' >> "${TEST_TMP}/rebase_log"; return 1; }
+    save_pr_invocation_counts 5 2 2
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"settled"* ]]
+    [[ "${output}" == *"PR #5 in org/repo unchanged but DIRTY — re-running (idle budget 2/${MAX_PR_IDLE_INVOCATIONS})"* ]]
+    [[ "${output}" == *"Non-agentic rebase of PR #5 in org/repo had conflicts — handing off to agent"* ]]
+    [ -f "${TEST_TMP}/rebase_log" ]
+    [ -f "${TEST_TMP}/claude_log" ]
+    load_pr_invocation_counts 5
+    [ "${PR_INVOCATION_IDLE}" -eq 3 ]
+    [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
+}
+
+@test "main blocks an unchanged DIRTY PR with the merge-conflict reason once its idle budget is exhausted, without invoking the agent (#1654)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY"}\n'; }
+    fingerprint_pr_json() { printf 'fp-same\n'; }
+    load_pr_fingerprint() { printf 'fp-same\n'; }
+    try_nonagentic_rebase() { printf 'rebase-attempted\n' >> "${TEST_TMP}/rebase_log"; return 1; }
+    save_pr_invocation_counts 5 4 "${MAX_PR_IDLE_INVOCATIONS}"
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #5 in org/repo: idle budget exhausted while unchanged and DIRTY — blocking"* ]]
+    [[ "${output}" != *"re-running"* ]]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [ ! -f "${TEST_TMP}/rebase_log" ]
+    grep -q 'pr comment 5 --repo org/repo --body This PR has merge conflicts that the automation could not resolve' "${GH_CALL_LOG}"
+    grep -q 'Blocked' "${GH_CALL_LOG}"
+}
+
+@test "main resets the idle budget when the session on an unchanged BEHIND PR pushes a rebase (#1654)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    local _pr_json_call_file="${TEST_TMP}/_pr_json_calls"
+    printf '0' > "${_pr_json_call_file}"
+    fetch_pr_json() {
+        local _count _head="abc"
+        _count=$(cat "${_pr_json_call_file}")
+        _count=$((_count + 1))
+        printf '%d' "${_count}" > "${_pr_json_call_file}"
+        # The post-session re-read sees the agent's rebased head.
+        [ "${_count}" -ge 2 ] && _head="def"
+        printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"%s","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"BEHIND"}\n' "${_head}"
+    }
+    fingerprint_pr_json() { printf 'fp-same\n'; }
+    load_pr_fingerprint() { printf 'fp-same\n'; }
+    save_pr_invocation_counts 5 3 3
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"PR #5 in org/repo unchanged but BEHIND — re-running (idle budget 3/${MAX_PR_IDLE_INVOCATIONS})"* ]]
+    [[ "${output}" == *"PR #5 in org/repo: not charging this session against the idle budget (a commit was pushed)"* ]]
+    load_pr_invocation_counts 5
+    [ "${PR_INVOCATION_IDLE}" -eq 0 ]
+    [ "${PR_INVOCATION_TOTAL}" -eq 4 ]
+}
+
+@test "main resets the idle budget when the non-agentic rebase of an unchanged BEHIND PR succeeds (#1654, #1664)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"BEHIND"}\n'; }
+    fingerprint_pr_json() { printf 'fp-same\n'; }
+    load_pr_fingerprint() { printf 'fp-same\n'; }
+    try_nonagentic_rebase() { return 0; }
+    save_pr_invocation_counts 5 3 3
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"rebased non-agentically — idle budget reset"* ]]
+    load_pr_invocation_counts 5
+    [ "${PR_INVOCATION_IDLE}" -eq 0 ]
+    [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
+}
+
 @test "main rebases an auto-merge-armed PR whose merge state has stayed UNKNOWN and is behind its base instead of calling it settled (#1701)" {
     setup_main_mocks
     fetch_all_priorities() {

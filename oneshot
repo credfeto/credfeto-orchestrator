@@ -349,7 +349,7 @@ main() {
     local has_plan_comment
     local ai_instructions container_ai_instructions prompt claude_md_content post_fp
     local post_pr_fp_ok post_issue_fp_ok post_issue_fp
-    local pr_has_unaddressed_comment review_pipeline_finished
+    local pr_has_unaddressed_comment review_pipeline_finished settled_note
     local pr_required_checks pr_base_requires_checks pr_required_checks_lookup_failed pr_next_phase pr_unaddressed_comments_text
     local ensure_repo_current_status trusted_logins
     local standoff_pr standoff_rc human_driven_rc closed_takeover_marker closed_pr_tagged_marker
@@ -643,7 +643,10 @@ main() {
                 fi
                 clear_pr_ci_pending_state "${open_pr}"
 
-                if [ "${pr_is_draft}" != "true" ] && [ "${pr_merge_state}" != "BEHIND" ] && [ "${pr_merge_state}" != "DIRTY" ]; then
+                # A BEHIND PR is settled only when it is handed off and waits on nothing but a human review
+                # (#1654): auto-merge or a human updates it, and once it is approved the rebase below runs.
+                # A DIRTY PR never is: its conflicts need the rebase, or an agent.
+                if [ "${pr_is_draft}" != "true" ] && pr_merge_state_allows_settled "${pr_json}" "${pr_merge_state}"; then
                     # Falls back to the Workflow Status board's "Human Review" substatus when
                     # auto-merge itself couldn't be armed (unsupported on this repo) - see
                     # pr_review_pipeline_finished_without_auto_merge's own header comment
@@ -677,13 +680,15 @@ main() {
                             notify_discord_pr_needs_approval "${open_pr}" "${pr_json}"
                         fi
                         if [ "${pr_has_unaddressed_comment}" != "true" ]; then
-                            info "PR #${open_pr} in ${item_repo}: settled (ready to merge, nothing failed/pending) — no agent needed"
+                            settled_note=""
+                            [ "${pr_merge_state}" = "BEHIND" ] && settled_note="; BEHIND, left for auto-merge or a human to update"
+                            info "PR #${open_pr} in ${item_repo}: settled (ready to merge, nothing failed/pending${settled_note}) — no agent needed"
                             # Same "waiting" notification as the direct-PR settled path above
                             # (#1375 review) — a pivoted PR going settled must be just as visible
                             # as one selected directly from the priorities feed.
                             notify_discord_pr_waiting "${open_pr}" "${pr_json}" "${item_priority}" "Waiting on human review"
                             count_unchanged=$((count_unchanged + 1))
-                            item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "settled (ready to merge, nothing failed/pending) - no agent needed")")
+                            item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "settled (ready to merge, nothing failed/pending${settled_note}) - no agent needed")")
                             continue
                         fi
                     fi
@@ -720,8 +725,20 @@ main() {
                         # the direct-PR path: plan_unchanged_pr_reinvocation does not look at
                         # mergeStateStatus, so the board's phase would otherwise be handed to the
                         # agent instead of the rebase the Work block runs first.
+                        # It is charged against the idle budget like any other unchanged re-run
+                        # (#1654): a pushed rebase, a board move or a new trusted comment still
+                        # clears it after the session, and an exhausted budget blocks the PR.
                         if [ "${pr_merge_state}" = "BEHIND" ] || [ "${pr_merge_state}" = "DIRTY" ]; then
-                            info "PR #${open_pr} in ${item_repo} unchanged but ${pr_merge_state} - re-running"
+                            if pr_within_idle_budget "${open_pr}"; then
+                                info "PR #${open_pr} in ${item_repo} unchanged but ${pr_merge_state} - re-running (idle budget ${PR_INVOCATION_IDLE}/${MAX_PR_IDLE_INVOCATIONS})"
+                                pr_idle_advance=1
+                            else
+                                info "PR #${open_pr} in ${item_repo}: idle budget exhausted while unchanged and ${pr_merge_state} — blocking"
+                                block_pr_for_idle_exhausted_merge_state "${open_pr}" "${item_repo}" "${pr_merge_state}"
+                                item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "idle budget exhausted while unchanged and ${pr_merge_state} - blocking")")
+                                count_unchanged=$((count_unchanged + 1))
+                                continue
+                            fi
                         elif pr_should_advance_unchanged "${open_pr}" "${pr_json}" "${pr_has_unaddressed_comment}"; then
                             plan_unchanged_pr_reinvocation "${open_pr}" "${item_repo}"
                             info "PR #${open_pr} in ${item_repo} unchanged — re-invoking to advance the next workflow phase"
@@ -1154,7 +1171,10 @@ main() {
             fi
             clear_pr_ci_pending_state "${item_id}"
 
-            if [ "${pr_is_draft}" != "true" ] && [ "${pr_merge_state}" != "BEHIND" ] && [ "${pr_merge_state}" != "DIRTY" ]; then
+            # A BEHIND PR is settled only when it is handed off and waits on nothing but a human review
+            # (#1654): auto-merge or a human updates it, and once it is approved the rebase below runs.
+            # A DIRTY PR never is: its conflicts need the rebase, or an agent.
+            if [ "${pr_is_draft}" != "true" ] && pr_merge_state_allows_settled "${pr_json}" "${pr_merge_state}"; then
                 # Falls back to the Workflow Status board's "Human Review" substatus when
                 # auto-merge itself couldn't be armed (unsupported on this repo) - see
                 # pr_review_pipeline_finished_without_auto_merge's own header comment
@@ -1188,7 +1208,9 @@ main() {
                         notify_discord_pr_needs_approval "${item_id}" "${pr_json}"
                     fi
                     if [ "${pr_has_unaddressed_comment}" != "true" ]; then
-                        info "PR #${item_id} in ${item_repo}: settled (ready to merge, nothing failed/pending) — no agent needed"
+                        settled_note=""
+                        [ "${pr_merge_state}" = "BEHIND" ] && settled_note="; BEHIND, left for auto-merge or a human to update"
+                        info "PR #${item_id} in ${item_repo}: settled (ready to merge, nothing failed/pending${settled_note}) — no agent needed"
                         # Distinct from notify_discord_pr_needs_approval above (#1375): that alert
                         # is a dedicated, hourly-deduped nudge specifically for the review-required
                         # case; this is the general per-item status update the rest of this file
@@ -1197,15 +1219,29 @@ main() {
                         # substitute for the dedicated alert, both can and do fire together.
                         notify_discord_pr_waiting "${item_id}" "${pr_json}" "${item_priority}" "Waiting on human review"
                         count_unchanged=$((count_unchanged + 1))
-                        item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "settled (ready to merge, nothing failed/pending) - no agent needed")")
+                        item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "settled (ready to merge, nothing failed/pending${settled_note}) - no agent needed")")
                         continue
                     fi
                 fi
             fi
 
             if [ -n "${saved_fp}" ] && [ "${pr_fp}" = "${saved_fp}" ]; then
+                # An unchanged BEHIND/DIRTY PR is re-run so the Work block's rebase gets its turn, and
+                # is charged against the idle budget like any other unchanged re-run (#1654): a pushed
+                # rebase, a board move or a new trusted comment still clears it after the session
+                # (pr_session_progress_reason), a successful non-agentic rebase resets it (#1664), and
+                # an exhausted budget blocks the PR instead of re-running it on every tick.
                 if [ "${pr_merge_state}" = "BEHIND" ] || [ "${pr_merge_state}" = "DIRTY" ]; then
-                    info "PR #${item_id} in ${item_repo} unchanged but ${pr_merge_state} — re-running"
+                    if pr_within_idle_budget "${item_id}"; then
+                        info "PR #${item_id} in ${item_repo} unchanged but ${pr_merge_state} — re-running (idle budget ${PR_INVOCATION_IDLE}/${MAX_PR_IDLE_INVOCATIONS})"
+                        pr_idle_advance=1
+                    else
+                        info "PR #${item_id} in ${item_repo}: idle budget exhausted while unchanged and ${pr_merge_state} — blocking"
+                        block_pr_for_idle_exhausted_merge_state "${item_id}" "${item_repo}" "${pr_merge_state}"
+                        item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "idle budget exhausted while unchanged and ${pr_merge_state} - blocking")")
+                        count_unchanged=$((count_unchanged + 1))
+                        continue
+                    fi
                 # pr_has_unaddressed_comment is passed through to pr_should_advance_unchanged
                 # rather than bypassing this whole block from outside: it still overrides that
                 # function's terminal short-circuit (an unaddressed comment deserves a real look

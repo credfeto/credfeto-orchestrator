@@ -478,6 +478,45 @@ load oneshot_helper
     [ ! -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
 }
 
+@test "block_pr_for_idle_exhausted_merge_state posts the merge-conflict reason for a DIRTY PR once the label is verified present (#1654)" {
+    save_last_diagnostic "PullRequest" "5" "- Bash: git rebase origin/main"
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { printf 'notified %s #%s reason=%s\n' "$1" "$2" "$3" >> "${TEST_TMP}/discord_calls"; }
+
+    run block_pr_for_idle_exhausted_merge_state 5 "org/repo" "DIRTY"
+    [ "${status}" -eq 0 ]
+    grep -q 'pr comment 5 --repo org/repo --body This PR has merge conflicts that the automation could not resolve' "${call_log}"
+    grep -q "Last session's diagnostic:" "${call_log}"
+    grep -q 'notified PullRequest #5 reason=This PR has merge conflicts that the automation could not resolve' "${TEST_TMP}/discord_calls"
+}
+
+@test "block_pr_for_idle_exhausted_merge_state posts the behind-its-base reason for a BEHIND PR (#1654)" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+
+    run block_pr_for_idle_exhausted_merge_state 5 "org/repo" "BEHIND"
+    [ "${status}" -eq 0 ]
+    grep -q "pr comment 5 --repo org/repo --body This PR's branch is behind its base and the automation could not bring it up to date" "${call_log}"
+    run grep -q 'merge conflicts' "${call_log}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "block_pr_for_idle_exhausted_merge_state does not post a comment when the label cannot be verified (#1654)" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+
+    run block_pr_for_idle_exhausted_merge_state 5 "org/repo" "DIRTY"
+    [ "${status}" -ne 0 ]
+    run grep -q 'pr comment 5' "${call_log}"
+    [ "${status}" -ne 0 ]
+}
+
 @test "block_pr_for_idle_exhausted_review does not post a comment when the label cannot be verified (#1140 review)" {
     local call_log="${TEST_TMP}/gh_calls"
     # shellcheck disable=SC2016
