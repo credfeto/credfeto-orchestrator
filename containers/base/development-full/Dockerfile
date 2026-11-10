@@ -68,7 +68,6 @@ RUN ARCH=$(dpkg --print-architecture) \
     && mkdir -p /opt/codegraph \
     && tar -xzf /tmp/codegraph.tar.gz -C /opt/codegraph --strip-components=1 --no-same-owner \
     && rm /tmp/codegraph.tar.gz \
-    && chown -R root:root /opt/codegraph \
     && chmod -R go-w /opt/codegraph \
     && ln -s /opt/codegraph/bin/codegraph /usr/local/bin/codegraph \
     && codegraph --version
