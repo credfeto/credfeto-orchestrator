@@ -120,17 +120,39 @@ make_git_repo() {
 @test "a ~/dotnet-tools.json that is not valid JSON, or not a manifest, fails instead of falling back" {
     mkdir -p "${USER_HOME}"
     make_global_tool
-    printf '{ not json' > "${USER_HOME}/dotnet-tools.json"
-    run_wrapper "${WORK}"
-    [ "${status}" -ne 0 ]
-    [ -z "${output}" ]
-    [[ "${stderr}" == *"build-dotnet-mcp: cannot read ${USER_HOME}/dotnet-tools.json as a dotnet tool manifest" ]]
+    # Each is one file's whole content: invalid JSON, JSON that is not one object whose tools is an
+    # object, several documents, and an empty file.
+    local content
+    for content in '{ not json' '[1, 2]' '{}' 'null' '{"tools": 5}' '{"tools": "x"}' \
+        '{"tools": {}} {"tools": {}}' '{"tools": {}}
+{"tools": {}}' ''; do
+        printf '%s' "${content}" > "${USER_HOME}/dotnet-tools.json"
+        run_wrapper "${WORK}"
+        [ "${status}" -ne 0 ]
+        [ -z "${output}" ]
+        [[ "${stderr}" == *"build-dotnet-mcp: cannot read ${USER_HOME}/dotnet-tools.json as a dotnet tool manifest" ]]
+    done
+}
 
-    printf '[1, 2]' > "${USER_HOME}/dotnet-tools.json"
+@test "a tool whose commands is not an array never matches, and does not stop the others being read" {
+    mkdir -p "${USER_HOME}"
+    make_global_tool
+    local content
+    for content in '{"tools": {"a": {"commands": "credfeto-build-dotnet"}}}' \
+        '{"tools": {"a": 5, "b": {}, "c": {"commands": ["some-other-tool"]}}}'; do
+        printf '%s' "${content}" > "${USER_HOME}/dotnet-tools.json"
+        run_wrapper "${WORK}"
+        [ "${status}" -eq 0 ]
+        [ "${lines[0]}" = "global" ]
+        [ -z "${stderr}" ]
+    done
+
+    printf '%s' '{"tools": {"a": {"commands": "x"}, "b": 5, "c": {"commands": [1, "credfeto-build-dotnet"]}}}' \
+        > "${USER_HOME}/dotnet-tools.json"
     run_wrapper "${WORK}"
-    [ "${status}" -ne 0 ]
-    [ -z "${output}" ]
-    [[ "${stderr}" == *"build-dotnet-mcp: cannot read ${USER_HOME}/dotnet-tools.json as a dotnet tool manifest" ]]
+    [ "${status}" -eq 0 ]
+    [ "${lines[0]}" = "dotnet" ]
+    [ -z "${stderr}" ]
 }
 
 @test "with jq missing from PATH a ~/dotnet-tools.json fails instead of falling back" {
