@@ -135,6 +135,18 @@ or `NotebookEdit` call that names a file matching the same patterns, including t
 or a symlink. A tool inside the container that needs one of these files therefore sees it as
 empty.
 
+Just before it starts `claude`, the entrypoint builds or refreshes the CodeGraph index that the
+managed `codegraph` MCP server reads. It runs in the repository checkout with stdin closed. When
+`.codegraph/codegraph.db` is missing it runs `codegraph init --yes -v`, which creates
+`.codegraph/` and builds the full index. Otherwise it runs `codegraph sync -q` to catch up with
+changes since the last run, because the index persists in the host's checkout between containers.
+This step is non-fatal: if `codegraph` fails, the entrypoint prints a warning and still starts
+`claude`, because a missing or stale index only makes code lookups slower. It is skipped when the
+checkout has no `.git` directory, and in pre-check mode (below). Running it before `claude` keeps
+indexing from competing with the agent's own builds and tests for the container's memory.
+`codegraph init` writes `.codegraph/.gitignore`, which ignores everything else in that directory.
+That file is itself left untracked, and the image sets no global git excludes file to hide it.
+
 Only once every one of these passes does the entrypoint exec `claude` itself, handing it the
 prompt built by `oneshot` (see [oneshot.md](oneshot.md) and
 [workflow-board.md](workflow-board.md) for what that prompt actually contains).
