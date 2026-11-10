@@ -5,6 +5,7 @@
       "mcp__cfwf__*",
       "mcp__build-dotnet__*",
       "mcp__kb__*",
+      "mcp__codegraph__*",
       "mcp__rider__*",
       "mcp__webstorm__*",
       "Bash(actionlint *)",
