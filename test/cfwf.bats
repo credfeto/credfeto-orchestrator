@@ -6458,10 +6458,10 @@ run_comment_add() {
     [ "$(gh_call_count "comment")" -eq 0 ]
 }
 
-@test "comment add refuses a plan-approval keyword outside a quote with exit 8, in any case, naming only the line" {
+@test "comment add refuses a line that is only a plan-approval keyword outside a quote with exit 8, in any case, naming only the line" {
     prepare_comment
     local line
-    for line in "Approved" "lgtm" "LGTM, ship it" "This is APPROVED." "  approved" "the plan is (approved)" "x - Lgtm" "- > approved" "_Approved_" "__LGTM__" "so _lgtm_." "    > approved" $'\t> lgtm'; do
+    for line in "LGTM" "approved" "  Approved  " "lgtm" "APPROVED" "Lgtm" $'\tlgtm\t'; do
         write_leak_body "${line}"
         run_comment_add --pr 1623 --body-file "${TEST_TMP}/leak.md"
         assert_refused "${status}" "${output}" "${stderr}" "approval keyword" "${line}"
@@ -6469,10 +6469,12 @@ run_comment_add() {
     [ ! -f "${GH_LOG}" ]
 }
 
-@test "comment add posts a plan-approval keyword inside a Markdown quote, and a longer word holding the letters" {
+@test "comment add posts a plan-approval keyword inside a Markdown quote, or with anything else on its line" {
     prepare_comment
     local line
-    for line in "> approved" ">LGTM" "   > The human said: Approved" "> > lgtm" "disapproved" "unapproved_change" "lgtm2" "approvedness" "plan_approved" "approved_change" "x_lgtm_y"; do
+    for line in "> approved" ">LGTM" "   > The human said: Approved" "> > lgtm" "disapproved" "unapproved_change" "lgtm2" "approvedness" "plan_approved" "approved_change" "x_lgtm_y" \
+        "LGTM!" "not approved" "LGTM but fix X" "LG"$'\xe2\x80\x8b'"TM" "LGTM, ship it" "This is APPROVED." "the plan is (approved)" "x - Lgtm" "- > approved" \
+        "_Approved_" "__LGTM__" "**lgtm**" "so _lgtm_." "    > approved" $'\t> lgtm' "Is this approved?" "Approval needs a human to write approved or lgtm on a line of its own."; do
         write_leak_body "${line}"
         rm -f "${GH_LOG}"
         run_comment_add --pr 1623 --body-file "${TEST_TMP}/leak.md"
@@ -6665,7 +6667,7 @@ run_item_comment() {
 @test "pr comment and issue comment refuse a plan-approval keyword outside a quote with exit 8, and post one inside a quote" {
     prepare_comment
     local line kind
-    for line in "Approved" "lgtm" "This is APPROVED." "    > approved"; do
+    for line in "Approved" "lgtm" "  APPROVED  " $'\tLgtm'; do
         write_leak_body "${line}"
         for kind in pr issue; do
             run_item_comment "${kind}" "--${kind}" 1623 --body-file "${TEST_TMP}/leak.md"
@@ -6674,7 +6676,7 @@ run_item_comment() {
     done
     [ ! -f "${GH_LOG}" ]
 
-    for line in "> approved" "   > The human said: LGTM" "disapproved"; do
+    for line in "> approved" "   > The human said: LGTM" "disapproved" "This is APPROVED." "    > approved"; do
         write_leak_body "${line}"
         prepare_comment
         run_item_comment pr --pr 1623 --body-file "${TEST_TMP}/leak.md"
@@ -7018,7 +7020,7 @@ edit_patches() {
 
     local keyword
     keyword="$(printf '%s%s' lg tm)"
-    write_leak_body "${keyword^^}, ship it"
+    write_leak_body "${keyword^^}"
     run_comment_edit --comment-id 123 --issue-comment --body-file "${TEST_TMP}/leak.md"
     assert_refused "${status}" "${output}" "${stderr}" "approval keyword" "${keyword^^}"
     [ ! -f "${GH_LOG}" ]
@@ -7833,46 +7835,55 @@ assert_sign_off() {
     [ "${output}" = "$(plan_status_head no no)" ]
 }
 
-@test "issue plan-status says yes for a sign-off keyword as a whole word, in any case, with punctuation or Markdown emphasis around it" {
+@test "issue plan-status says yes for a line that is only a sign-off keyword, in any case, with whitespace around it" {
     local keyword
     while IFS= read -r keyword; do
-        assert_sign_off yes "${keyword}" "${keyword^^}" "${keyword^}" "${keyword}." "Thanks, ${keyword}!" "(${keyword})" \
-            "_${keyword}_" "__${keyword^^}__" "**${keyword}**" "\`${keyword}\`" \
-            "A first line."$'\n\n'"${keyword}" "A first line."$'\r\n'"${keyword}"$'\r\n' "${keyword}"$'\n'"A last line."
+        assert_sign_off yes "${keyword}" "${keyword^^}" "${keyword^}" "  ${keyword^}  " $'\t'"${keyword}"$'\t' \
+            "A first line."$'\n\n'"${keyword}" "A first line."$'\r\n'"${keyword}"$'\r\n' "${keyword}"$'\n'"A last line." \
+            "Not this one."$'\n'"  ${keyword^^}"$'\n'"Nor this one."
     done < <(sign_off_keywords)
 }
 
-@test "issue plan-status says no for a sign-off keyword inside a longer word, and for a comment with none" {
-    local keyword
+@test "issue plan-status says no for a sign-off keyword with anything else on its line, and for a comment with none" {
+    local keyword zero_width_space=$'\xe2\x80\x8b'
     while IFS= read -r keyword; do
-        assert_sign_off no "plan_${keyword}" "${keyword}_by" "un${keyword}" "${keyword}s" "${keyword}2" "x_${keyword}_y" "_${keyword}_x" \
+        assert_sign_off no "${keyword^^}!" "not ${keyword}" "${keyword^^} but fix X" "${keyword:0:2}${zero_width_space}${keyword:2}" \
+            "${zero_width_space}${keyword}" "${keyword}." "Thanks, ${keyword}!" "(${keyword})" "Is this ${keyword}?" \
+            "_${keyword}_" "__${keyword^^}__" "**${keyword}**" "\`${keyword}\`" \
+            "plan_${keyword}" "${keyword}_by" "un${keyword}" "${keyword}s" "${keyword}2" "x_${keyword}_y" "_${keyword}_x" \
             "A comment with no keyword." ""
     done < <(sign_off_keywords)
 }
 
-@test "comment add refuses, and issue plan-status says no for, a keyword right against a non-ASCII character that folds to an ASCII letter" {
-    # U+212A (the Kelvin sign) and U+017F (the long s) are two such: jq, ignoring case, counts each as
-    # a letter, so the keyword is part of a longer word, while grep in the C locale sees only bytes
-    # that are no letter. comment add is the stricter, so nothing it posts is answered yes.
-    local keyword line kelvin=$'\xe2\x84\xaa' long_s=$'\xc5\xbf'
+@test "comment add refuses exactly the lines issue plan-status reads as a sign-off, and posts a sentence that only mentions a keyword" {
+    local keyword line
     prepare_comment
     while IFS= read -r keyword; do
-        assert_sign_off no "${kelvin}${keyword}" "${keyword}${long_s}"
-        for line in "${kelvin}${keyword}" "${keyword}${long_s}"; do
+        for line in "${keyword}" "${keyword^^}" "  ${keyword^}  " $'\t'"${keyword}"; do
+            assert_sign_off yes "${line}"
             write_leak_body "${line}"
-            run_comment_add --issue 7 --body-file "${TEST_TMP}/leak.md"
+            run_comment_add --pr 1623 --body-file "${TEST_TMP}/leak.md"
             assert_refused "${status}" "${output}" "${stderr}" "approval keyword" "${line}"
+        done
+        for line in "${keyword^^}!" "not ${keyword}" "${keyword^^} but fix X" "Write ${keyword} on a line of its own to sign off." "> ${keyword}"; do
+            assert_sign_off no "${line}"
+            write_leak_body "${line}"
+            run_comment_add --pr 1623 --body-file "${TEST_TMP}/leak.md"
+            [ "${status}" -eq 0 ]
+            cmp "${TEST_TMP}/leak.md" "${GH_FIXTURES}/comment-body.txt"
         done
     done < <(sign_off_keywords)
 }
 
-@test "issue plan-status ignores a sign-off keyword on a Markdown quote line, and only there" {
+@test "issue plan-status ignores a sign-off keyword on a Markdown quote line" {
     local keyword
     while IFS= read -r keyword; do
         assert_sign_off no "> ${keyword}" ">${keyword}" " > ${keyword}" "   > ${keyword}" "> > ${keyword}" \
             "> ${keyword}"$'\n\n'"Quoting the reviewer above." "As they said:"$'\r\n'"> ${keyword}"$'\r\n'
-        # Four spaces or a tab before > make code, not a quote, and a keyword after a quote counts.
-        assert_sign_off yes "    > ${keyword}" $'\t'"> ${keyword}" "> quoted"$'\n'"${keyword}" "> ${keyword}"$'\n\n'"${keyword}" "a > ${keyword}"
+        # A keyword alone on a line after a quote counts. Four spaces or a tab before > make code, not
+        # a quote, but the > is still on the line, so the keyword is not alone there.
+        assert_sign_off yes "> quoted"$'\n'"${keyword}" "> ${keyword}"$'\n\n'"${keyword}"
+        assert_sign_off no "    > ${keyword}" $'\t'"> ${keyword}" "a > ${keyword}"
     done < <(sign_off_keywords)
 }
 
@@ -14416,7 +14427,7 @@ ${HAND_OFF_URL} auto-merge not armed: the base branch requires no check and no r
     assert_nothing_handed_off
     [ "$(gh_call_count "pulls/42")" -eq 0 ]
 
-    printf 'Looks good, approved.\n' > "${TEST_TMP}/hand-off.md"
+    printf '  Approved\n' > "${TEST_TMP}/hand-off.md"
     : > "${GH_LOG}"
     run_hand_off
     [ "${status}" -eq 8 ]
@@ -14503,7 +14514,7 @@ ${HAND_OFF_URL} auto-merge not armed: the base branch requires no check and no r
     assert_nothing_handed_off
     [ "$(gh_call_count "pulls/42")" -eq 0 ]
 
-    printf 'Looks good, approved.\n' > "${TEST_TMP}/description.md"
+    printf '  Approved\n' > "${TEST_TMP}/description.md"
     : > "${GH_LOG}"
     run_hand_off
     [ "${status}" -eq 8 ]
@@ -14574,7 +14585,7 @@ ${HAND_OFF_URL} auto-merge not armed: the base branch requires no check and no r
     [ "${status}" -eq 1 ]
     [[ "${stderr}" == *"description is empty"* ]]
     [ ! -s "${GH_LOG}" ]
-    for text in 'see /home/someone/secret.txt' 'Looks good, approved.'; do
+    for text in 'see /home/someone/secret.txt' '  Approved'; do
         : > "${GH_LOG}"
         run --separate-stderr "${SCRIPT}" pr hand-off --repo "${REPO}" --pr 42 --title "${HAND_OFF_TITLE}" \
             --description-file - <<< "${text}"
@@ -14884,7 +14895,7 @@ ${HAND_OFF_COMMENT_URL}" ]
     assert_nothing_taken_back
     [ "$(gh_call_count "pulls/42")" -eq 0 ]
 
-    printf 'Looks good, approved.\n' > "${TEST_TMP}/take-back.md"
+    printf '  Approved\n' > "${TEST_TMP}/take-back.md"
     : > "${GH_LOG}"
     run_take_back
     [ "${status}" -eq 8 ]
@@ -15065,7 +15076,7 @@ prepare_issue_reopen() {
     run_issue_reopen --body-file "${TEST_TMP}/leak.md"
     [ "${status}" -eq 8 ]
     [[ "${stderr}" == "cfwf: body refused: "* ]]
-    printf 'Looks good, approved.\n' > "${TEST_TMP}/approved.md"
+    printf '  Approved\n' > "${TEST_TMP}/approved.md"
     run_issue_reopen --body-file "${TEST_TMP}/approved.md"
     [ "${status}" -eq 8 ]
     [[ "${stderr}" == "cfwf: body refused: approval keyword"* ]]
@@ -16356,7 +16367,7 @@ write_closing_prs() {
     run_issue_close --reason completed --body-file "${TEST_TMP}/leak.md"
     [ "${status}" -eq 8 ]
     [[ "${stderr}" == "cfwf: body refused: "* ]]
-    printf 'Looks good, approved.\n' > "${TEST_TMP}/approved.md"
+    printf '  Approved\n' > "${TEST_TMP}/approved.md"
     run_issue_close --reason completed --body-file "${TEST_TMP}/approved.md"
     [ "${status}" -eq 8 ]
     [[ "${stderr}" == "cfwf: body refused: approval keyword"* ]]
@@ -16509,7 +16520,7 @@ ${POST_PLAN_ISSUE_URL} no board" ]
     local keyword
     prepare_post_plan
     for keyword in $(sign_off_keywords); do
-        printf '## Implementation Plan\n\n1. Already %s.\n' "${keyword}" > "${TEST_TMP}/plan.md"
+        printf '## Implementation Plan\n\n%s\n' "${keyword}" > "${TEST_TMP}/plan.md"
         : > "${GH_LOG}"
         run_post_plan
         [ "${status}" -eq 8 ]
@@ -16782,7 +16793,7 @@ $(block_item_url "${kind}") Blocked" ]
     for kind in issue pr; do
         prepare_block "${kind}"
         for keyword in $(sign_off_keywords); do
-            printf 'Blocked on this.\n\nIt is %s.\n' "${keyword}" > "${TEST_TMP}/block.md"
+            printf 'Blocked on this.\n\n%s\n' "${keyword}" > "${TEST_TMP}/block.md"
             : > "${GH_LOG}"
             run_block "${kind}"
             [ "${status}" -eq 8 ]
@@ -17211,7 +17222,7 @@ $(unblock_item_url "${kind}") unblocked" ]
     for kind in issue pr; do
         prepare_unblock "${kind}"
         for keyword in $(sign_off_keywords); do
-            printf 'Unblocking.\n\nIt is %s.\n' "${keyword}" > "${TEST_TMP}/unblock.md"
+            printf 'Unblocking.\n\n%s\n' "${keyword}" > "${TEST_TMP}/unblock.md"
             : > "${GH_LOG}"
             run_unblock "${kind}"
             [ "${status}" -eq 8 ]
@@ -19114,7 +19125,7 @@ review_comment_post() {
     prepare_review_comment
     local keyword
     while IFS= read -r keyword; do
-        printf 'Looks right to me: %s.\n' "${keyword}" > "${TEST_TMP}/review.md"
+        printf '%s\n' "${keyword}" > "${TEST_TMP}/review.md"
         run_review_comment --line 12 --body-file "${TEST_TMP}/review.md"
         [ "${status}" -eq 8 ]
         [ -z "${output}" ]
