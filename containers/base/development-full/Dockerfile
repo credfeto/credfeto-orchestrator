@@ -229,7 +229,9 @@ RUN mkdir -p /home/developer/.claude/agents \
 # reads KB_MCP_TOKEN, a podman secret oneshot passes in when orchestrator/.env
 # sets it), and build-dotnet, the .NET
 # build/test/coverage server installed by development-credfeto-tools, started
-# by its absolute path with one fixed, non-secret env value: the repo mount.
+# through the root-owned mcp/build-dotnet-mcp wrapper with no env: the wrapper
+# picks the user's tool at start time, and the BUILD_MCP_REPO_ROOT image ENV
+# below keeps its root at the repo mount wherever Claude Code is started.
 # Any other server (such as the JetBrains IDEs' rider and webstorm) is allowed
 # and not checked.
 COPY --chown=root:root --chmod=0444 claude-user-settings.json /home/developer/.claude/settings.json
@@ -238,6 +240,8 @@ COPY --chown=root:root --chmod=0444 claude-managed-settings.json /etc/claude-cod
 COPY --chown=root:root --chmod=0444 claude-managed-mcp.json /etc/claude-code/managed-mcp.json
 COPY --chown=root:root --chmod=0755 claude-mcp/cfwf-mcp-headers /etc/claude-code/mcp/cfwf-mcp-headers
 COPY --chown=root:root --chmod=0755 claude-mcp/kb-mcp-headers /etc/claude-code/mcp/kb-mcp-headers
+COPY --chown=root:root --chmod=0755 claude-mcp/build-dotnet-mcp /etc/claude-code/mcp/build-dotnet-mcp
+ENV BUILD_MCP_REPO_ROOT=/workspace/repo
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-policy /etc/claude-code/hooks/enforce-git-policy
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-identity /etc/claude-code/hooks/enforce-git-identity
 COPY --chown=root:root --chmod=0755 claude-hooks/reject-obfuscated-commands /etc/claude-code/hooks/reject-obfuscated-commands
@@ -450,8 +454,10 @@ RUN set -e; \
         || { echo "FATAL sanity: managed-mcp.json must hold the required cfwf server, and as the file is world-readable it must be exactly the http server at its https URL with its headers from /etc/claude-code/mcp/cfwf-mcp-headers, carrying no literal headers or env" >&2; exit 1; }; \
     jq -e '.mcpServers.kb == {"type": "http", "url": "https://memory.markridgwell.com/dev/mcp", "headersHelper": "/etc/claude-code/mcp/kb-mcp-headers"}' /etc/claude-code/managed-mcp.json >/dev/null \
         || { echo "FATAL sanity: managed-mcp.json must hold the required kb server, and as the file is world-readable it must be exactly the http server at its https URL with its headers from /etc/claude-code/mcp/kb-mcp-headers, carrying no literal headers or env" >&2; exit 1; }; \
-    jq -e '.mcpServers["build-dotnet"] == {"type": "stdio", "command": "/home/developer/.dotnet/tools/credfeto-build-dotnet", "env": {"BUILD_MCP_REPO_ROOT": "/workspace/repo"}}' /etc/claude-code/managed-mcp.json >/dev/null \
-        || { echo "FATAL sanity: managed-mcp.json must hold the required build-dotnet server, and as the file is world-readable it must be exactly the stdio credfeto-build-dotnet tool by its absolute path, with BUILD_MCP_REPO_ROOT=/workspace/repo as its only env value" >&2; exit 1; }; \
+    jq -e '.mcpServers["build-dotnet"] == {"type": "stdio", "command": "/etc/claude-code/mcp/build-dotnet-mcp"}' /etc/claude-code/managed-mcp.json >/dev/null \
+        || { echo "FATAL sanity: managed-mcp.json must hold the required build-dotnet server, and as the file is world-readable it must be exactly the stdio server started by /etc/claude-code/mcp/build-dotnet-mcp, with no env" >&2; exit 1; }; \
+    [ "${BUILD_MCP_REPO_ROOT}" = "/workspace/repo" ] \
+        || { echo "FATAL sanity: BUILD_MCP_REPO_ROOT must be /workspace/repo, the repo mount the build-dotnet MCP server works on" >&2; exit 1; }; \
     [ -x /home/developer/.dotnet/tools/credfeto-build-dotnet ] \
         || { echo "FATAL sanity: /home/developer/.dotnet/tools/credfeto-build-dotnet, the build-dotnet MCP server, is missing or not executable" >&2; exit 1; }; \
     ! grep -qi 'authorization' /etc/claude-code/managed-mcp.json \
@@ -460,6 +466,8 @@ RUN set -e; \
         || { echo "FATAL sanity: cfwf-mcp-headers missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
     [ "$(stat -c '%U:%G %a' /etc/claude-code/mcp/kb-mcp-headers)" = "root:root 755" ] \
         || { echo "FATAL sanity: kb-mcp-headers missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
+    [ "$(stat -c '%U:%G %a' /etc/claude-code/mcp/build-dotnet-mcp)" = "root:root 755" ] \
+        || { echo "FATAL sanity: build-dotnet-mcp missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
     jq -e '.permissions.allow | index("mcp__cfwf__*")' /etc/claude-code/managed-settings.json >/dev/null \
         || { echo "FATAL sanity: managed-settings.json does not allow the cfwf MCP tools (mcp__cfwf__*)" >&2; exit 1; }; \
     jq -e '.permissions.allow | index("mcp__build-dotnet__*")' /etc/claude-code/managed-settings.json >/dev/null \
