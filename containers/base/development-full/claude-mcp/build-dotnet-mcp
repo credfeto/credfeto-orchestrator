@@ -57,6 +57,12 @@ export BUILD_MCP_REPO_ROOT
 DOTNET_NOLOGO=1
 export DOTNET_NOLOGO
 
+# The server's child dotnet build, restore and test runs inherit this environment, and under a
+# preview SDK MSBuild would otherwise print NETSDK1057 ("You are using a preview version of .NET")
+# to stdout. Forced for the same reason as DOTNET_NOLOGO.
+SuppressNETCoreSdkPreviewMessage=true
+export SuppressNETCoreSdkPreviewMessage
+
 manifest_lists_tool() {
     [ -f "${local_manifest}" ] || return 1
     jq -e --arg command "${tool_command}" 'any(.tools[]?.commands?[]?; $command == .)' \
