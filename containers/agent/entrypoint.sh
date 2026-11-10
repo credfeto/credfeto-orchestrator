@@ -356,23 +356,27 @@ seed_orchestrator_cache() {
     fi
 }
 
-# Builds or refreshes the CodeGraph index that the managed codegraph MCP server reads. It runs
-# here, before claude starts, so indexing never overlaps the agent's own builds and tests in the
-# container's memory limit. `init` is keyed on the database rather than the directory because
-# `sync` fails on a .codegraph/ that has no codegraph.db, while `init` rebuilds it. `--yes` is
-# required: without it `init` can wait on a stdin select prompt even with no TTY. Non-fatal on
-# failure: a missing or stale index only makes code lookups slower.
+# Builds the CodeGraph index that the managed codegraph MCP server reads, only when the checkout
+# has none. An existing index is left alone: the MCP server reconciles it with the working tree
+# when Claude connects, before it answers the first query, and its watcher keeps it current while
+# the session runs. It runs here, before claude starts, so the full build never overlaps the
+# agent's own builds and tests in the container's memory limit. The check is on the database
+# rather than the directory because a .codegraph/ without codegraph.db is not a usable index, and
+# `init` rebuilds it. `--yes` is required: without it `init` can wait on a stdin select prompt
+# even with no TTY. Non-fatal on failure: a missing index only makes code lookups slower.
 # WORKSPACE_REPO_DIR overrides the repo path (used by tests).
-refresh_codegraph_index() {
+build_missing_codegraph_index() {
     local repo_dir="${WORKSPACE_REPO_DIR:-/workspace/repo}"
     [ -d "${repo_dir}/.git" ] || return 0
 
-    local -a codegraph_args=(sync -q)
-    [ -f "${repo_dir}/.codegraph/codegraph.db" ] || codegraph_args=(init --yes -v)
+    if [ -f "${repo_dir}/.codegraph/codegraph.db" ]; then
+        info "CodeGraph index already exists in ${repo_dir}, the MCP server catches it up on connect"
+        return 0
+    fi
 
-    info "Running codegraph ${codegraph_args[0]} in ${repo_dir}"
-    (cd "${repo_dir}" && codegraph "${codegraph_args[@]}" < /dev/null) \
-        || warn "codegraph ${codegraph_args[0]} failed in ${repo_dir}, continuing without an up-to-date code index"
+    info "Running codegraph init in ${repo_dir}"
+    (cd "${repo_dir}" && codegraph init --yes -v < /dev/null) \
+        || warn "codegraph init failed in ${repo_dir}, continuing without a code index"
 }
 
 # Adds .codegraph/ to the checkout's .git/info/exclude, so a repository whose .gitignore does not
@@ -478,6 +482,6 @@ if [ "${ORCHESTRATOR_PRECHECK:-}" = "1" ]; then
     exec pre-commit-check
 fi
 
-refresh_codegraph_index
+build_missing_codegraph_index
 
 exec claude "$@"
