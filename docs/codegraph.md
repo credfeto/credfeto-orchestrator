@@ -68,13 +68,16 @@ CodeGraph needs. Nothing has to be done by hand.
   write the repository's `.codegraph/` index.
 - **The index.** The entrypoint builds or refreshes the index just before it starts `claude`. With
   no `.codegraph/codegraph.db` it runs `codegraph init --yes -v`; otherwise it runs
-  `codegraph sync -q`. The index lives in the host's checkout, so it persists between containers.
-  See [agent-container.md](agent-container.md#what-the-entrypoint-checks-before-the-agent-ever-starts)
-  for the details. While the session runs, the MCP server watches the checkout and updates the
-  index as files change.
-- **Time and memory.** The first `init` in a repository builds the whole index. On a large
-  repository that can take minutes, which delays the start of that one session. Later sessions run
-  an incremental `sync`, which only reads what changed. Indexing runs before `claude` starts, so it
+  `codegraph sync -q`. The index does not live in the host's checkout, where the `git clean -fdX`
+  after every session would delete it. `oneshot` mounts a host directory per work item at
+  `.codegraph`, so the index persists between that item's containers, an Issue and the PR it
+  pivots to share one, a different item starts with a fresh `init`, and a directory idle for
+  14 days is purged, the same lifecycle as the session transcripts. See
+  [agent-container.md](agent-container.md#the-codegraph-index) for the details. While the
+  session runs, the MCP server watches the checkout and updates the index as files change.
+- **Time and memory.** The first `init` for a work item builds the whole index. On a large
+  repository that can take minutes, which delays the start of that one session. Later sessions
+  for the same item run an incremental `sync`, which only reads what changed. Indexing runs before `claude` starts, so it
   never competes with the agent's own builds and tests for the container's memory limit
   (`--memory=12g` in `lib/podman`). CodeGraph sizes its workers and memory from the container's
   cgroup limits itself, so no tuning is set.

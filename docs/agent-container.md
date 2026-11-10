@@ -29,10 +29,11 @@ operation safe. The container is that something:
   or become root, even if it tried.
 - It only gets the specific host directories it needs, explicitly bind-mounted in: the target
   repository checkout (read/write), a read-only clone of shared linting rules, SSH/GPG access
-  for signing commits, a small state directory for the agent's own session history, and a
+  for signing commits, a small state directory for the agent's own session history, a
   per-work-item directory for its conversation transcripts (see
-  [Session transcripts](#session-transcripts)). Nothing else on the host filesystem is visible
-  to it.
+  [Session transcripts](#session-transcripts)), and a per-work-item directory for its CodeGraph
+  index (see [The CodeGraph index](#the-codegraph-index)). Nothing else on the host filesystem is
+  visible to it.
 - The container is destroyed (`--rm`) the instant the session ends — a fresh container, with a
   fresh session, for every single invocation. Nothing an agent does inside one session can
   persist into the next except via the state directories explicitly listed above, or (the whole
@@ -140,7 +141,8 @@ Just before it starts `claude`, the entrypoint builds or refreshes the CodeGraph
 managed `codegraph` MCP server reads. It runs in the repository checkout with stdin closed. When
 `.codegraph/codegraph.db` is missing it runs `codegraph init --yes -v`, which creates
 `.codegraph/` and builds the full index. Otherwise it runs `codegraph sync -q` to catch up with
-changes since the last run, because the index persists in the host's checkout between containers.
+changes since the item's last session, because `.codegraph/` is the item's own host directory,
+which persists between that item's containers (see [The CodeGraph index](#the-codegraph-index)).
 This step is non-fatal: if `codegraph` fails, the entrypoint prints a warning and still starts
 `claude`, because a missing or stale index only makes code lookups slower. It is skipped when the
 checkout has no `.git` directory, and in pre-check mode (below). Running it before `claude` keeps
@@ -148,6 +150,8 @@ indexing from competing with the agent's own builds and tests for the container'
 `codegraph init` writes `.codegraph/.gitignore`, which ignores everything else in that directory.
 That file is itself left untracked, and the image sets no global git excludes file to hide it,
 so a repository must ignore `.codegraph/` itself (see [codegraph.md](codegraph.md#every-repository)).
+Because the mount sits over the checkout, `git` inside the container sees those files exactly as
+it would in a plain directory.
 
 Only once every one of these passes does the entrypoint exec `claude` itself, handing it the
 prompt built by `oneshot` (see [oneshot.md](oneshot.md) and
@@ -235,6 +239,42 @@ until that repository's next one.
 
 `oneshot` never resumes a session: every phase starts a fresh one, and the transcripts
 exist so a human can read afterwards what an agent did and why.
+
+## The CodeGraph index
+
+The index the entrypoint builds lives outside the repository checkout, in a host directory per
+work item, bind-mounted at `/workspace/repo/.codegraph`:
+
+```text
+${XDG_STATE_HOME:-~/.local/state}/orchestrator/<owner>/<repo>/codegraph/Issue_<n>/
+${XDG_STATE_HOME:-~/.local/state}/orchestrator/<owner>/<repo>/codegraph/PullRequest_<n>/
+```
+
+`oneshot` runs `git clean -fdX` in the checkout after every session and after every pre-check,
+which deletes every ignored file. An index kept in the checkout would be deleted with them, so
+every session would start with a full `codegraph init`. Kept in the item's own directory, it
+follows the same lifecycle as the [session transcripts](#session-transcripts):
+
+- Every session for the same item mounts the same directory, so the entrypoint runs the
+  incremental `codegraph sync`.
+- A session for a different item mounts that item's directory, which starts empty, so the
+  entrypoint runs a fresh `codegraph init`. The other item's index is not touched.
+- On the Issue-to-PR pivot, `codegraph/PullRequest_<m>` becomes a link to `Issue_<n>`, by the
+  same rules as the transcript link (`link_pivot_pr_codegraph_index` in `lib/state`), so the PR's
+  sessions keep syncing the index the Issue's sessions built.
+- Before every launch, `prune_codegraph_indexes` (`lib/podman`) applies the transcript purge to
+  this tree: an item's directory is deleted once no file in it has been modified for 14 days,
+  and a link whose target is gone is deleted.
+
+The directory is created mode `0700` before the mount, because the index holds the repository's
+code. If it cannot be created, `oneshot` warns and starts the session without the mount; the
+entrypoint then builds an index in the checkout, which the `git clean` afterwards deletes. Only
+the agent's own container gets the mount. The pre-check container does not, because the
+entrypoint never builds or reads the index in pre-check mode. Podman creates the empty
+`.codegraph` mountpoint in the checkout, and the `git clean` after the session removes it.
+CodeGraph's SQLite database and its lock files sit on a plain bind mount of a local directory,
+owned by the user the container's `developer` maps to, so they behave as they would in the
+checkout.
 
 ## Assumptions
 
