@@ -288,13 +288,14 @@ STUBEOF
 
 # --- verify_hooks_fresh -----------------------------------------------------------
 
+# The identity env vars the entrypoint requires before it does anything else.
+IDENTITY_ENV=(CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice"
+    GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234")
+
 # Runs the entrypoint with the shared identity env vars plus any extra NAME=value args.
 run_entrypoint_with_hooks_env() {
     local extra_env=("$@")
-    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
-        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
-        "${extra_env[@]}" \
-        bash "${ENTRYPOINT}"
+    run env "${IDENTITY_ENV[@]}" "${extra_env[@]}" bash "${ENTRYPOINT}"
 }
 
 @test "entrypoint skips hooks check when rules .env is absent" {
@@ -1585,8 +1586,7 @@ run_entrypoint_in_repo() {
     mkdir -p "${repo_dir}/.git"
 
     make_stub claude 'exit 0'
-    printf 'prompt text\n' | env WORKSPACE_REPO_DIR="${repo_dir}" CLAUDE_CODE_OAUTH_TOKEN=token \
-        GIT_USER_NAME="Alice" GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+    printf 'prompt text\n' | env WORKSPACE_REPO_DIR="${repo_dir}" "${IDENTITY_ENV[@]}" \
         bash "${ENTRYPOINT}" 2>/dev/null
     [ -e "${TEST_TMP}/codegraph_stdin" ]
     [ ! -s "${TEST_TMP}/codegraph_stdin" ]
