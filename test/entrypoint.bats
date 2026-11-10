@@ -290,7 +290,7 @@ STUBEOF
 
 # --- verify_hooks_fresh -----------------------------------------------------------
 
-# Shared env vars for verify_hooks_fresh tests.
+# Runs the entrypoint with the shared identity env vars plus any extra NAME=value args.
 run_entrypoint_with_hooks_env() {
     local extra_env=("$@")
     run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
@@ -1534,9 +1534,7 @@ touch "${TEST_TMP}/claude_ran"
 exit 0
 STUBEOF
     chmod +x "${STUB_BIN}/claude"
-    run env "$@" WORKSPACE_REPO_DIR="${repo_dir}" CLAUDE_CODE_OAUTH_TOKEN=token \
-        GIT_USER_NAME="Alice" GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
-        bash "${ENTRYPOINT}"
+    run_entrypoint_with_hooks_env "$@" WORKSPACE_REPO_DIR="${repo_dir}"
 }
 
 @test "entrypoint runs codegraph init in the repo when it has no .codegraph directory" {
