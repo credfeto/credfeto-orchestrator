@@ -256,7 +256,7 @@ RUN mkdir -p /home/developer/.claude/agents \
 # link step above). oneshot does not (and must not) bind-mount over these
 # paths - see containers/agent/Dockerfile.
 # managed-mcp.json pins the only MCP servers Claude Code loads and is
-# world-readable, so it holds no token. The sanity check requires the three the
+# world-readable, so it holds no token. The sanity check requires the four the
 # image depends on: cfwf and kb, whose Authorization headers come at connect
 # time from their own root-owned headersHelpers (mcp/cfwf-mcp-headers and
 # mcp/kb-mcp-headers, which ask the token broker below for the header while it
@@ -268,7 +268,10 @@ RUN mkdir -p /home/developer/.claude/agents \
 # below keeps its root at the repo mount wherever Claude Code is started.
 # BUILD_MCP_TOOL=global tells the wrapper to skip its git and dotnet tool list
 # probes and run the global tool directly, because in the image the tool, HOME
-# and the root are all fixed.
+# and the root are all fixed. codegraph, the code knowledge graph server installed
+# above, is pinned to the exact entry `codegraph install` writes for Claude Code,
+# so a host's own entry merges as the same server in install-claude-hooks rather
+# than colliding.
 # Any other server (such as the JetBrains IDEs' rider and webstorm) is allowed
 # and not checked.
 COPY --chown=root:root --chmod=0444 claude-user-settings.json /home/developer/.claude/settings.json
@@ -522,6 +525,8 @@ RUN set -e; \
         || { echo "FATAL sanity: BUILD_MCP_TOOL must be global, so the build-dotnet MCP wrapper runs the image's global tool without probing" >&2; exit 1; }; \
     [ -x /home/developer/.dotnet/tools/credfeto-build-dotnet ] \
         || { echo "FATAL sanity: /home/developer/.dotnet/tools/credfeto-build-dotnet, the build-dotnet MCP server, is missing or not executable" >&2; exit 1; }; \
+    jq -e '.mcpServers.codegraph == {"type": "stdio", "command": "codegraph", "args": ["serve", "--mcp"], "alwaysLoad": true}' /etc/claude-code/managed-mcp.json >/dev/null \
+        || { echo "FATAL sanity: managed-mcp.json must hold the required codegraph server, exactly the stdio codegraph serve --mcp entry that codegraph install writes for Claude Code, carrying no env" >&2; exit 1; }; \
     ! grep -qi 'authorization' /etc/claude-code/managed-mcp.json \
         || { echo "FATAL sanity: managed-mcp.json holds a literal Authorization header" >&2; exit 1; }; \
     [ "$(stat -c '%U:%G %a' /etc/claude-code/mcp/cfwf-mcp-headers)" = "root:root 755" ] \
@@ -536,6 +541,8 @@ RUN set -e; \
         || { echo "FATAL sanity: managed-settings.json does not allow the build-dotnet MCP tools (mcp__build-dotnet__*)" >&2; exit 1; }; \
     jq -e '.permissions.allow | index("mcp__kb__*")' /etc/claude-code/managed-settings.json >/dev/null \
         || { echo "FATAL sanity: managed-settings.json does not allow the kb MCP tools (mcp__kb__*)" >&2; exit 1; }; \
+    jq -e '.permissions.allow | index("mcp__codegraph__*")' /etc/claude-code/managed-settings.json >/dev/null \
+        || { echo "FATAL sanity: managed-settings.json does not allow the codegraph MCP tools (mcp__codegraph__*)" >&2; exit 1; }; \
     jq -e '(.permissions.deny | index("Bash(gh)") and index("Bash(gh *)")) and (.permissions.allow | index("Bash(cfwf *)")) and ([.permissions.allow[] | select(test("^Bash\\(([^ )]*/)?gh([ )*]|$)"))] | length == 0)' /etc/claude-code/managed-settings.json >/dev/null \
         || { echo "FATAL sanity: managed-settings.json must deny raw gh (Bash(gh) and Bash(gh *)), allow no gh entry, and keep Bash(cfwf *) (#1805)" >&2; exit 1; }; \
     cut -f1 /etc/claude-code/hooks/command-blocklist | grep -qxF gh \
