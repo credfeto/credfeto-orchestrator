@@ -1612,6 +1612,7 @@ STUBEOF
     printf 'prompt text\n' | env WORKSPACE_REPO_DIR="${repo_dir}" CLAUDE_CODE_OAUTH_TOKEN=token \
         GIT_USER_NAME="Alice" GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
         bash "${ENTRYPOINT}" 2>/dev/null
+    [ -e "${TEST_TMP}/codegraph_stdin" ]
     [ ! -s "${TEST_TMP}/codegraph_stdin" ]
 }
 
