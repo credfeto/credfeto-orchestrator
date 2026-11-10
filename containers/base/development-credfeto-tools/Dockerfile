@@ -46,8 +46,9 @@ RUN su developer -c ": ${CREDFETO_FUNFAIR_TOOLS_CACHE_BUST}; dotnet tool install
 # hadolint ignore=DL3059
 RUN su developer -c ": ${CREDFETO_FUNFAIR_TOOLS_CACHE_BUST}; dotnet tool install -g Credfeto.DotNet.Repo.Formatter"
 # The .NET build/test/coverage MCP server (credfeto-build-dotnet), registered for
-# agent sessions as the build-dotnet server in development-full's managed-mcp.json
-# by its absolute path, /home/developer/.dotnet/tools/credfeto-build-dotnet.
+# agent sessions as the build-dotnet server in development-full's managed-mcp.json,
+# whose build-dotnet-mcp wrapper starts it from its global tool path,
+# /home/developer/.dotnet/tools/credfeto-build-dotnet.
 # hadolint ignore=DL3059
 RUN su developer -c ": ${CREDFETO_FUNFAIR_TOOLS_CACHE_BUST}; dotnet tool install -g Credfeto.Build.Dotnet.Server"
 
@@ -92,7 +93,7 @@ RUN set -e; \
             echo "FATAL sanity: dotnet tool '$tool' is missing" >&2; exit 1; \
         fi; \
     done; \
-    echo "== credfeto-build-dotnet (managed-mcp.json starts it by this absolute path) =="; \
+    echo "== credfeto-build-dotnet (development-full's build-dotnet-mcp wrapper starts it by this path) =="; \
     [ -x /home/developer/.dotnet/tools/credfeto-build-dotnet ] \
         || { echo "FATAL sanity: /home/developer/.dotnet/tools/credfeto-build-dotnet is missing or not executable" >&2; exit 1; }; \
     su developer -c "command -v credfeto-build-dotnet >/dev/null 2>&1" \
