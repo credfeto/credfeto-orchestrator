@@ -291,8 +291,13 @@ If agents rarely call it, or the counts do not drop, roll it back.
 1. **Container.** Revert this repository's PR (#1885) as one revert. That removes the CLI, the
    managed MCP entry, the permissions, the allowlist entry, the indexing at start, the bump
    workflow entry and this guide. The image rebuilds without CodeGraph. Indexes already built stay
-   in the owners' checkouts; they are ignored and harmless, and deleting `.codegraph/` reclaims the
-   space.
+   on each host that runs `oneshot`, under
+   `${XDG_STATE_HOME:-~/.local/state}/orchestrator/<owner>/<repo>/codegraph/`, not in the
+   checkouts. They are harmless. Until the revert is deployed, `oneshot` purges each item's
+   directory once it has been idle for 14 days, but the revert also removes that purge, so
+   whatever is left after it stays until deleted by hand. To reclaim the space, delete the
+   `codegraph/` directory under each repository's state directory, for example
+   `rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}"/orchestrator/*/*/codegraph`.
 1. **Agent definitions.** Revert the change from
    [credfeto/credfeto-ai-skills#60](https://github.com/credfeto/credfeto-ai-skills/issues/60) and
    rebuild the image.
