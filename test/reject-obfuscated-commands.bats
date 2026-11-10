@@ -30,6 +30,13 @@ teardown() {
     [ "${status}" -eq 0 ]
 }
 
+@test "codegraph explore with a quoted multi-word query, and codegraph sync, are allowed" {
+    run_hook 'codegraph explore "where is the allowlist parsed and who calls it"'
+    [ "${status}" -eq 0 ]
+    run_hook "codegraph sync"
+    [ "${status}" -eq 0 ]
+}
+
 @test "the bracket test idiom is allowed (issue #1282)" {
     run_hook "[ -d /proc/2094 ]"
     [ "${status}" -eq 0 ]
