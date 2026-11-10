@@ -54,6 +54,7 @@
       "Bash(check-yaml *)",
       "Bash(checkbashisms *)",
       "Bash(chmod *)",
+      "Bash(codegraph *)",
       "Bash(composite-action-lint *)",
       "Bash(coverage)",
       "Bash(coverage *)",

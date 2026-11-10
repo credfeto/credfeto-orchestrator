@@ -252,6 +252,15 @@ teardown() {
     [ "${status}" -eq 0 ]
 }
 
+@test "codegraph init, sync and explore are allowed in the foreground" {
+    run_hook "codegraph init"
+    [ "${status}" -eq 0 ]
+    run_hook "codegraph sync"
+    [ "${status}" -eq 0 ]
+    run_hook 'codegraph explore "where is the allowlist parsed"'
+    [ "${status}" -eq 0 ]
+}
+
 @test "a path-qualified buildtest invocation is blocked" {
     run_hook "/home/user/bin/buildtest"
     [ "${status}" -eq 2 ]
