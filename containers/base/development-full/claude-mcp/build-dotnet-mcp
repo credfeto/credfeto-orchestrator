@@ -66,8 +66,18 @@ export SuppressNETCoreSdkPreviewMessage
 
 manifest_lists_tool() {
     [ -f "${local_manifest}" ] || return 1
+    # A manifest that cannot be read is fatal rather than "not listed": falling back would start
+    # the global tool, or report it missing, when the user asked for their local one.
+    command -v jq >/dev/null 2>&1 || fail "${local_manifest} exists, but jq is not on PATH to read it"
+    # jq -e exits 1 for a false result and above 1 when it cannot read, parse or index the file;
+    # its own message goes to stderr ahead of ours.
     jq -e --arg command "${tool_command}" 'any(.tools[]?.commands?[]?; $command == .)' \
-        "${local_manifest}" >/dev/null 2>&1
+        "${local_manifest}" >/dev/null
+    case $? in
+        0) return 0 ;;
+        1) return 1 ;;
+        *) fail "cannot read ${local_manifest} as a dotnet tool manifest" ;;
+    esac
 }
 
 if manifest_lists_tool; then
