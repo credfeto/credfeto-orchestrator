@@ -187,8 +187,9 @@ with `kb` shown as failed to connect. See
 started by the root-owned wrapper `/etc/claude-code/mcp/build-dotnet-mcp`, with no `env`, and
 `mcp__build-dotnet__*` in `permissions.allow` allows all of its tools. It is registered for every session,
 whatever the repository's language. The wrapper keeps `BUILD_MCP_REPO_ROOT`, which the image sets to
-`/workspace/repo` as an `ENV`, or otherwise resolves it from the directory Claude Code was started in. It
-then runs the local tool from `~/dotnet-tools.json` when that lists `credfeto-build-dotnet`, or else the
+`/workspace/repo` as an `ENV`, or otherwise resolves it from the directory Claude Code was started in, and
+forces `DOTNET_NOLOGO=1` so no .NET welcome banner reaches the MCP stream on stdout. It then runs the
+local tool from `~/dotnet-tools.json` when that lists `credfeto-build-dotnet`, or else the
 global tool `/home/developer/.dotnet/tools/credfeto-build-dotnet`, which is what runs in the container. The
 same file therefore works for every user on a host. The sanity block pins that exact entry, the wrapper's
 owner and mode, the `ENV` value and the global tool. See
