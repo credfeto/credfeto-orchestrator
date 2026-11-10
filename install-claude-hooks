@@ -24,7 +24,10 @@
 #
 # It also installs /etc/claude-code/managed-mcp.json, which takes exclusive
 # control of the MCP servers Claude Code loads, and the cfwf-mcp-headers and
-# kb-mcp-headers helpers it names. The installed file is the container's
+# kb-mcp-headers helpers and the build-dotnet-mcp wrapper it names, all
+# root:root 0755 in /etc/claude-code/mcp. The wrapper starts the build-dotnet
+# server for whichever user runs Claude Code, so the one installed file works
+# for every user on the host. The installed file is the container's
 # shipped servers (cfwf, kb, build-dotnet and any others listed) merged with
 # the MCP servers in ~/.claude.json (user scope and every project scope), so a
 # host keeps its own servers; see merge_host_mcp_servers for what is left out.
@@ -80,6 +83,7 @@ SOURCE_CFWF="${SOURCE_DIR}/scripts/cfwf"
 SOURCE_MANAGED_MCP="${SOURCE_DIR}/claude-managed-mcp.json"
 SOURCE_CFWF_MCP_HEADERS="${SOURCE_DIR}/claude-mcp/cfwf-mcp-headers"
 SOURCE_KB_MCP_HEADERS="${SOURCE_DIR}/claude-mcp/kb-mcp-headers"
+SOURCE_BUILD_DOTNET_MCP="${SOURCE_DIR}/claude-mcp/build-dotnet-mcp"
 CFWF_BIN_DIR="${CFWF_BIN_DIR:-/usr/local/bin}"
 CLAUDE_MANAGED_DIR="${CLAUDE_MANAGED_DIR:-/etc/claude-code}"
 
@@ -162,6 +166,7 @@ install_managed_files() {
     root_install -m 0444 "${SOURCE_MANAGED_SETTINGS}" "${CLAUDE_MANAGED_DIR}/managed-settings.json"
     root_install -m 0755 "${SOURCE_CFWF_MCP_HEADERS}" "${mcp_dir}/$(basename "${SOURCE_CFWF_MCP_HEADERS}")"
     root_install -m 0755 "${SOURCE_KB_MCP_HEADERS}" "${mcp_dir}/$(basename "${SOURCE_KB_MCP_HEADERS}")"
+    root_install -m 0755 "${SOURCE_BUILD_DOTNET_MCP}" "${mcp_dir}/$(basename "${SOURCE_BUILD_DOTNET_MCP}")"
     root_install -m 0444 "${merged_mcp_file}" "${CLAUDE_MANAGED_DIR}/managed-mcp.json"
 
     if [ "${#PENDING_ROOT_COMMANDS[@]}" -eq 0 ]; then
@@ -387,6 +392,7 @@ main() {
     [ -f "${SOURCE_MANAGED_MCP}" ] || die "Source managed MCP servers not found: ${SOURCE_MANAGED_MCP}"
     [ -f "${SOURCE_CFWF_MCP_HEADERS}" ] || die "Source MCP headers helper not found: ${SOURCE_CFWF_MCP_HEADERS}"
     [ -f "${SOURCE_KB_MCP_HEADERS}" ] || die "Source MCP headers helper not found: ${SOURCE_KB_MCP_HEADERS}"
+    [ -f "${SOURCE_BUILD_DOTNET_MCP}" ] || die "Source build-dotnet MCP wrapper not found: ${SOURCE_BUILD_DOTNET_MCP}"
 
     check_required_tools
 
