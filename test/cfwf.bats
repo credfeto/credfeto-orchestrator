@@ -11040,7 +11040,7 @@ run_tag_view() {
     listed+="  run list                 List a repository's Actions runs for a branch or a commit, newest first"$'\n'
     listed+="  run view                 Print an Actions run's status and jobs (exit 9 when not found)"$'\n'
     listed+="  run log                  Print the tail of a run's failed steps' logs (exit 4 while it runs, 9 when not found)"$'\n'
-    listed+="  run rerun                Rerun the failed jobs of a pull request's run (exit 4 while it runs, 8 when refused, 9 when not found)"$'\n'
+    listed+="  run rerun                Rerun a pull request's run: its failed jobs, or all when a required check never ran (exit 4 while it runs, 8 when refused, 9 when not found)"$'\n'
     listed+="  task wait                Wait, in one call, for a background command to finish (exit 4 while it runs, 9 when not found)"$'\n'
     listed+="  help [command]           Show this help, or the help for one command"$'\n'
     [[ "${output}" == *"${listed}"* ]]
@@ -12201,11 +12201,15 @@ assert_unexpected_run() {
         [ "${status}" -eq 0 ] || { echo "${invocation}: ${status}" >&2; return 1; }
         [[ "${output}" == "${RUN_RERUN_USAGE}"$'\n'* ]]
         [[ "${output}" == *$'\n'"--run   Always required: the run's id, digits only, above 0."$'\n'* ]]
-        [[ "${output}" == *"gh's --failed is always passed and there is no option for a full rerun: --failed, --job, --debug,"$'\n'"--all, --json, --jq, --template and --web are not options."* ]]
+        [[ "${output}" == *"or, when it has none and a required check of the pull request never ran, the whole run. Which one"$'\n'"is decided from the run and the pull request's checks, never by an option."* ]]
+        [[ "${output}" == *$'\n'"--failed, --job, --debug, --all, --json, --jq, --template and --web are not options."$'\n'* ]]
+        [[ "${output}" != *"never reruns a whole run"* ]]
+        [[ "${output}" != *"no option for a full rerun"* ]]
         [[ "${output}" == *"with \"cfwf: rerun refused: <rule>\" on stderr, which names only the rule:"$'\n'"  attempt limit                  the run is on attempt 3 or later."*$'\n'"  default branch                 "*$'\n'"  not an open pull request head  the run's head commit is not the head of an open pull request"* ]]
         [[ "${output}" == *"At most 1000 open pull requests on the branch are looked at; more is a runtime failure."* ]]
         [[ "${output}" == *"(queued, in progress or waiting) exits 4"*"So a run that is refused is never reported as pending."* ]]
-        [[ "${output}" == *$'\n'"  Rerunning failed jobs of run <id> (attempt <n>)"$'\n'"where <n> is the attempt the rerun starts: one more than the run's attempt when it was read."* ]]
+        [[ "${output}" == *"So a run that is refused is never reported as pending."*"Otherwise it is refused, after"$'\n'"the rules above:"$'\n'"  no failed jobs and no required check missing"$'\n'* ]]
+        [[ "${output}" == *$'\n'"  Rerunning failed jobs of run <id> (attempt <n>)"$'\n'"  Rerunning all jobs of run <id> (attempt <n>): required check <name> never ran"$'\n'"where <n> is the attempt the rerun starts: one more than the run's attempt when it was read."* ]]
         [[ "${output}" == *"the request may still have reached GitHub."* ]]
         [[ "${output}" == *"Exit codes: 0 the rerun was requested; 8 refused by a rule (naming the rule; nothing was"$'\n'"written); 4 the run is still in progress; 9 the run was not found in the repository; 1 a runtime"*"2 a"$'\n'"usage error." ]]
     done
@@ -12575,15 +12579,180 @@ assert_unexpected_run() {
     [ "${stderr}" = "cfwf: could not rerun the failed jobs of the run 123 of ${REPO}: gh: Bad Gateway (HTTP 502)" ]
     [ "$(grep -cxF -- "${RUN_RERUN_CALL}" "${GH_LOG}")" -eq 1 ]
 
-    # A run that succeeded is not refused by cfwf: GitHub's refusal is a runtime failure.
+    # A run that succeeded with a failed job (one that may fail) has its failed jobs rerun, and
+    # GitHub's refusal is a runtime failure.
     rm -f "${GH_LOG}"
     write_run 123 completed success "${RUN_SHA}" feat/x 1
+    write_run_jobs 123 "30|build|completed|success" "31|flaky|completed|failure"
     printf '%s\n' "HTTP 403: This workflow run cannot be retried" > "${GH_FIXTURES}/run-rerun.fail"
     run_run_rerun --run 123
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
     [ "${stderr}" = "cfwf: could not rerun the failed jobs of the run 123 of ${REPO}: HTTP 403: This workflow run cannot be retried" ]
     [ "$(grep -cxF -- "${RUN_RERUN_CALL}" "${GH_LOG}")" -eq 1 ]
+}
+
+RUN_RERUN_ALL_CALL="run rerun 123 --repo ${REPO}"
+
+# The run 123 of prepare_run_rerun, which succeeded on the attempt $1 (1) with no failed job, whose
+# open pull request 7 has RUN_SHA as its head and main as its base. main requires build and
+# pre-release, and only build has run on RUN_SHA: the pre-release job was never created.
+prepare_whole_run_rerun() {
+    prepare_run_rerun "${1:-1}"
+    write_run 123 completed success "${RUN_SHA}" feat/x "${1:-1}"
+    write_run_jobs 123 "30|build|completed|success" "31|optional|completed|skipped" "32|notes|completed|neutral"
+    jq -n --arg sha "${RUN_SHA}" '{number: 7, head: {sha: $sha}, base: {ref: "main"}}' | write_api "repos/${REPO}/pulls/7"
+    write_protection main build pre-release
+    write_no_rulesets main
+    write_check_runs "${RUN_SHA}" "$(check_run build success 11 "" "${RUN_SHA}")"
+    write_statuses "${RUN_SHA}"
+}
+
+@test "run rerun reruns the whole run once, with no --failed, when the run has no failed job and a required check never ran on the pull request's head (#1884)" {
+    prepare_whole_run_rerun
+    run_run_rerun --run 123
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Rerunning all jobs of run 123 (attempt 2): required check pre-release never ran" ]
+    [ -z "${stderr}" ]
+    [ "$(tail -n 1 "${GH_LOG}")" = "${RUN_RERUN_ALL_CALL}" ]
+    [ "$(grep -cxF -- "${RUN_RERUN_ALL_CALL}" "${GH_LOG}")" -eq 1 ]
+    [ "$(gh_call_count "run rerun ")" -eq 1 ]
+    [ "$(gh_call_count "--failed")" -eq 0 ]
+    [ "$(gh_call_count "api repos/${REPO}/actions/runs/123/jobs?per_page=100&filter=latest --paginate --jq ")" -eq 1 ]
+    [ "$(gh_call_count "api repos/${REPO}/pulls/7 --jq ")" -eq 1 ]
+    [ "$(gh_call_count "api repos/${REPO}/commits/${RUN_SHA}/check-runs?")" -eq 1 ]
+
+    # A check required by a ruleset, from one app, counts too, and the first by name is named.
+    write_rulesets main "a-check#15368" build
+    run_run_rerun --run 123
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Rerunning all jobs of run 123 (attempt 2): required check a-check never ran" ]
+
+    # A run on its second attempt starts the third.
+    prepare_whole_run_rerun 2
+    run_run_rerun --run 123
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Rerunning all jobs of run 123 (attempt 3): required check pre-release never ran" ]
+}
+
+@test "run rerun refuses a run with no failed job whose required checks all have a result (exit 8), writing nothing (#1884)" {
+    prepare_whole_run_rerun
+    write_check_runs "${RUN_SHA}" "$(check_run build success 11 "" "${RUN_SHA}")" "$(check_run pre-release success 12 "" "${RUN_SHA}")"
+    run_run_rerun --run 123
+    assert_rerun_refused "no failed jobs and no required check missing" "${status}" "${output}" "${stderr}"
+
+    # One still running, from another run, or a commit status of the name, is not missing either.
+    write_check_runs "${RUN_SHA}" "$(check_run build success 11 "" "${RUN_SHA}")" "$(check_run pre-release "" 12 "" "${RUN_SHA}")"
+    run_run_rerun --run 123
+    assert_rerun_refused "no failed jobs and no required check missing" "${status}" "${output}" "${stderr}"
+    write_check_runs "${RUN_SHA}" "$(check_run build success 11 "" "${RUN_SHA}")"
+    write_statuses "${RUN_SHA}" "$(commit_status pre-release pending 21)"
+    run_run_rerun --run 123
+    assert_rerun_refused "no failed jobs and no required check missing" "${status}" "${output}" "${stderr}"
+
+    # A base branch that requires no check has none missing.
+    write_branch main
+    run_run_rerun --run 123
+    assert_rerun_refused "no failed jobs and no required check missing" "${status}" "${output}" "${stderr}"
+}
+
+@test "run rerun keeps the failed-jobs path for a failed run without reading its jobs or checks, and for a run that succeeded with a failed job (#1884)" {
+    local conclusion
+    for conclusion in failure cancelled timed_out startup_failure; do
+        prepare_whole_run_rerun
+        write_run 123 completed "${conclusion}" "${RUN_SHA}" feat/x 1
+        rm -f "${GH_LOG}"
+        run_run_rerun --run 123
+        if [ "${status}" -ne 0 ]; then
+            echo "${conclusion}: ${status}" >&2
+            return 1
+        fi
+        [ "${output}" = "Rerunning failed jobs of run 123 (attempt 2)" ]
+        [ "$(wc -l < "${GH_LOG}")" -eq 4 ]
+        [ "$(tail -n 1 "${GH_LOG}")" = "${RUN_RERUN_CALL}" ]
+        [ "$(gh_call_count "/jobs")" -eq 0 ]
+        [ "$(gh_call_count "/pulls/7")" -eq 0 ]
+    done
+
+    prepare_whole_run_rerun
+    write_run_jobs 123 "30|build|completed|success" "31|flaky|completed|failure"
+    rm -f "${GH_LOG}"
+    run_run_rerun --run 123
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Rerunning failed jobs of run 123 (attempt 2)" ]
+    [ "$(tail -n 1 "${GH_LOG}")" = "${RUN_RERUN_CALL}" ]
+    [ "$(gh_call_count "/pulls/7")" -eq 0 ]
+}
+
+@test "run rerun still refuses a run with no failed job and a missing required check under the attempt limit, the default branch and the open pull request head rules first (#1884)" {
+    local attempt
+    for attempt in 3 4; do
+        prepare_whole_run_rerun "${attempt}"
+        rm -f "${GH_LOG}"
+        run_run_rerun --run 123
+        assert_rerun_refused "attempt limit" "${status}" "${output}" "${stderr}"
+        [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
+    done
+
+    prepare_whole_run_rerun
+    write_run_repository feat/x
+    run_run_rerun --run 123
+    assert_rerun_refused "default branch" "${status}" "${output}" "${stderr}"
+
+    prepare_whole_run_rerun
+    write_pr_list "$(pull_request 7 feat/x main someone false false "the change" "${MOVED_SHA}")"
+    run_run_rerun --run 123
+    assert_rerun_refused "not an open pull request head" "${status}" "${output}" "${stderr}"
+    [ "$(gh_call_count "/jobs")" -eq 0 ]
+
+    # A head that moved after the open pull requests were read is refused too.
+    prepare_whole_run_rerun
+    jq -n --arg sha "${MOVED_SHA}" '{number: 7, head: {sha: $sha}, base: {ref: "main"}}' | write_api "repos/${REPO}/pulls/7"
+    run_run_rerun --run 123
+    assert_rerun_refused "not an open pull request head" "${status}" "${output}" "${stderr}"
+}
+
+@test "run rerun exits 1 and writes nothing when a read for the whole-run rerun fails, and exits 1 when that rerun request fails (#1884)" {
+    prepare_whole_run_rerun
+    fail_api "repos/${REPO}/actions/runs/123/jobs"
+    run_run_rerun --run 123
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read the jobs of the run 123 of ${REPO}: gh: Bad Gateway (HTTP 502)" ]
+    assert_no_rerun
+    rm "$(api_fixture "repos/${REPO}/actions/runs/123/jobs").fail"
+
+    prepare_whole_run_rerun
+    RUN_JOBS_TOTAL=5 write_run_jobs 123 "30|build|completed|success"
+    run_run_rerun --run 123
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "${RUN_UNEXPECTED}" ]
+    assert_no_rerun
+
+    prepare_whole_run_rerun
+    fail_api "repos/${REPO}/commits/${RUN_SHA}/check-runs"
+    run_run_rerun --run 123
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read the check runs of ${RUN_SHA}: gh: Bad Gateway (HTTP 502)" ]
+    assert_no_rerun
+    rm "$(api_fixture "repos/${REPO}/commits/${RUN_SHA}/check-runs").fail"
+
+    prepare_whole_run_rerun
+    fail_api "repos/${REPO}/rules/branches/main"
+    run_run_rerun --run 123
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: could not read the rulesets of ${REPO}: gh: Bad Gateway (HTTP 502)" ]
+    assert_no_rerun
+    rm "$(api_fixture "repos/${REPO}/rules/branches/main").fail"
+
+    prepare_whole_run_rerun
+    printf '%s\n' "gh: Bad Gateway (HTTP 502)" "a second line" > "${GH_FIXTURES}/run-rerun.fail"
+    run_run_rerun --run 123
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not rerun all jobs of the run 123 of ${REPO}: gh: Bad Gateway (HTTP 502)" ]
+    [ "$(grep -cxF -- "${RUN_RERUN_ALL_CALL}" "${GH_LOG}")" -eq 1 ]
 }
 
 @test "task wait exits 0 at once for an output file no process holds, printing finished and the end of the output, and never calls gh (#1710)" {
