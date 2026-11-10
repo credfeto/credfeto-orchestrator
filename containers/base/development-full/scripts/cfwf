@@ -184,15 +184,15 @@ readonly CONTROL_PATTERN=$'[\x01-\x08\x0b-\x1f\x7f]|\xc2[\x80-\x9f]'
 # byte from another encoding (a Latin-1 or CP1252 0x85, say) or a broken sequence, which the C1
 # byte scan above cannot see and wc -m does not count.
 readonly UTF8_LINE_PATTERN=$'([\x01-\x7f]|[\xc2-\xdf][\x80-\xbf]|\xe0[\xa0-\xbf][\x80-\xbf]|[\xe1-\xec\xee\xef][\x80-\xbf]{2}|\xed[\x80-\x9f][\x80-\xbf]|\xf0[\x90-\xbf][\x80-\xbf]{2}|[\xf1-\xf3][\x80-\xbf]{3}|\xf4[\x80-\x8f][\x80-\xbf]{2})*'
-# The two plan-approval keywords, matched as whole words without regard to case
-# (check_comment_for_approval_keywords): an agent's comment that holds one outside a quote can be
-# read as a human approving a plan. A letter, digit or underscore on either side makes a longer
-# word (plan_approved), which passes; underscores with nothing but a boundary beyond them are
-# Markdown emphasis (_approved_, __lgtm__), which renders as the keyword alone, so it is refused.
-# SIGNS_OFF_DEF matches it too, one line at a time, so it is written with nothing but what grep -E,
-# jq's regular expressions and gh's (gojq, Go's) read alike, and holds no quote or backslash, so it
+# A line that is one of the two plan-approval keywords and nothing else but whitespace, matched
+# without regard to case: such a line outside a quote is a plan sign-off (SIGNS_OFF_DEF), so an
+# agent's comment holding one is refused (check_comment_for_approval_keywords). Anything else on
+# the line (LGTM!, not approved, LGTM but ...) makes it no sign-off, and an invisible character
+# inside the word, such as U+200B, is no whitespace, so it does not match either. It is applied one
+# line at a time, written with nothing but what grep -E, jq's regular expressions and gh's (gojq,
+# Go's) read alike, [[:space:]] rather than \s among them, and holds no quote or backslash, so it
 # goes in a jq string as it is.
-readonly APPROVAL_KEYWORD_PATTERN='(^|[^A-Za-z0-9_])_*(approved|lgtm)_*([^A-Za-z0-9_]|$)'
+readonly APPROVAL_KEYWORD_PATTERN='^[[:space:]]*(approved|lgtm)[[:space:]]*$'
 # The environment-block marker an agent leaves on a pull request's diagnosis comment (#1118), which
 # oneshot reads to clear Blocked once a newer agent image is built (pr_json_env_block_image_sha in
 # lib/github-status): ENV_BLOCK_MARKER_TEXT, in any case, is a marker, and ENV_BLOCK_MARKER_PATTERN
@@ -657,11 +657,11 @@ plan is yes when a comment has a line that is exactly "## Implementation Plan" (
 with nothing else on the line, wherever the line is in the comment); the latest such comment is
 the plan. blocked is yes when the issue has a label named Blocked (in any case).
 plan-at, plan-by and one comment line for each comment after the latest plan, oldest first, are
-printed only when there is a plan. The yes or no of a comment line says whether its body holds a plan
-sign-off keyword (either of the two the plan-approval rules name) as a whole word, in any case,
-on a line that is not a Markdown quote (a line starting with >, after at most three spaces). A
-keyword in Markdown emphasis (underscores around it) counts; one inside a longer word does not.
-That yes is only a signal, not an approval.
+printed only when there is a plan. The yes or no of a comment line says whether its body has a
+line that is a plan sign-off keyword (either of the two the plan-approval rules name), in any case,
+with nothing else on it but whitespace, and that is not a Markdown quote (a line starting with >,
+after at most three spaces). A line with anything else around the keyword (punctuation, Markdown
+emphasis or other words) does not count. That yes is only a signal, not an approval.
 
 approved is yes only when one comment meets every one of these, and no otherwise:
   - it comes after the latest comment holding "## Implementation Plan" in any case, anywhere in its
@@ -2631,10 +2631,10 @@ does not expand:
   EOF
 
 The body is checked for leaks before anything is posted (see 'cfwf help body'). It is also
-refused when either of the two plan-approval keywords is on a line that is not a Markdown quote
-(a line starting with >, after at most three spaces), as a whole word in any case, because
-such a comment could be read as a human approving a plan; quoting a human's own approval on
-a > line is allowed. A refused body exits ${BODY_REFUSED_EXIT} with "cfwf: body refused: <rule>",
+refused when a line that is not a Markdown quote (a line starting with >, after at most three
+spaces) is either of the two plan-approval keywords, in any case, with nothing else on it but
+whitespace, because such a comment would be read as a human approving a plan; a sentence that
+only mentions a keyword is allowed, and so is quoting a human's own approval on a > line. A refused body exits ${BODY_REFUSED_EXIT} with "cfwf: body refused: <rule>",
 with "(line <n>)" where there is one, on stderr, never naming the matched text, and nothing
 is posted. 'cfwf body check' does not apply the keyword rule.
 
@@ -4394,8 +4394,9 @@ unexpected_issue_result() {
 }
 
 # A jq definition, put before a filter that uses it: signs_off is whether the comment body it is
-# given holds a plan sign-off keyword on a line that is not a Markdown quote: a > after at most
-# three spaces, because Markdown reads a deeper indent, or a tab, as code. The body is split into
+# given has a line that is a plan sign-off keyword alone (APPROVAL_KEYWORD_PATTERN) and is not a
+# Markdown quote: a > after at most three spaces, because Markdown reads a deeper indent, or a tab,
+# as code. Any one such line makes the comment a sign-off. The body is split into
 # lines first, so ^ and $ in either pattern mean the same to jq, where they match at every line,
 # and to gh's gojq, where they match only at the ends of the text.
 readonly SIGNS_OFF_DEF='def signs_off: any(split("\n")[]; (test("^ {0,3}>") | not) and test("'"${APPROVAL_KEYWORD_PATTERN}"'"; "i"));'
@@ -8601,10 +8602,11 @@ cmd_pr() {
         review-comment pr_review_comment comment pr_comment -- "$@"
 }
 
-# Refuses (exit 8) the body in the file $1 when one of the two plan-approval keywords is a whole
-# word on a line that is not a Markdown quote: a > after at most three spaces, because Markdown
-# reads a deeper indent, or a tab, as code. Quote lines are blanked, not deleted, in a copy so the
-# line numbers stay those of the body. SCAN_TMP is reused: the leak check is done with it.
+# Refuses (exit 8) the body in the file $1 when a line that is not a Markdown quote is one of the
+# two plan-approval keywords alone (APPROVAL_KEYWORD_PATTERN, the line SIGNS_OFF_DEF reads as a
+# sign-off), so a sentence that only mentions one passes. A quote line is a > after at most three
+# spaces, because Markdown reads a deeper indent, or a tab, as code. Quote lines are blanked, not
+# deleted, in a copy so the line numbers stay those of the body. SCAN_TMP is reused: the leak check is done with it.
 check_comment_for_approval_keywords() {
     ensure_temp_file SCAN_TMP
     LC_ALL=C sed -E 's/^ {0,3}>.*//' "$1" > "${SCAN_TMP}" || die "could not scan the body"
