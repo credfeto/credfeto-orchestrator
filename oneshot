@@ -167,8 +167,8 @@ source "${ONESHOT_DIR}/lib/podman" \
 # SECRET_REDACTION_SED_EXPRESSIONS and redact_secrets are declared in lib/secret-patterns.
 
 # rearm_closed_issue_markers, tag_pr_closed_issue, link_pivot_pr_transcripts,
-# issue_blocked_replan_marker_file_path, issue_blocked_replan_marked, mark_issue_blocked_replan
-# and clear_issue_blocked_replan_marker are declared in lib/state.
+# link_pivot_pr_codegraph_index, issue_blocked_replan_marker_file_path, issue_blocked_replan_marked,
+# mark_issue_blocked_replan and clear_issue_blocked_replan_marker are declared in lib/state.
 
 main() {
     local owner_filter=""
@@ -548,8 +548,9 @@ main() {
                 # open bot PR, which need not belong to the Issue being processed.
                 if pivot_closing_issue=$(pr_json_lowest_closing_issue "${pr_json}" "${item_repo}"); then
                     link_pivot_pr_transcripts "${pivot_closing_issue}" "${open_pr}"
+                    link_pivot_pr_codegraph_index "${pivot_closing_issue}" "${open_pr}"
                 else
-                    info "PR #${open_pr} in ${item_repo} does not close any Issue in the repository, so its transcripts are not linked to an Issue's"
+                    info "PR #${open_pr} in ${item_repo} does not close any Issue in the repository, so its transcripts and CodeGraph index are not linked to an Issue's"
                 fi
 
                 if pr_json_has_blocked_label "${pr_json}" \
