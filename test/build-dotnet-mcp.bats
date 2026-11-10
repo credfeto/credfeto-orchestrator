@@ -252,6 +252,34 @@ make_git_repo() {
     [ "${output}" = "$(printf '%s\n' dotnet nologo=1)" ]
 }
 
+@test "SuppressNETCoreSdkPreviewMessage is forced to true for either tool, over a value the caller set" {
+    # shellcheck disable=SC2016  # expanded by the stub, not here
+    make_stub dotnet 'printf "%s\n" "dotnet" "preview=${SuppressNETCoreSdkPreviewMessage-unset}"'
+    make_global_tool
+    # shellcheck disable=SC2016  # expanded by the stub, not here
+    printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "global" "preview=${SuppressNETCoreSdkPreviewMessage-unset}"' > "${GLOBAL_TOOL}"
+
+    run_wrapper "${WORK}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(printf '%s\n' global preview=true)" ]
+
+    WRAPPER_ENV=(SuppressNETCoreSdkPreviewMessage=false)
+    run_wrapper "${WORK}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(printf '%s\n' global preview=true)" ]
+
+    write_manifest "${USER_HOME}/dotnet-tools.json" credfeto-build-dotnet
+    WRAPPER_ENV=()
+    run_wrapper "${WORK}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(printf '%s\n' dotnet preview=true)" ]
+
+    WRAPPER_ENV=(SuppressNETCoreSdkPreviewMessage=)
+    run_wrapper "${WORK}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(printf '%s\n' dotnet preview=true)" ]
+}
+
 @test "with neither tool found it fails with a message on stderr and nothing on stdout" {
     run_wrapper "${WORK}"
     [ "${status}" -ne 0 ]
