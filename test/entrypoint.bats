@@ -1506,7 +1506,7 @@ GHEOF
     [[ "${output}" != *"Working on:"* ]]
 }
 
-# --- refresh_codegraph_index -----------------------------------------------------
+# --- build_missing_codegraph_index -----------------------------------------------
 
 # Runs the entrypoint against a fake repo checkout with a claude stub that records it ran.
 run_entrypoint_in_repo() {
@@ -1544,7 +1544,7 @@ STUBEOF
     [ "$(cat "${TEST_TMP}/codegraph_calls")" = "${repo_dir}|init --yes -v" ]
 }
 
-@test "entrypoint runs codegraph sync in the repo when the index already exists" {
+@test "entrypoint does not run codegraph when the index already exists" {
     setup_entrypoint_stubs
     local repo_dir="${TEST_TMP}/codegraph-repo"
     mkdir -p "${repo_dir}/.git" "${repo_dir}/.codegraph"
@@ -1552,7 +1552,8 @@ STUBEOF
 
     run_entrypoint_in_repo "${repo_dir}"
     [ "${status}" -eq 0 ]
-    [ "$(cat "${TEST_TMP}/codegraph_calls")" = "${repo_dir}|sync -q" ]
+    [ ! -e "${TEST_TMP}/codegraph_calls" ]
+    [[ "${output}" == *"CodeGraph index already exists in ${repo_dir}"* ]]
     [ -e "${TEST_TMP}/claude_ran" ]
 }
 
@@ -1564,20 +1565,7 @@ STUBEOF
 
     run_entrypoint_in_repo "${repo_dir}"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"codegraph init failed in ${repo_dir}, continuing without an up-to-date code index"* ]]
-    [ -e "${TEST_TMP}/claude_ran" ]
-}
-
-@test "entrypoint warns and still starts claude when codegraph sync fails" {
-    setup_entrypoint_stubs
-    make_stub codegraph 'exit 1'
-    local repo_dir="${TEST_TMP}/codegraph-repo"
-    mkdir -p "${repo_dir}/.git" "${repo_dir}/.codegraph"
-    touch "${repo_dir}/.codegraph/codegraph.db"
-
-    run_entrypoint_in_repo "${repo_dir}"
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == *"codegraph sync failed in ${repo_dir}, continuing without an up-to-date code index"* ]]
+    [[ "${output}" == *"codegraph init failed in ${repo_dir}, continuing without a code index"* ]]
     [ -e "${TEST_TMP}/claude_ran" ]
 }
 

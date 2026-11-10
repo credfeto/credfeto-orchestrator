@@ -64,12 +64,13 @@ CodeGraph needs. Nothing has to be done by hand.
   `Bash(codegraph ...)` entry, and the hook allowlist, `claude-hooks/command-allowlist`, does not
   list `codegraph`, so `reject-obfuscated-commands` rejects every `codegraph` shell command an
   agent runs. Agents explore code only through the `codegraph_explore` MCP tool. They need no
-  `sync` either: the MCP server's watcher updates the index as files change, and the entrypoint
-  syncs before Claude starts. The entrypoint's own `codegraph init` and `codegraph sync` run
-  before Claude, outside the hooks and permissions, so they are unaffected.
-- **The index.** The entrypoint builds or refreshes the index just before it starts `claude`. With
-  no `.codegraph/codegraph.db` it runs `codegraph init --yes -v`; otherwise it runs
-  `codegraph sync -q`. The index does not live in the host's checkout, where the `git clean -fdX`
+  `sync` either: the MCP server catches an existing index up when Claude connects, and its
+  watcher updates the index as files change. The entrypoint's own `codegraph init` runs before
+  Claude, outside the hooks and permissions, so it is unaffected.
+- **The index.** The entrypoint builds the index just before it starts `claude`, only when it is
+  missing: with no `.codegraph/codegraph.db` it runs `codegraph init --yes -v`; otherwise it runs
+  no `codegraph` command, and the MCP server catches the existing index up with the working tree
+  when Claude connects, before it answers the first query. The index does not live in the host's checkout, where the `git clean -fdX`
   after every session would delete it. `oneshot` mounts a host directory per work item at
   `.codegraph`, so the index persists between that item's containers, an Issue and the PR it
   pivots to share one, a different item starts with a fresh `init`, and a directory idle for
@@ -78,14 +79,15 @@ CodeGraph needs. Nothing has to be done by hand.
   session runs, the MCP server watches the checkout and updates the index as files change.
 - **Time and memory.** The first `init` for a work item builds the whole index. On a large
   repository that can take minutes, which delays the start of that one session. Later sessions
-  for the same item run an incremental `sync`, which only reads what changed. Indexing runs before `claude` starts, so it
-  never competes with the agent's own builds and tests for the container's memory limit
-  (`--memory=12g` in `lib/podman`). CodeGraph sizes its workers and memory from the container's
-  cgroup limits itself, so no tuning is set.
-- **Without an index.** If `init` or `sync` fails, the entrypoint prints a warning and starts
-  `claude` anyway, because a missing or stale index only makes code lookups slower. In a
-  repository with no index, the MCP tools answer that the project is not indexed, and agents fall
-  back to grep and file reads.
+  for the same item run no indexing step at start: the MCP server's catch-up on connect only reads
+  what changed. The full `init` runs before `claude` starts, so it never competes with the
+  agent's own builds and tests for the container's memory limit (`--memory=12g` in
+  `lib/podman`). CodeGraph sizes its workers and memory from the container's cgroup limits
+  itself, so no tuning is set.
+- **Without an index.** If `init` fails, the entrypoint prints a warning and starts `claude`
+  anyway, because a missing index only makes code lookups slower. In a repository with no index,
+  the MCP tools answer that the project is not indexed, and agents fall back to grep and file
+  reads.
 
 To undo this part, revert the PR that added it (see [Rollback checklist](#rollback-checklist)).
 
@@ -281,8 +283,9 @@ similar tasks before and after:
   [agent-container.md](agent-container.md#session-transcripts)) for `mcp__codegraph__` tool calls.
 - Tool calls per session, especially `Grep`, `Glob` and `Read`, for comparable issues.
 - Tokens per session, and wall-clock time.
-- The delay indexing adds to session start: the entrypoint logs `Running codegraph init` or
-  `Running codegraph sync`, and a warning containing `failed in` when it fails.
+- The delay indexing adds to session start: the entrypoint logs `Running codegraph init` when it
+  builds a missing index, `CodeGraph index already exists` when it skips an existing one, and a
+  warning containing `failed in` when `init` fails.
 
 If agents rarely call it, or the counts do not drop, roll it back.
 
