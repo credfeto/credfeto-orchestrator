@@ -10,6 +10,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 
 ## [Unreleased]
 ### Security
+- Keep the GitHub, cfwf and kb MCP tokens out of the agent's readable environment: tokens are mounted as root-only files and served to MCP headers helpers by a root-owned broker (#1838)
 ### Added
 - The development-tools image installs `clang` and `zlib1g-dev`, so agents can run Native AOT `dotnet publish` builds inside the container; the build-time sanity step checks for both (#1861)
 - The `kb` knowledge-base MCP server is installed in the development-full agent image with its tools allowed as `mcp__kb__*`, and the image sanity check requires it and pins it exactly, alongside cfwf and build-dotnet; its token is an optional `KB_MCP_TOKEN` in `.env`, passed to each container as a per-container Podman secret and read only by a root-owned headers helper, so it is never written to the image or the managed MCP configuration, a malformed `KB_MCP_TOKEN` in `.env` is warned about and ignored on the host, and a shell-exported `KB_MCP_TOKEN` or Discord webhook URL is no longer left exported to host child processes, and the pre-commit pre-check container no longer receives the kb token (#1791)
