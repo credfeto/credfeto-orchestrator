@@ -31,6 +31,15 @@ READMEs for what they install and why they're split out.
 | `/opt/markdown-linter-fixer` | `github.com/s2005/markdown-linter-fixer-skill` | Shallow clone pinned to the tag in `MARKDOWN_LINTER_FIXER_REF` (default `v1.5.4`); developer:developer ownership |
 | `/opt/dotnet-skills` | `github.com/dotnet/skills` | Sparse checkout of seven plugins only: `plugins/dotnet`, `plugins/dotnet-advanced`, `plugins/dotnet-diag`, `plugins/dotnet-msbuild`, `plugins/dotnet-nuget`, `plugins/dotnet-test`, `plugins/dotnet-upgrade`; pinned to `DOTNET_SKILLS_COMMIT` (no usable tag, see pin-policy comment in the Dockerfile); root:root ownership |
 
+### codegraph CLI
+
+`codegraph` ([colbymchenry/codegraph](https://github.com/colbymchenry/codegraph)) is installed from its standalone Linux release
+archive at the pinned `CODEGRAPH_VERSION`, verified with `sha256sum -c` against the pinned `CODEGRAPH_SHA256_AMD64`/`CODEGRAPH_SHA256_ARM64`
+ARGs before extraction. The archive is a directory (a launcher, its own bundled Node runtime and the app), so it is unpacked whole into
+`/opt/codegraph` (root:root, not writable by `developer`) and `/usr/local/bin/codegraph` is a symlink to its launcher. No system Node.js
+is needed. `CODEGRAPH_TELEMETRY=0` is set in the image environment, because upstream telemetry is on by default.
+`.github/workflows/bump-pinned-tool-versions.yml` bumps the version and both checksums together when a newer release is published.
+
 ### Linking skills into `~/.claude/skills`
 
 Claude Code discovers "personal" skills as immediate subdirectories of `~/.claude/skills/`, each
@@ -338,7 +347,7 @@ Executed as root. Fails the build immediately if anything is missing or broken.
 
 **Binary presence and `--version` probe** — all of the following must be on `PATH` and exit 0 for `--version`:
 
-`git`, `gh`, `dotnet`, `python3`, `gpg`, `curl`, `sqlite3`, `shellcheck`, `bats`, `shfmt`, `checkbashisms`, `uv`, `ruff`, `sqlfluff`, `actionlint`, `markdownlint-cli2`, `pre-commit`, `trufflehog`, `hadolint`, `dotenv-linter`, `sqlcmd`, `composite-action-lint`, `pwsh`, `yamllint`, `ansible-lint`, `flake8`, `pylint`, `cfn-lint`, `markdownlint`, `stylelint`, `eslint`, `xmllint`
+`git`, `gh`, `dotnet`, `python3`, `gpg`, `curl`, `sqlite3`, `shellcheck`, `bats`, `shfmt`, `checkbashisms`, `uv`, `ruff`, `sqlfluff`, `actionlint`, `markdownlint-cli2`, `pre-commit`, `trufflehog`, `hadolint`, `dotenv-linter`, `sqlcmd`, `composite-action-lint`, `pwsh`, `yamllint`, `ansible-lint`, `flake8`, `pylint`, `cfn-lint`, `markdownlint`, `stylelint`, `eslint`, `xmllint`, `codegraph`
 
 **dotnet global tool verification** — `dotnet tool list -g` is run as `developer` and each of the following package IDs must appear (case-insensitive):
 
