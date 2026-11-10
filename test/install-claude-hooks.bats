@@ -443,6 +443,18 @@ expected_mcp_names() {
     [ ! -e "${CLAUDE_MANAGED_DIR}" ]
 }
 
+# A literal env value is refused for what it is, not for looking like a secret: a plain path, with
+# no secret-shaped key or value, is still left out, because managed-mcp.json is world-readable.
+@test "a host server with a literal env value that does not look like a secret is still refused" {
+    allow_sudo
+    write_host_claude_json '{"mcpServers": {"host-build": {"type": "stdio", "command": "/usr/bin/host-build", "env": {"SOME_SETTING": "/srv/some/path"}}}}'
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(installed_mcp_names)" = "$(expected_mcp_names)" ]
+    [[ "${output}" == *"WARNING: did not copy host-build from ${HOME}/.claude.json"* ]]
+    [ "$(grep -c -e host-build -e /srv/some/path "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" -eq 0 ]
+}
+
 @test "an invalid ~/.claude.json is fatal before anything is installed" {
     allow_sudo
     printf '{ not json' > "${HOME}/.claude.json"
