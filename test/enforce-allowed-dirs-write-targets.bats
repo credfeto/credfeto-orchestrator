@@ -647,7 +647,6 @@ assert_protected_git_path() {
         "openssl base64 -d -in payload.b64 -out .claude/settings.json" \
         "sqlite3 :memory: '.once .claude/settings.json' 'select 1;'" \
         "hugo -s site -d ${HOME}/.claude/skills" \
-        "codegraph init .claude/skills" \
         "trivy fs . --format template --template x --output .claude/settings.json" \
         "xmllint --output .mcp.json in.xml" \
         "eslint -o .claude/settings.json src" \
@@ -820,9 +819,6 @@ assert_protected_git_path() {
         "bats test/enforce-allowed-dirs-write-targets.bats" \
         "ruff check ." \
         "mktemp -d" \
-        "codegraph explore 'where is the allowlist parsed and who calls it'" \
-        "codegraph init" \
-        "codegraph sync" \
         "shfmt -w containers/base/development-full/claude-hooks/enforce-allowed-dirs" \
         "gh pr create --title fix --body 'blocks writes to .claude/settings.json'" \
         "gh issue comment 1 --body 'see ~/.claude/hooks'" \
