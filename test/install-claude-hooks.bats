@@ -253,7 +253,6 @@ expected_mcp_names() {
     [ "$(jq -r '.mcpServers["tool-a"].args[0]' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "--serve" ]
     [ "$(jq -c '.mcpServers.cfwf' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "$(jq -c '.mcpServers.cfwf' "${SOURCE_MANAGED_MCP}")" ]
     [ "$(jq -c '.mcpServers["build-dotnet"]' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "$(jq -c '.mcpServers["build-dotnet"]' "${SOURCE_MANAGED_MCP}")" ]
-    [ "$(jq -c '.mcpServers.codegraph' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "$(jq -c '.mcpServers.codegraph' "${SOURCE_MANAGED_MCP}")" ]
 }
 
 @test "a host server at cfwf's URL is left out as a duplicate, and its removal is suggested" {
@@ -749,9 +748,8 @@ kb_token_privacy_predicates() {
     [ -z "${output}" ]
 }
 
-@test "the Dockerfile sanity block pins the codegraph server and its allow rule, and requires the binary" {
+@test "the Dockerfile sanity block pins the codegraph allow rule and requires the binary" {
     local dockerfile="${SOURCE_DIR}/Dockerfile"
-    grep -qF "jq -e '.mcpServers.codegraph == {\"type\": \"stdio\", \"command\": \"codegraph\", \"args\": [\"serve\", \"--mcp\"], \"alwaysLoad\": true}' /etc/claude-code/managed-mcp.json" "${dockerfile}"
     grep -qF "jq -e '.permissions.allow | index(\"mcp__codegraph__*\")' /etc/claude-code/managed-settings.json" "${dockerfile}"
     grep -qE '^ +xmllint codegraph; do \\$' "${dockerfile}"
 }
@@ -803,6 +801,8 @@ run_dockerfile_mcp_checks() {
         'del(.mcpServers["build-dotnet"])' \
         '.mcpServers["build-dotnet"].env.EXTRA = "x"' \
         'del(.mcpServers.codegraph)' \
+        '.mcpServers.codegraph.type = "http"' \
+        '.mcpServers.codegraph.command = "/usr/bin/other-codegraph"' \
         '.mcpServers.codegraph.args = ["serve"]' \
         '.mcpServers.codegraph.env = {"CODEGRAPH_TELEMETRY": "1"}' \
         'del(.mcpServers.codegraph.alwaysLoad)'; do
