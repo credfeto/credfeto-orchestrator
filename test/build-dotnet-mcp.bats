@@ -59,12 +59,18 @@ write_manifest() {
         --args "$@" > "${path}"
 }
 
-# Installs a global tool stub that prints the same report as the dotnet stub.
+# Installs a global tool stub whose body is the given line, or by default one that prints the same
+# report as the dotnet stub. It is written beside the target and renamed onto it, as make_stub does,
+# so a parallel bats job never sees a half-written or not yet executable file.
 make_global_tool() {
-    mkdir -p "${GLOBAL_TOOL%/*}"
     # shellcheck disable=SC2016  # expanded by the stub, not here
-    printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "global" "cwd=$(pwd -P)" "root=${BUILD_MCP_REPO_ROOT}" "argc=$#" "$@"' > "${GLOBAL_TOOL}"
-    chmod 0755 "${GLOBAL_TOOL}"
+    local body='printf "%s\n" "global" "cwd=$(pwd -P)" "root=${BUILD_MCP_REPO_ROOT}" "argc=$#" "$@"'
+    [ "$#" -eq 0 ] || body="$1"
+    local tmp="${GLOBAL_TOOL}.$$_${RANDOM}${RANDOM}"
+    mkdir -p "${GLOBAL_TOOL%/*}"
+    printf '%s\n' '#!/usr/bin/env bash' "${body}" > "${tmp}"
+    chmod 0755 "${tmp}"
+    "${REAL_MV}" "${tmp}" "${GLOBAL_TOOL}"
 }
 
 # Makes a git repository with a nested subfolder.
@@ -227,9 +233,8 @@ make_git_repo() {
 @test "DOTNET_NOLOGO is forced to 1 for either tool, over a value the caller set" {
     # shellcheck disable=SC2016  # expanded by the stub, not here
     make_stub dotnet 'printf "%s\n" "dotnet" "nologo=${DOTNET_NOLOGO-unset}"'
-    make_global_tool
     # shellcheck disable=SC2016  # expanded by the stub, not here
-    printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "global" "nologo=${DOTNET_NOLOGO-unset}"' > "${GLOBAL_TOOL}"
+    make_global_tool 'printf "%s\n" "global" "nologo=${DOTNET_NOLOGO-unset}"'
 
     run_wrapper "${WORK}"
     [ "${status}" -eq 0 ]
@@ -255,9 +260,8 @@ make_git_repo() {
 @test "SuppressNETCoreSdkPreviewMessage is forced to true for either tool, over a value the caller set" {
     # shellcheck disable=SC2016  # expanded by the stub, not here
     make_stub dotnet 'printf "%s\n" "dotnet" "preview=${SuppressNETCoreSdkPreviewMessage-unset}"'
-    make_global_tool
     # shellcheck disable=SC2016  # expanded by the stub, not here
-    printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "global" "preview=${SuppressNETCoreSdkPreviewMessage-unset}"' > "${GLOBAL_TOOL}"
+    make_global_tool 'printf "%s\n" "global" "preview=${SuppressNETCoreSdkPreviewMessage-unset}"'
 
     run_wrapper "${WORK}"
     [ "${status}" -eq 0 ]
