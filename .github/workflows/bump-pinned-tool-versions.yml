@@ -57,7 +57,11 @@ jobs:
           - "actionlint"
           - "trufflehog"
           - "trivy"
-        # Every other tool is pinned in the action's default Dockerfile (development-tools).
+        # Single-value dimension: the Dockerfile every tool above is pinned in. Adding a second
+        # value here would run every tool against both Dockerfiles - give a tool pinned elsewhere
+        # its own include entry instead, as codegraph (development-full) has below.
+        dockerfile-path:
+          - "containers/base/development-tools/Dockerfile"
         include:
           - tool: "codegraph"
             dockerfile-path: "containers/base/development-full/Dockerfile"
@@ -73,7 +77,7 @@ jobs:
         with:
           tool: "${{matrix.tool}}"
           github-token: "${{github.token}}"
-          dockerfile-path: "${{matrix.dockerfile-path || 'containers/base/development-tools/Dockerfile'}}"
+          dockerfile-path: "${{matrix.dockerfile-path}}"
 
       - name: "Compute branch name and PR/commit subject"
         id: plan

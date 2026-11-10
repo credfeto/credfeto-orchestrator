@@ -14,8 +14,7 @@ inputs:
     required: true
   dockerfile-path:
     description: "Path to the Dockerfile containing the tool's ARG pins"
-    required: false
-    default: "containers/base/development-tools/Dockerfile"
+    required: true
 
 outputs:
   changed:
@@ -28,8 +27,8 @@ outputs:
     description: "Newly pinned version"
     value: "${{steps.bump.outputs.new-version}}"
   dockerfile-path:
-    description: "The Dockerfile path actually used (echoes the resolved input, single source of
-      truth for callers that need it, e.g. a git-auto-commit file_pattern)"
+    description: "The Dockerfile path used (echoes the dockerfile-path input, single source of truth
+      for callers that need it, e.g. a git-auto-commit file_pattern)"
     value: "${{steps.bump.outputs.dockerfile-path}}"
 
 runs:
@@ -47,8 +46,7 @@ runs:
           const fs = require("fs");
           const crypto = require("crypto");
 
-          // One entry per curl-pinned tool (in development-tools/Dockerfile, or for codegraph
-          // development-full/Dockerfile, passed in as dockerfile-path). `versionHasVPrefix`
+          // One entry per curl-pinned tool in the dockerfile-path Dockerfile. `versionHasVPrefix`
           // records whether that tool's own ARG stores the full release tag (e.g. "v2.14.0") or
           // the bare number (e.g. "1.7.12") - the two conventions already coexist in the
           // Dockerfile today (see its own "Pin CLI versions" comment block), so this mirrors
