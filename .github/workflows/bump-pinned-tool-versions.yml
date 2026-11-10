@@ -2,7 +2,8 @@
 name: "Bump pinned tool versions"
 
 # containers/base/development-tools/Dockerfile curl-installs six standalone CLI tools (hadolint,
-# dotenv-linter, sqlcmd, actionlint, trufflehog, trivy), each pinned to an exact release and
+# dotenv-linter, sqlcmd, actionlint, trufflehog, trivy), and containers/base/development-full/Dockerfile
+# one more (codegraph), each pinned to an exact release and
 # verified against a hand-recorded SHA256 checksum for supply-chain integrity (#140). Dependabot's
 # `docker` ecosystem only parses `FROM` image references, so it never sees or bumps these ARGs -
 # they only ever moved reactively, when a stale pin's own CVE started failing a Trivy scan
@@ -56,6 +57,10 @@ jobs:
           - "actionlint"
           - "trufflehog"
           - "trivy"
+        # Every other tool is pinned in the action's default Dockerfile (development-tools).
+        include:
+          - tool: "codegraph"
+            dockerfile-path: "containers/base/development-full/Dockerfile"
     steps:
       - name: "Checkout source"
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -68,6 +73,7 @@ jobs:
         with:
           tool: "${{matrix.tool}}"
           github-token: "${{github.token}}"
+          dockerfile-path: "${{matrix.dockerfile-path || 'containers/base/development-tools/Dockerfile'}}"
 
       - name: "Compute branch name and PR/commit subject"
         id: plan
@@ -159,7 +165,7 @@ jobs:
 
             Opened automatically by `.github/workflows/bump-pinned-tool-versions.yml` (#1413) -
             the checksums are recomputed from the new release's own published assets, not carried
-            over. The existing `build-development-tools` CI check (image build + each tool's own
+            over. The existing image build CI check for that Dockerfile (image build + each tool's own
             version sanity check + Trivy scan) validates the new pin before merge.
           assignees: "credfeto"
           labels: "docker,dependencies,Changelog Not Required"
