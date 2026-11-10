@@ -72,7 +72,8 @@ image requires four:
   session, whatever the repository's language.
 - `codegraph`, the code knowledge graph server (`codegraph serve --mcp`, a local stdio process).
   In a repository with no `.codegraph/` index its tools answer that the project is not indexed, so
-  it does no harm there.
+  it does no harm there. [codegraph.md](codegraph.md) covers how it is set up here and everywhere
+  else, and how to roll it back.
 
 The file may list others, such as `rider` and `webstorm`, the JetBrains IDEs' own MCP servers over
 `http` on the loopback address. The image build checks only the four required servers, so adding
@@ -145,7 +146,8 @@ This step is non-fatal: if `codegraph` fails, the entrypoint prints a warning an
 checkout has no `.git` directory, and in pre-check mode (below). Running it before `claude` keeps
 indexing from competing with the agent's own builds and tests for the container's memory.
 `codegraph init` writes `.codegraph/.gitignore`, which ignores everything else in that directory.
-That file is itself left untracked, and the image sets no global git excludes file to hide it.
+That file is itself left untracked, and the image sets no global git excludes file to hide it,
+so a repository must ignore `.codegraph/` itself (see [codegraph.md](codegraph.md#every-repository)).
 
 Only once every one of these passes does the entrypoint exec `claude` itself, handing it the
 prompt built by `oneshot` (see [oneshot.md](oneshot.md) and
