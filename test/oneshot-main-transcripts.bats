@@ -353,7 +353,7 @@ stub_pr_open_blocked() {
 
     run main
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"PR #99 in org/repo does not close any Issue in the repository, so its transcripts are not linked to an Issue's"* ]]
+    [[ "${output}" == *"PR #99 in org/repo does not close any Issue in the repository, so its transcripts and CodeGraph index are not linked to an Issue's"* ]]
     [[ "${output}" == *"PR #99 in org/repo is blocked"* ]]
     [ ! -e "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
     [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]

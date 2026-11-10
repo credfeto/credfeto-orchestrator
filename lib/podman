@@ -569,49 +569,62 @@ transcript_item_idle() {
     [ -z "${recent}" ]
 }
 
-# Removes every transcript directory idle for more than TRANSCRIPT_ITEM_RETENTION_DAYS
-# (transcript_item_idle), and every link to a directory that no longer exists.
+# Removes every per-item directory under root idle for more than TRANSCRIPT_ITEM_RETENTION_DAYS
+# (transcript_item_idle), and every link to a directory that no longer exists. Shared by the
+# transcript and CodeGraph index trees (prune_transcripts, prune_codegraph_indexes), so both
+# follow one lifecycle. noun names the contents in messages ("transcripts") and adjective the
+# link ("transcript").
 # Age-based rather than tied to an item closing, because oneshot never observes most closures (a
 # merged PR and the Issue it closes drop out of the priorities feed first), and nothing here
 # queries GitHub, because this runs before every container launch and must never fail or stall
 # the run.
-# A symlink (a pivoted PR's entry pointing at its Issue's directory, link_pivot_pr_transcripts in
+# A symlink (a pivoted PR's entry pointing at its Issue's directory, link_pivot_pr_item_dir in
 # lib/state) is never followed and never removed while its target exists: the PR's sessions write
 # through it into the Issue's directory, which keeps that directory fresh while the PR is worked.
-prune_transcripts() {
-    local transcripts_dir
-    transcripts_dir=$(transcripts_root_path)
-    [ -d "${transcripts_dir}" ] || return 0
+prune_idle_item_dirs() {
+    local root="$1" noun="$2" adjective="$3"
+    [ -d "${root}" ] || return 0
 
     local item_retention_mins=$(( TRANSCRIPT_ITEM_RETENTION_DAYS * 1440 ))
     local entry idle_status
     # Real directories first, so a link this pass leaves dangling by purging its target is
     # removed by the link pass below in the same run.
-    for entry in "${transcripts_dir}"/*; do
+    for entry in "${root}"/*; do
         # -L first: -d is also true for a live link, and rm -rf through one would purge its target.
         [ -L "${entry}" ] && continue
         [ -d "${entry}" ] || continue
         idle_status=0
         transcript_item_idle "${entry}" "${item_retention_mins}" || idle_status=$?
         if [ "${idle_status}" -eq 2 ]; then
-            warn "Failed to read transcripts at ${entry} to check their age - keeping them until the next launch"
+            warn "Failed to read ${noun} at ${entry} to check their age - keeping them until the next launch"
             continue
         fi
         [ "${idle_status}" -eq 0 ] || continue
         rm -rf "${entry}" 2>/dev/null \
-            || warn "Failed to purge transcripts at ${entry} - will retry on the next launch"
+            || warn "Failed to purge ${noun} at ${entry} - will retry on the next launch"
     done
 
-    for entry in "${transcripts_dir}"/*; do
+    for entry in "${root}"/*; do
         [ -L "${entry}" ] || continue
         # -e follows the link, so it is false only when the target is missing.
         [ -e "${entry}" ] && continue
         # rm -f on the bare link path (no trailing slash, no -r) removes the link itself and
         # never anything it points at.
         rm -f "${entry}" 2>/dev/null \
-            || warn "Failed to remove transcript link at ${entry} - will retry on the next launch"
+            || warn "Failed to remove ${adjective} link at ${entry} - will retry on the next launch"
     done
     return 0
+}
+
+# Purges idle transcript directories (prune_idle_item_dirs).
+prune_transcripts() {
+    prune_idle_item_dirs "$(transcripts_root_path)" "transcripts" "transcript"
+}
+
+# Purges idle CodeGraph index directories (prune_idle_item_dirs), on the same lifecycle as the
+# transcripts.
+prune_codegraph_indexes() {
+    prune_idle_item_dirs "$(codegraph_index_root_path)" "CodeGraph index files" "CodeGraph index"
 }
 
 # Kills the ssh-agent started by the service unit's ExecStartPre so the service
@@ -780,6 +793,25 @@ is_never_secret_file() {
     return 1
 }
 
+# Mounts the work item's CodeGraph index directory (codegraph_index_dir_path in lib/state, which
+# explains the layout and lifecycle) at the container's ${CONTAINER_REPO_PATH}/.codegraph, where
+# the entrypoint's codegraph init/sync and the codegraph MCP server look for it. Kept outside the
+# checkout, the index survives the git clean -fdX that follows every session and pre-check.
+# Called by invoke_claude only, after prepare_claude_container_args: the pre-check never builds
+# or reads the index, so its container gets no mount. podman creates the empty .codegraph
+# mountpoint in the checkout, which that git clean removes afterwards. Non-fatal: when the
+# directory cannot be created the session runs without the mount, and the entrypoint builds a
+# throwaway index in the checkout, because a missing index only makes code lookups slower.
+add_codegraph_index_podman_args() {
+    local item_type="$1" item_id="$2" index_dir
+    index_dir=$(codegraph_index_dir_path "${item_type}" "${item_id}")
+    if ! ensure_item_state_dir "${index_dir}" 2>/dev/null; then
+        warn "Failed to create CodeGraph index directory: ${index_dir} - this session's index will not be kept"
+        return 0
+    fi
+    PODMAN_RUN_ARGS+=( --volume "${index_dir}:${CONTAINER_REPO_PATH}/.codegraph:rw" )
+}
+
 # Verify all --volume source paths in PODMAN_RUN_ARGS exist with the expected
 # type before calling podman run.  Podman auto-creates any missing bind-mount
 # source as a directory; if that path is later expected to be a socket, the
@@ -909,6 +941,7 @@ invoke_claude() {
     # under any argv-length limit.
     CLAUDE_PROMPT="${prompt}"
     prepare_claude_container_args "${claude_md_content}" "${owner_token}" "${container_name}" "${item_type}" "${item_id}"
+    add_codegraph_index_podman_args "${item_type}" "${item_id}"
 
     PODMAN_CLAUDE_ARGS=(
         --model opusplan
@@ -1244,8 +1277,8 @@ prepare_precheck_section() {
 
 # Pre-flight for an agent container launch (invoke_claude): removes a leftover non-running
 # container holding container_name, dies if a running one holds it, prunes dangling images and
-# idle transcripts, and pulls ORCHESTRATOR_IMAGE (once per process). item_type and item_id only
-# feed the Discord error notifications.
+# idle transcripts and CodeGraph indexes, and pulls ORCHESTRATOR_IMAGE (once per process).
+# item_type and item_id only feed the Discord error notifications.
 ensure_agent_container_ready() {
     local container_name="$1" item_type="$2" item_id="$3"
 
@@ -1266,6 +1299,7 @@ ensure_agent_container_ready() {
 
     cleanup_dangling_images
     prune_transcripts
+    prune_codegraph_indexes
     # One pull per oneshot run, not one per item: a moved :latest can take many minutes to pull,
     # and a tick with several actionable items would otherwise pay that cost once per item.
     if [ "${ORCHESTRATOR_IMAGE_PULLED_THIS_RUN}" = "1" ]; then
@@ -1363,7 +1397,7 @@ prepare_claude_container_args() {
         mkdir -p "${CLAUDE_STATE_DIR}/${d}" || die "Failed to create persistent Claude state directory: ${CLAUDE_STATE_DIR}/${d}"
     done
     transcript_dir=$(transcript_dir_path "${item_type}" "${item_id}")
-    ensure_transcript_dir "${transcript_dir}" || die "Failed to create transcript directory: ${transcript_dir}"
+    ensure_item_state_dir "${transcript_dir}" || die "Failed to create transcript directory: ${transcript_dir}"
     # Backs the container's ~/.cache/orchestrator/global (#1380): only "global" gets a
     # persistent host directory; "local" is created by entrypoint.sh itself and stays
     # container-ephemeral.
