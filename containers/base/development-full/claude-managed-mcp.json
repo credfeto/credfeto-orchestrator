@@ -17,6 +17,12 @@
         "BUILD_MCP_REPO_ROOT": "/workspace/repo"
       }
     },
+    "codegraph": {
+      "type": "stdio",
+      "command": "codegraph",
+      "args": ["serve", "--mcp"],
+      "alwaysLoad": true
+    },
     "rider": {
       "url": "http://127.0.0.1:64482/stream",
       "type": "http"
