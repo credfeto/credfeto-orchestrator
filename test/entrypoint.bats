@@ -75,12 +75,10 @@ STUBEOF
 
     # codegraph stub: records its working directory and arguments, then succeeds, so no test
     # runs a real index build against a fixture repo.
-    cat > "${STUB_BIN}/codegraph" << 'STUBEOF'
-#!/usr/bin/env bash
-printf '%s|%s\n' "$(pwd)" "$*" >> "${TEST_TMP}/codegraph_calls"
-exit 0
-STUBEOF
-    chmod +x "${STUB_BIN}/codegraph"
+    # shellcheck disable=SC2016  # the stub body expands at stub run time
+    make_stub_multiline codegraph \
+        'printf '\''%s|%s\n'\'' "$(pwd)" "$*" >> "${TEST_TMP}/codegraph_calls"' \
+        'exit 0'
 
     # gh stub: reports git_protocol=ssh for all hosts (the expected baked-in value), and a
     # fake login for `gh api user --jq '.login'` (seed_orchestrator_cache's own call) so the
@@ -1512,12 +1510,8 @@ GHEOF
 run_entrypoint_in_repo() {
     local repo_dir="$1"
     shift
-    cat > "${STUB_BIN}/claude" << 'STUBEOF'
-#!/usr/bin/env bash
-touch "${TEST_TMP}/claude_ran"
-exit 0
-STUBEOF
-    chmod +x "${STUB_BIN}/claude"
+    # shellcheck disable=SC2016  # the stub body expands at stub run time
+    make_stub_multiline claude 'touch "${TEST_TMP}/claude_ran"' 'exit 0'
     run_entrypoint_with_hooks_env "$@" WORKSPACE_REPO_DIR="${repo_dir}"
 }
 
@@ -1569,12 +1563,8 @@ STUBEOF
 
 @test "entrypoint gives codegraph no stdin so it can never wait on a prompt" {
     setup_entrypoint_stubs
-    cat > "${STUB_BIN}/codegraph" << 'STUBEOF'
-#!/usr/bin/env bash
-cat > "${TEST_TMP}/codegraph_stdin"
-exit 0
-STUBEOF
-    chmod +x "${STUB_BIN}/codegraph"
+    # shellcheck disable=SC2016  # the stub body expands at stub run time
+    make_stub_multiline codegraph 'cat > "${TEST_TMP}/codegraph_stdin"' 'exit 0'
     local repo_dir="${TEST_TMP}/codegraph-repo"
     mkdir -p "${repo_dir}/.git"
 
