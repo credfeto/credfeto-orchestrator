@@ -449,7 +449,7 @@ Commands:
   run list                 List a repository's Actions runs for a branch or a commit, newest first
   run view                 Print an Actions run's status and jobs (exit 9 when not found)
   run log                  Print the tail of a run's failed steps' logs (exit 4 while it runs, 9 when not found)
-  run rerun                Rerun the failed jobs of a pull request's run (exit 4 while it runs, 8 when refused, 9 when not found)
+  run rerun                Rerun a pull request's run: its failed jobs, or all when a required check never ran (exit 4 while it runs, 8 when refused, 9 when not found)
   task wait                Wait, in one call, for a background command to finish (exit 4 while it runs, 9 when not found)
   help [command]           Show this help, or the help for one command
 
@@ -3164,13 +3164,13 @@ usage_run_rerun() {
     cat << USAGE
 Usage: cfwf run rerun --repo <owner/repo> --run <id>
 
-Reruns only the failed jobs of one GitHub Actions run of an open pull request's head, within
-limits. It never reruns a whole run.
+Reruns one GitHub Actions run of an open pull request's head, within limits: its failed jobs,
+or, when it has none and a required check of the pull request never ran, the whole run. Which one
+is decided from the run and the pull request's checks, never by an option.
 
 --repo  Always required; never taken from the current directory.
 --run   Always required: the run's id, digits only, above 0.
-gh's --failed is always passed and there is no option for a full rerun: --failed, --job, --debug,
---all, --json, --jq, --template and --web are not options.
+--failed, --job, --debug, --all, --json, --jq, --template and --web are not options.
 
 Each rule is checked in this order, before anything is written. A run that breaks one is refused
 with "cfwf: rerun refused: <rule>" on stderr, which names only the rule:
@@ -3186,18 +3186,32 @@ with "cfwf: rerun refused: <rule>" on stderr, which names only the rule:
 At most ${PR_LIST_LIMIT} open pull requests on the branch are looked at; more is a runtime failure.
 
 Only a run that passes every rule is looked at for its status: one that has not completed
-(queued, in progress or waiting) exits ${RUN_PENDING_EXIT}, and its failed jobs can be rerun once it has.
+(queued, in progress or waiting) exits ${RUN_PENDING_EXIT}, and it can be rerun once it has.
 So a run that is refused is never reported as pending.
+
+A completed run has failed jobs unless its conclusion is success, neutral or skipped and so is
+the conclusion of every job of its latest attempt; then only its failed jobs are rerun (gh's
+--failed). A run with no failed jobs is rerun whole, only when a check the pull request's base
+branch requires (from its protection and rulesets, read as pr checks reads them) has no check run
+and no commit status at all on the head commit: the job that reports it was never created, so
+GitHub has no failed job to rerun. The pull request is read again for this, and a head that has
+moved since the run is refused as not an open pull request head. Otherwise it is refused, after
+the rules above:
+  no failed jobs and no required check missing
+                                 the run has no failed jobs and every required check has a result
+                                 on the head commit, finished or not (one still running comes from
+                                 another run, which a rerun of this one would not start).
 
 Output, one line:
   Rerunning failed jobs of run <id> (attempt <n>)
+  Rerunning all jobs of run <id> (attempt <n>): required check <name> never ran
 where <n> is the attempt the rerun starts: one more than the run's attempt when it was read. It is
-not read back, because GitHub can lag behind a write.
+not read back, because GitHub can lag behind a write. <name> is the first required check, by
+name, that never ran.
 
 A failed rerun request is a runtime failure, and the request may still have reached GitHub. Running
 the command again is safe: a rerun that did start leaves the run in progress (exit ${RUN_PENDING_EXIT}), and the
-attempt limit still applies. A run that already succeeded has no failed jobs, so GitHub refuses
-it and that is a runtime failure too.
+attempt limit still applies.
 
 Exit codes: 0 the rerun was requested; ${POLICY_REFUSED_EXIT} refused by a rule (naming the rule; nothing was
 written); ${RUN_PENDING_EXIT} the run is still in progress; ${RUN_NOT_FOUND_EXIT} the run was not found in the repository; 1 a runtime
@@ -9679,6 +9693,12 @@ RUN_WORKFLOW_NAME=""
 RUN_EVENT=""
 RUN_ATTEMPT=""
 RUN_CREATED_AT=""
+# run rerun: the open pull request whose head is the run's (refuse_run_not_open_pull_request_head),
+# the lowest-numbered when there is more than one, and the first required check that never ran.
+RUN_PR=""
+MISSING_CHECK=""
+# The jobs of a run's latest attempt (read_run_jobs), one row each.
+declare -ga RUN_JOB_ROWS=()
 # run list, run view and run log: the options as given, checked (assign_run_option).
 JOB_ID=""
 RUN_BRANCH=""
@@ -9778,7 +9798,8 @@ readonly RUN_PR_HEADS_PROGRAM="${ROW_FIELD_DEF}"' sort_by(.number) | (length | t
 readonly NOT_PR_HEAD_RULE="not an open pull request head"
 
 # Refuses a run whose head commit is not the head of an open pull request of REPO whose head branch
-# is the run's: none on the branch, or one whose head has moved since the run. Every row is checked
+# is the run's: none on the branch, or one whose head has moved since the run. Sets RUN_PR to the
+# lowest-numbered pull request whose head is the run's. Every row is checked
 # before the answer is used, so a row gh matched on anything but the exact branch, or one cut short,
 # is a runtime failure, and so is a branch with more open pull requests than PR_LIST_LIMIT, which
 # are never judged in part.
@@ -9794,14 +9815,59 @@ refuse_run_not_open_pull_request_head() {
     for row in "${COUNTED_ROWS[@]}"; do
         IFS=$'\t' read -r number head sha <<< "${row}"
         [[ "${number}" =~ ^[0-9]+$ && "${head}" = "${RUN_HEAD_BRANCH}" && "${sha}" =~ ^[0-9a-f]{40}$ ]] || die "${unexpected}"
-        [ "${sha}" != "${RUN_HEAD_SHA}" ] || matched=1
+        [ "${sha}" != "${RUN_HEAD_SHA}" ] || [ -n "${matched}" ] || matched="${number}"
     done
     [ -n "${matched}" ] || refuse_policy rerun "${NOT_PR_HEAD_RULE}"
+    RUN_PR="${matched}"
+}
+
+# Succeeds when the completed run has no failed job: its conclusion is a pass (check_run_verdict)
+# and so is that of every job of its latest attempt (read_run_jobs). A run whose conclusion is not
+# a pass is taken to have one without its jobs being read, so its failed jobs are rerun as before.
+run_has_no_failed_job() {
+    local row conclusion
+    check_run_verdict "${RUN_CONCLUSION}"
+    [ "${VERDICT}" = pass ] || return 1
+    read_run_jobs "gh returned an unexpected result for the run ${RUN_ID} of ${REPO}"
+    for row in "${RUN_JOB_ROWS[@]}"; do
+        conclusion="${row##*$'\t'}"
+        [ "${conclusion}" != - ] || conclusion=""
+        check_run_verdict "${conclusion}"
+        [ "${VERDICT}" = pass ] || return 1
+    done
+}
+
+readonly NO_MISSING_CHECK_RULE="no failed jobs and no required check missing"
+
+# Sets MISSING_CHECK to the printed name of the first required check, by name, that never ran on
+# the head of the pull request RUN_PR: one with no check run and no commit status at all, judged
+# as pr checks judges it (resolve_checks_head, read_required_checks, read_check_results and
+# judge_check). A head that has moved since the run is refused as not an open pull request head,
+# and a pull request whose required checks all have a result is refused under
+# NO_MISSING_CHECK_RULE, so nothing is written for either.
+find_required_check_never_ran() {
+    local check name missing=""
+    PR="${RUN_PR}"
+    resolve_checks_head
+    [ "${HEAD_SHA}" = "${RUN_HEAD_SHA}" ] || refuse_policy rerun "${NOT_PR_HEAD_RULE}"
+    read_required_checks "${REPO}" "${RULES_BRANCH}" "could not read the branch protection of ${REPO}" \
+        || die "the branch whose required checks apply was not found in ${REPO}"
+    read_check_results
+    for check in "${!REQUIRED_CHECKS[@]}"; do
+        name="${check%%"${ROW_SEPARATOR}"*}"
+        judge_check "${name}" "${check#*"${ROW_SEPARATOR}"}"
+        [ -n "${RESULT_ID}" ] || missing+="${PRINTED_NAME["${name}"]}"$'\n'
+    done
+    [ -n "${missing}" ] || refuse_policy rerun "${NO_MISSING_CHECK_RULE}"
+    MISSING_CHECK="$(LC_ALL=C sort <<< "${missing%$'\n'}")" || die "could not sort the required checks on ${HEAD_SHA}"
+    MISSING_CHECK="${MISSING_CHECK%%$'\n'*}"
 }
 
 # Reruns the failed jobs of the run RUN_ID of REPO, at most once, and only after every rule has
-# passed. The rules come before the pending check: a refusal is final, while pending invites the
-# caller to try again, which a refused run must never be told to do.
+# passed; a run with no failed jobs is rerun whole only when a required check of its pull request
+# never ran (find_required_check_never_ran), and refused otherwise. The rules come before the
+# pending check: a refusal is final, while pending invites the caller to try again, which a refused
+# run must never be told to do.
 run_rerun() {
     parse_command_options assign_run_option "--repo --run" "" "$@"
     require REPO --repo
@@ -9814,6 +9880,13 @@ run_rerun() {
     if [ "${RUN_STATUS}" != completed ]; then
         printf 'cfwf: the run %s of %s is %s; its failed jobs can be rerun once it is complete\n' "${RUN_ID}" "${REPO}" "${RUN_STATUS}" >&2
         exit "${RUN_PENDING_EXIT}"
+    fi
+    if run_has_no_failed_job; then
+        find_required_check_never_ran
+        gh_capture run rerun "${RUN_ID}" --repo "${REPO}" \
+            || die "could not rerun all jobs of the run ${RUN_ID} of ${REPO}: $(gh_failure_text)"
+        printf 'Rerunning all jobs of run %s (attempt %s): required check %s never ran\n' "${RUN_ID}" "$((RUN_ATTEMPT + 1))" "${MISSING_CHECK}"
+        return 0
     fi
     gh_capture run rerun "${RUN_ID}" --failed --repo "${REPO}" \
         || die "could not rerun the failed jobs of the run ${RUN_ID} of ${REPO}: $(gh_failure_text)"
@@ -9959,20 +10032,13 @@ dash_if_empty() {
     printf '%s' "${1:--}"
 }
 
-# Prints the run RUN_ID of REPO and its jobs, from two reads: the run (read_run) and its latest
-# attempt's jobs, every page. Nothing is printed until both have been checked: the count of jobs
-# must be the same on every page, at most RUN_JOB_LIMIT and the number of job rows that came.
-run_view() {
-    local unexpected row kind id name status conclusion end count=""
-    local -a jobs=()
-    parse_command_options assign_run_option "--repo --run" "" "$@"
-    require REPO --repo
-    require RUN_ID --run
-    require_gh
-    unexpected="gh returned an unexpected result for the run ${RUN_ID} of ${REPO}"
-    read_run
-    [[ "${RUN_CONCLUSION}" =~ ^[a-z_]*$ && "${RUN_EVENT}" =~ ^[a-z_]+$ ]] || die "${unexpected}"
-    matches_pattern "${RUN_CREATED_AT}" "${TIMESTAMP_PATTERN}" || die "${unexpected}"
+# Sets RUN_JOB_ROWS to the jobs of the latest attempt of the run RUN_ID of REPO, from one read of
+# every page, a row each: id, name, status and conclusion, tab-separated, with - for an empty name
+# or conclusion. The count of jobs must be the same on every page, at most RUN_JOB_LIMIT and the
+# number of job rows that came; anything else, a failed read included, dies with $1.
+read_run_jobs() {
+    local unexpected="$1" row kind id name status conclusion end count=""
+    RUN_JOB_ROWS=()
     api_read "could not read the jobs of the run ${RUN_ID} of ${REPO}" \
         "repos/${REPO}/actions/runs/${RUN_ID}/jobs?per_page=${API_PAGE_SIZE}&filter=latest" \
         "${FIELDS_ROW_DEF} ([\"count\", .total_count, \"end\"] | fields_row), (.jobs[]? | [\"job\", .id, .name, .status, .conclusion, \"end\"] | fields_row)" \
@@ -9990,16 +10056,31 @@ run_view() {
             job)
                 [[ "${id}" =~ ^[0-9]{1,19}$ && "${status}" =~ ^[a-z_]+$ && "${conclusion}" =~ ^[a-z_]*$ && "${end}" = end ]] \
                     || die "${unexpected}"
-                jobs+=("${id}"$'\t'"$(dash_if_empty "${name}")"$'\t'"${status}"$'\t'"$(dash_if_empty "${conclusion}")")
+                RUN_JOB_ROWS+=("${id}"$'\t'"$(dash_if_empty "${name}")"$'\t'"${status}"$'\t'"$(dash_if_empty "${conclusion}")")
                 ;;
             *) die "${unexpected}" ;;
         esac
     done <<< "${GH_OUTPUT}"
-    [ -n "${count}" ] && [ "${count}" -le "${RUN_JOB_LIMIT}" ] && [ "${count}" -eq "${#jobs[@]}" ] || die "${unexpected}"
+    [ -n "${count}" ] && [ "${count}" -le "${RUN_JOB_LIMIT}" ] && [ "${count}" -eq "${#RUN_JOB_ROWS[@]}" ] || die "${unexpected}"
+}
+
+# Prints the run RUN_ID of REPO and its jobs, from two reads: the run (read_run) and its latest
+# attempt's jobs (read_run_jobs). Nothing is printed until both have been checked.
+run_view() {
+    local unexpected
+    parse_command_options assign_run_option "--repo --run" "" "$@"
+    require REPO --repo
+    require RUN_ID --run
+    require_gh
+    unexpected="gh returned an unexpected result for the run ${RUN_ID} of ${REPO}"
+    read_run
+    [[ "${RUN_CONCLUSION}" =~ ^[a-z_]*$ && "${RUN_EVENT}" =~ ^[a-z_]+$ ]] || die "${unexpected}"
+    matches_pattern "${RUN_CREATED_AT}" "${TIMESTAMP_PATTERN}" || die "${unexpected}"
+    read_run_jobs "${unexpected}"
     printf 'status\t%s\nconclusion\t%s\nhead_sha\t%s\nhead_branch\t%s\nworkflow\t%s\nevent\t%s\nattempt\t%s\ncreated_at\t%s\n' \
         "${RUN_STATUS}" "$(dash_if_empty "${RUN_CONCLUSION}")" "${RUN_HEAD_SHA}" "$(dash_if_empty "${RUN_HEAD_BRANCH}")" \
         "$(dash_if_empty "${RUN_WORKFLOW_NAME}")" "${RUN_EVENT}" "${RUN_ATTEMPT}" "${RUN_CREATED_AT}"
-    [ "${#jobs[@]}" -eq 0 ] || printf 'job\t%s\n' "${jobs[@]}" | LC_ALL=C sort -t $'\t' -k2,2n
+    [ "${#RUN_JOB_ROWS[@]}" -eq 0 ] || printf 'job\t%s\n' "${RUN_JOB_ROWS[@]}" | LC_ALL=C sort -t $'\t' -k2,2n
 }
 
 # How gh answers a log read of a run that has started again since it was read.
