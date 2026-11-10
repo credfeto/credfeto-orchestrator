@@ -47,7 +47,7 @@ ARG CODEGRAPH_SHA256_ARM64=c8c6be292be21d00dea26bad8b28d434731cf612fb8cc475dc10f
 # in by development-dotnet-tools / development-credfeto-tools (this image's
 # base chain) — nothing to redo here.
 
-# ---- codegraph — code knowledge graph CLI (colbymchenry/codegraph) ----------
+# ---- codegraph: code knowledge graph CLI (colbymchenry/codegraph) ------------
 # The standalone release is a directory, not a single binary: a launcher in
 # bin/, its own bundled Node runtime and the app under lib/. It is unpacked
 # whole into /opt/codegraph and the launcher, which resolves its own symlink,
