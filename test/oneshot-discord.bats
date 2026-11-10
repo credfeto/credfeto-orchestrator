@@ -1040,6 +1040,40 @@ STUBEOF
     grep -q "Blocked" "${args_log}"
 }
 
+@test "notify_discord_blocked_issue_replanning does not call curl when no webhook is configured" {
+    DISCORD_WEBHOOK_URL=""
+    DISCORD_WEBHOOK_URL_BLOCKED=""
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_blocked_issue_replanning "42"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${args_log}" ]
+}
+
+@test "notify_discord_blocked_issue_replanning posts the Issue link to the Blocked webhook" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/general"
+    DISCORD_WEBHOOK_URL_BLOCKED="https://discord.example.com/blocked"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_blocked_issue_replanning "42"
+    [ "${status}" -eq 0 ]
+    grep -q "https://discord.example.com/blocked" "${args_log}"
+    run ! grep -q "https://discord.example.com/general" "${args_log}"
+    grep -q "https://github.com/org/repo/issues/42" "${args_log}"
+    grep -q "Re-planning Blocked Issue #42: org/repo" "${args_log}"
+}
+
+@test "notify_discord_blocked_issue_replanning returns 0 when the post fails" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    make_stub curl 'exit 22'
+    run notify_discord_blocked_issue_replanning "42"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Discord webhook notification failed"* ]]
+}
+
 @test "notify_discord_blocked_item calls curl with embed payload for a blocked PullRequest" {
     DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
     set_repo_context "org/repo"

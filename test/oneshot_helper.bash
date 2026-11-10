@@ -95,6 +95,7 @@ setup_main_mocks() {
     notify_discord_pr_waiting()        { return 0; }
     notify_discord_no_work()           { return 0; }
     notify_discord_blocked_item()      { return 0; }
+    notify_discord_blocked_issue_replanning() { return 0; }
     notify_discord_pr_needs_approval() { return 0; }
     notify_discord_claude_error()      { return 0; }
     notify_discord_rate_limited()      { return 0; }

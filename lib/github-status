@@ -928,6 +928,23 @@ issue_should_advance_unchanged() {
     [ "${ISSUE_INVOCATION_IDLE}" -lt "${MAX_ISSUE_IDLE_INVOCATIONS}" ]
 }
 
+# Decides whether a Blocked Issue is really unplanned and should be re-invoked to plan rather than
+# skipped: no plan comment, a board card still at "Not Started" or "Planning", no recovery yet in
+# this Blocked spell, and invocation budget left. A Blocked Issue with a plan is left for its human
+# approval. The budget check also excludes the orchestrator's own idle-exhausted block, which would
+# otherwise be undone on the next tick. Cheap local checks run before the board lookup.
+issue_blocked_without_plan_needs_replan() {
+    local item_id="$1" issue_json="$2" board_status
+    issue_blocked_replan_marked "${item_id}" && return 1
+    issue_json_has_plan_comment "${issue_json}" && return 1
+    [ -f "$(runaway_blocked_marker_file_path "Issue" "${item_id}")" ] && return 1
+    load_issue_invocation_counts "${item_id}"
+    [ "${ISSUE_INVOCATION_TOTAL}" -lt "${MAX_ISSUE_TOTAL_INVOCATIONS}" ] || return 1
+    [ "${ISSUE_INVOCATION_IDLE}" -lt "${MAX_ISSUE_IDLE_INVOCATIONS}" ] || return 1
+    board_status=$(board_substatus_for_item "${item_id}")
+    [ "${board_status}" = "Not Started" ] || [ "${board_status}" = "Planning" ]
+}
+
 # Returns 0 (true) if the pre-fetched PR JSON has at least one required check that has not yet
 # reached a terminal result. Returns 1 (false) when statusCheckRollup is absent, empty, or every
 # required entry is terminal. Non-required (optional) checks are ignored so they cannot gate agent

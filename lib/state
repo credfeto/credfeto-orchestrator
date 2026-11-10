@@ -608,6 +608,34 @@ clear_issue_plan_block_marker() {
     rm -f "$(issue_plan_block_marker_file_path "${item_id}")" 2>/dev/null || true
 }
 
+# Returns the path to the per-Issue "Blocked with no plan, re-invoked to plan" marker. It limits
+# that recovery to once per Blocked spell: an Issue the agent blocked to wait on a human answer
+# also has no plan yet, and re-planning it every tick would only re-ask the same question.
+issue_blocked_replan_marker_file_path() {
+    local item_id="$1"
+    printf '%s/Issue_%s.blocked-replan' "${SESSION_BASE_DIR}" "${item_id}"
+}
+
+# Returns 0 (true) if the recovery marker above is present for this Issue.
+issue_blocked_replan_marked() {
+    [ -f "$(issue_blocked_replan_marker_file_path "$1")" ]
+}
+
+# Writes the recovery marker. Best-effort: a failed write only allows one more recovery attempt.
+mark_issue_blocked_replan() {
+    local item_id="$1"
+    mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null
+    touch "$(issue_blocked_replan_marker_file_path "${item_id}")" 2>/dev/null \
+        || warn "Failed to write blocked-replan marker for Issue #${item_id}: it may be re-invoked to plan once more while still Blocked"
+}
+
+# Clears the recovery marker, so a later Blocked spell can recover again. Call where the Issue is
+# observed open and not Blocked.
+clear_issue_blocked_replan_marker() {
+    local item_id="$1"
+    rm -f "$(issue_blocked_replan_marker_file_path "${item_id}")" 2>/dev/null || true
+}
+
 # Returns the path to the per-item "previous session ended by backgrounding a local check and
 # stopping its turn to wait for a later notification" marker (#1326/credfeto-orchestrator#1335).
 # Written by invoke_claude (lib/podman) whenever the just-completed session's own result text

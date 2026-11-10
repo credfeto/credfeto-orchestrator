@@ -106,6 +106,7 @@ source "${ONESHOT_DIR}/lib/podman" \
 # pr_json_has_unaddressed_review_request, block_pr_for_idle_exhausted_review,
 # block_pr_for_idle_exhausted_no_progress, pr_json_needs_review_approval,
 # pr_should_advance_unchanged, issue_should_advance_unchanged,
+# issue_blocked_without_plan_needs_replan,
 # block_issue_for_idle_exhausted_no_progress, and block_issue_for_idle_exhausted_no_plan are
 # declared in lib/github-status.
 # github_incident_open is declared in lib/github-health.
@@ -154,13 +155,15 @@ source "${ONESHOT_DIR}/lib/podman" \
 # build_item_url, notify_discord_work_item, notify_discord_no_work,
 # notify_discord_low_disk_space, notify_discord_priorities_unreachable, notify_discord_blocked_item,
 # notify_discord_pr_needs_approval, notify_discord_claude_error, notify_discord_permission_denials,
-# notify_discord_session_stalled, notify_discord_daily_digest, notify_discord_rate_limited, and
-# notify_discord_host_health are declared in lib/discord.
+# notify_discord_session_stalled, notify_discord_daily_digest, notify_discord_rate_limited,
+# notify_discord_blocked_issue_replanning, and notify_discord_host_health are declared in
+# lib/discord.
 
 # SECRET_REDACTION_SED_EXPRESSIONS and redact_secrets are declared in lib/secret-patterns.
 
-# rearm_closed_issue_markers, tag_pr_closed_issue and link_pivot_pr_transcripts are declared in
-# lib/state.
+# rearm_closed_issue_markers, tag_pr_closed_issue, link_pivot_pr_transcripts,
+# issue_blocked_replan_marker_file_path, issue_blocked_replan_marked, mark_issue_blocked_replan
+# and clear_issue_blocked_replan_marker are declared in lib/state.
 
 main() {
     local owner_filter=""
@@ -511,6 +514,7 @@ main() {
                 # reset already happened above via reset_issue_invocation_counts_if_capped
                 # (#1093, #1115, #1310).
                 clear_blocked_marker "Issue" "${item_id}"
+                clear_issue_blocked_replan_marker "${item_id}"
                 # Issue observed open — re-arm the one-time closed-issue checks so a future
                 # reopen/re-close cycle is tagged again (#1134 review round 3, #1103).
                 rearm_closed_issue_markers "${item_id}"
@@ -801,6 +805,13 @@ main() {
                 fi
 
                 if issue_json_has_blocked_label "${issue_json}" \
+                    && issue_blocked_without_plan_needs_replan "${item_id}" "${issue_json}"; then
+                    # Blocked with no plan leaves a human nothing to approve, so plan it instead
+                    # of skipping it.
+                    info "Issue #${item_id} in ${item_repo} is blocked with no plan posted, re-invoking to plan"
+                    mark_issue_blocked_replan "${item_id}"
+                    notify_discord_blocked_issue_replanning "${item_id}"
+                elif issue_json_has_blocked_label "${issue_json}" \
                     || ! reset_issue_invocation_counts_if_capped "${item_id}" "${item_repo}"; then
                     info "Issue #${item_id} in ${item_repo} is blocked — skipping"
                     mark_capped_block_for_forgiveness "Issue" "${item_id}" "${item_repo}"
@@ -808,11 +819,13 @@ main() {
                     count_blocked=$((count_blocked + 1))
                     item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "blocked - skipping")")
                     continue
+                else
+                    # Issue observed open and un-blocked — re-arm its blocked notifier and its
+                    # blocked-replan recovery; the budget reset already happened above via
+                    # reset_issue_invocation_counts_if_capped (#1093, #1115, #1310).
+                    clear_blocked_marker "Issue" "${item_id}"
+                    clear_issue_blocked_replan_marker "${item_id}"
                 fi
-                # Issue observed open and un-blocked — re-arm its blocked notifier; the budget
-                # reset already happened above via reset_issue_invocation_counts_if_capped
-                # (#1093, #1115, #1310).
-                clear_blocked_marker "Issue" "${item_id}"
                 # Issue observed open — re-arm the one-time closed-issue checks so a future
                 # reopen/re-close cycle is tagged again (#1134 review round 3, #1103).
                 rearm_closed_issue_markers "${item_id}"
