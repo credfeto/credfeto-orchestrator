@@ -118,7 +118,13 @@ time and money with nothing to show for it. Two independent budgets catch this:
   catch up, a human review). An Issue that never had a plan posted at all is treated the same way,
   re-invoked up to this cap to actually produce one; only an Issue whose plan *was* posted and is
   awaiting a human decision skips this cap entirely, since that's the ordinary "waiting on a
-  human" case, not idle churn.
+  human" case, not idle churn. A PR that is unchanged but behind its base or in conflict with it is
+  re-run so the rebase gets a turn, and counts against this cap like any other idle re-run: a
+  session that pushes a rebase is progress, and one that leaves the conflicts in place is not, so a
+  PR whose conflicts the automation can't resolve is Blocked with that reason instead of being
+  re-run on every tick. A PR that is already handed off (auto-merge on, nothing failed or pending)
+  and only waits for a human review is left alone even when it is behind its base: auto-merge or a
+  human brings it up to date, and once it is approved the orchestrator rebases it as before.
 
 Both caps reset automatically once a human clears the `Blocked` label on an item that was capped
 — but *only* if it was actually blocked *because* it was capped; a PR blocked for an unrelated

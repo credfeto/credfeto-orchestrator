@@ -624,6 +624,22 @@ block_pr_for_idle_exhausted_no_progress() {
     apply_blocked_label_with_reason "PullRequest" "${item_id}" "${item_repo}" "${reason}"
 }
 
+# Posts a Blocked-marking comment and label when a PR that is unchanged and BEHIND or DIRTY ($3) has
+# been re-run until its idle budget ran out (#1654): every session left the head commit, the board
+# and the trusted comments as they were, so the branch is still not up to date with its base. For
+# DIRTY that means merge conflicts the automation could not resolve (the agent's rebase phase posts
+# the conflict details and stops); for BEHIND, a branch the automation could not bring up to date.
+# Same shape as block_pr_for_idle_exhausted_failure and its siblings, above.
+block_pr_for_idle_exhausted_merge_state() {
+    local item_id="$1" item_repo="$2" merge_state="$3"
+    local reason="This PR's branch is behind its base and the automation could not bring it up to date: its idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted without further progress. Blocking this PR until a human investigates."
+    if [ "${merge_state}" = "DIRTY" ]; then
+        reason="This PR has merge conflicts that the automation could not resolve: its idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted without a resolution being pushed. Blocking this PR until a human resolves the conflicts."
+    fi
+    reason=$(append_last_diagnostic_to_reason "PullRequest" "${item_id}" "${reason}")
+    apply_blocked_label_with_reason "PullRequest" "${item_id}" "${item_repo}" "${reason}"
+}
+
 # Posts a Blocked-marking comment and label when a plan-approved Issue's idle-invocation budget
 # has been exhausted with no durable progress observed (no new PR, no new trusted comment/label/
 # state change) — mirrors block_pr_for_idle_exhausted_failure/_review for Issues (#1264). Pushing
@@ -749,8 +765,35 @@ block_issue_for_unapplied_plan_approval() {
 pr_should_advance_unchanged() {
     local item_id="$1" pr_json="$2" has_unaddressed_comment="${3:-false}"
     pr_json_is_terminal "${pr_json}" && [ "${has_unaddressed_comment}" != "true" ] && return 1
+    pr_within_idle_budget "${item_id}"
+}
+
+# Returns 0 (true) when the PR's idle counter is still below MAX_PR_IDLE_INVOCATIONS, 1 once it has
+# reached the cap. Loads the PR's counters (load_pr_invocation_counts), so PR_INVOCATION_IDLE and
+# PR_INVOCATION_TOTAL are set for the caller's post-session accounting. Shared by
+# pr_should_advance_unchanged and the unchanged BEHIND/DIRTY re-run in oneshot (#1654), so the cap
+# is tested in one place.
+pr_within_idle_budget() {
+    local item_id="$1"
     load_pr_invocation_counts "${item_id}"
     [ "${PR_INVOCATION_IDLE}" -lt "${MAX_PR_IDLE_INVOCATIONS}" ]
+}
+
+# Returns 0 (true) when oneshot's settled check (pr_json_is_terminal) may be applied to a PR in merge
+# state $2 (#1654). A DIRTY PR never: its conflicts need the non-agentic rebase, or an agent. A
+# BEHIND PR only when GitHub reports the review decision REVIEW_REQUIRED (pr_json_needs_review_approval):
+# a PR that is handed off and waits on nothing but a human review gains nothing from a rebase or an
+# agent session, and auto-merge or a human updates it. Without that, a push to the base left every
+# handed-off PR in a repository BEHIND and each one got a session on every tick. Once it is
+# approved (or has no review decision at all) a BEHIND PR is not settled, so the non-agentic rebase
+# brings it up to date for auto-merge, as before. Any other merge state may be settled.
+pr_merge_state_allows_settled() {
+    local pr_json="$1" merge_state="$2"
+    case "${merge_state}" in
+        DIRTY) return 1 ;;
+        BEHIND) pr_json_needs_review_approval "${pr_json}" ;;
+        *) return 0 ;;
+    esac
 }
 
 # Decides whether a PR session re-invoked with no external change should be left uncharged against

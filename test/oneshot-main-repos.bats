@@ -976,6 +976,69 @@ main_dependency_flag() {
     [ -f "${_invoke_log}" ]
 }
 
+@test "main treats a handed-off BEHIND pivot PR that only waits on human review as settled, with no rebase and no agent (#1654)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"fix/x","comments":[],"reviews":[],"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"mergeStateStatus":"BEHIND","autoMergeRequest":{"enabledAt":"now"}}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    fingerprint_issue_json()    { printf 'issue-fp-same\n'; }
+    load_issue_fingerprint()    { printf 'issue-fp-same\n'; }
+    try_nonagentic_rebase()     { printf 'rebased\n' >> "${TEST_TMP}/rebase_log"; return 0; }
+    save_pr_invocation_counts 99 2 2
+    local _invoke_log="${TEST_TMP}/invoke_log"
+    invoke_claude() { printf 'invoked\n' >> "${_invoke_log}"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 in org/repo: settled (ready to merge, nothing failed/pending; BEHIND, left for auto-merge or a human to update) — no agent needed"* ]]
+    [[ "${output}" != *"re-running"* ]]
+    [ ! -f "${TEST_TMP}/rebase_log" ]
+    [ ! -f "${_invoke_log}" ]
+}
+
+@test "main charges the idle budget for an unchanged DIRTY pivot PR, and blocks it with the merge-conflict reason once the budget is exhausted (#1654)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"fix/x","comments":[],"reviews":[],"statusCheckRollup":[],"mergeStateStatus":"DIRTY"}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    fingerprint_issue_json()    { printf 'issue-fp-same\n'; }
+    load_issue_fingerprint()    { printf 'issue-fp-same\n'; }
+    save_pr_invocation_counts 99 2 "$((MAX_PR_IDLE_INVOCATIONS - 1))"
+    local _invoke_log="${TEST_TMP}/invoke_log"
+    invoke_claude() { printf 'invoked\n' >> "${_invoke_log}"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 in org/repo unchanged but DIRTY - re-running (idle budget $((MAX_PR_IDLE_INVOCATIONS - 1))/${MAX_PR_IDLE_INVOCATIONS})"* ]]
+    [ -f "${_invoke_log}" ]
+    load_pr_invocation_counts 99
+    [ "${PR_INVOCATION_IDLE}" -eq "${MAX_PR_IDLE_INVOCATIONS}" ]
+    [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
+
+    # The next tick finds the budget exhausted: Blocked with the merge-conflict reason, no session.
+    rm -f "${_invoke_log}"
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 in org/repo: idle budget exhausted while unchanged and DIRTY — blocking"* ]]
+    [ ! -f "${_invoke_log}" ]
+    grep -q 'pr comment 99 --repo org/repo --body This PR has merge conflicts that the automation could not resolve' "${GH_CALL_LOG}"
+}
+
 @test "main defers a pivot PR whose only running check is a head-commit run absent from the rollup, without charging it (#1860)" {
     setup_main_mocks
     fetch_all_priorities() {
