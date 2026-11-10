@@ -360,6 +360,25 @@ seed_orchestrator_cache() {
     fi
 }
 
+# Builds or refreshes the CodeGraph index that the managed codegraph MCP server reads. It runs
+# here, before claude starts, so indexing never overlaps the agent's own builds and tests in the
+# container's memory limit. `init` is keyed on the database rather than the directory because
+# `sync` fails on a .codegraph/ that has no codegraph.db, while `init` rebuilds it. `--yes` is
+# required: without it `init` can wait on a stdin select prompt even with no TTY. Non-fatal on
+# failure: a missing or stale index only makes code lookups slower.
+# WORKSPACE_REPO_DIR overrides the repo path (used by tests).
+refresh_codegraph_index() {
+    local repo_dir="${WORKSPACE_REPO_DIR:-/workspace/repo}"
+    [ -d "${repo_dir}/.git" ] || return 0
+
+    local -a codegraph_args=(sync -q)
+    [ -f "${repo_dir}/.codegraph/codegraph.db" ] || codegraph_args=(init --yes -v)
+
+    info "Running codegraph ${codegraph_args[0]} in ${repo_dir}"
+    (cd "${repo_dir}" && codegraph "${codegraph_args[@]}" < /dev/null) \
+        || warn "codegraph ${codegraph_args[0]} failed in ${repo_dir}, continuing without an up-to-date code index"
+}
+
 enforce_gh_git_protocol_ssh
 verify_gpg_signing
 ensure_github_known_hosts
@@ -433,5 +452,7 @@ if [ "${ORCHESTRATOR_PRECHECK:-}" = "1" ]; then
     info "orchestrator-precheck: running pre-commit-check"
     exec pre-commit-check
 fi
+
+refresh_codegraph_index
 
 exec claude "$@"
