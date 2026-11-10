@@ -12,10 +12,7 @@
     },
     "build-dotnet": {
       "type": "stdio",
-      "command": "/home/developer/.dotnet/tools/credfeto-build-dotnet",
-      "env": {
-        "BUILD_MCP_REPO_ROOT": "/workspace/repo"
-      }
+      "command": "/etc/claude-code/mcp/build-dotnet-mcp"
     },
     "rider": {
       "url": "http://127.0.0.1:64482/stream",

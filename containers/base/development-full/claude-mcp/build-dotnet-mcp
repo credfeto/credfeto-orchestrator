@@ -1,0 +1,72 @@
+#!/bin/sh
+
+# Starts the build-dotnet MCP server (managed-mcp.json) for whichever user runs
+# Claude Code, so one root-owned file serves every user on a host and the
+# container alike.
+#
+# BUILD_MCP_REPO_ROOT, the repository the server works on, is kept when it is
+# already set (the container image sets it to its mount). Otherwise it is the
+# root of the git repository holding the project directory (CLAUDE_PROJECT_DIR,
+# or the directory Claude Code started this in when that is unset), or that
+# directory itself outside a repository. It is resolved before the cd below,
+# which would otherwise lose the start directory.
+#
+# The server is the credfeto-build-dotnet local tool when ~/dotnet-tools.json
+# lists it, run from $HOME: dotnet tool run looks for a manifest from the
+# current directory upwards, so a repository's own root manifest would
+# otherwise hide the user's. Otherwise it is the global tool in
+# ~/.dotnet/tools, as the container installs it.
+#
+# stdout is the MCP stream, so only the server writes to it: every message here
+# goes to stderr.
+
+fail() {
+    printf 'build-dotnet-mcp: %s\n' "$*" >&2
+    exit 1
+}
+
+tool_command="credfeto-build-dotnet"
+
+[ -n "${HOME:-}" ] || fail "HOME is not set"
+local_manifest="${HOME}/dotnet-tools.json"
+global_tool="${HOME}/.dotnet/tools/${tool_command}"
+
+project_dir() {
+    # Claude Code documents CLAUDE_PROJECT_DIR for stdio servers but not their working
+    # directory, so the working directory is only the fallback.
+    if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ -d "${CLAUDE_PROJECT_DIR}" ]; then
+        printf '%s' "${CLAUDE_PROJECT_DIR}"
+        return 0
+    fi
+    pwd
+}
+
+if [ -z "${BUILD_MCP_REPO_ROOT:-}" ]; then
+    # dash's pwd prints nothing yet succeeds when the directory has been removed.
+    start_dir=$(project_dir)
+    if [ -z "${start_dir}" ] || [ ! -d "${start_dir}" ]; then
+        fail "cannot read the directory Claude Code was started in"
+    fi
+    BUILD_MCP_REPO_ROOT=$(git -C "${start_dir}" rev-parse --show-toplevel 2>/dev/null) \
+        || BUILD_MCP_REPO_ROOT="${start_dir}"
+fi
+export BUILD_MCP_REPO_ROOT
+
+manifest_lists_tool() {
+    [ -f "${local_manifest}" ] || return 1
+    jq -e --arg command "${tool_command}" 'any(.tools[]?.commands?[]?; $command == .)' \
+        "${local_manifest}" >/dev/null 2>&1
+}
+
+if manifest_lists_tool; then
+    command -v dotnet >/dev/null 2>&1 || fail "${local_manifest} lists ${tool_command}, but dotnet is not on PATH"
+    # Reading the manifest above needs the same search permission on HOME as this cd, so the
+    # cd only fails if HOME changes in between; dotnet then never runs outside HOME.
+    cd "${HOME}" && exec dotnet tool run "${tool_command}" "$@"
+fi
+
+if [ -f "${global_tool}" ] && [ -x "${global_tool}" ]; then
+    exec "${global_tool}" "$@"
+fi
+
+fail "${tool_command} not found: install it as a local tool in ${local_manifest} or as a global tool in ${global_tool%/*}"
