@@ -56,7 +56,7 @@ On top of all of that, this final image:
 
 Claude Code can reach only the MCP servers pinned by `development-full` in a root-owned
 `/etc/claude-code/managed-mcp.json`, so the agent cannot add a server or point one anywhere else. The
-image requires three:
+image requires four:
 
 - `cfwf`, the workflow MCP server at `https://workflow-mcp.markridgwell.com/mcp`. The file holds
   no token. A root-owned helper hands Claude Code's MCP client the GitHub token the container
@@ -70,9 +70,12 @@ image requires three:
 - `build-dotnet`, the .NET build, test and coverage server (`credfeto-build-dotnet`, a local stdio
   process), working on the repository at `/workspace/repo` (#1818). It is registered for every
   session, whatever the repository's language.
+- `codegraph`, the code knowledge graph server (`codegraph serve --mcp`, a local stdio process).
+  In a repository with no `.codegraph/` index its tools answer that the project is not indexed, so
+  it does no harm there.
 
 The file may list others, such as `rider` and `webstorm`, the JetBrains IDEs' own MCP servers over
-`http` on the loopback address. The image build checks only the three required servers, so adding
+`http` on the loopback address. The image build checks only the four required servers, so adding
 another server does not break it (#1850).
 
 ## What the entrypoint checks before the agent ever starts
