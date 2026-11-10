@@ -1,0 +1,179 @@
+#!/usr/bin/env bats
+# shellcheck disable=SC2329  # functions in @test bodies are invoked indirectly via 'run'
+# shellcheck disable=SC2030,SC2031  # bats test bodies run in subshells; variable modifications are intentionally scoped
+# shellcheck disable=SC2034  # variables set in test bodies are used inside run() subshells where shellcheck cannot trace them
+#
+# The per-work-item CodeGraph index directory (#1882): codegraph_index_dir_path and
+# link_pivot_pr_codegraph_index (lib/state), add_codegraph_index_podman_args and
+# prune_codegraph_indexes (lib/podman), and the pivot wiring in main (oneshot). The index follows
+# the transcript lifecycle, whose shared helpers test/oneshot-main-transcripts.bats covers in full.
+
+bats_require_minimum_version 1.5.0
+
+load test_helper
+load oneshot_helper
+
+CODEGRAPH_MOUNT_SUFFIX=":/workspace/repo/.codegraph:rw"
+
+# Writes an index database into an item's CodeGraph index directory.
+make_codegraph_index() {
+    local item_name="$1"
+    mkdir -p "${SESSION_BASE_DIR}/codegraph/${item_name}"
+    printf 'index\n' > "${SESSION_BASE_DIR}/codegraph/${item_name}/codegraph.db"
+}
+
+# Sets every file under an item's CodeGraph index directory to the given age.
+age_codegraph_index_files() {
+    local item_name="$1" days="$2"
+    find "${SESSION_BASE_DIR}/codegraph/${item_name}" -type f -exec touch -d "${days} days ago" {} +
+}
+
+# The CodeGraph index mounts in a podman args log, one line each.
+codegraph_mounts() {
+    local args_log="$1"
+    grep -- "${CODEGRAPH_MOUNT_SUFFIX}\$" "${args_log}" || true
+}
+
+@test "codegraph_index_dir_path is per work item, under SESSION_BASE_DIR/codegraph" {
+    [ "$(codegraph_index_root_path)" = "${SESSION_BASE_DIR}/codegraph" ]
+    [ "$(codegraph_index_dir_path Issue 42)" = "${SESSION_BASE_DIR}/codegraph/Issue_42" ]
+    [ "$(codegraph_index_dir_path PullRequest 7)" = "${SESSION_BASE_DIR}/codegraph/PullRequest_7" ]
+}
+
+@test "invoke_claude creates the item's CodeGraph index directory with mode 0700 and mounts it at the checkout's .codegraph" {
+    local args_log="${TEST_TMP}/podman_args"
+    stub_podman_run_logging_args "${args_log}"
+    invoke_claude "test prompt" "Issue" "42" "# per-item instructions" 2>/dev/null
+    local index_dir="${SESSION_BASE_DIR}/codegraph/Issue_42"
+    [ "$(codegraph_mounts "${args_log}")" = "${index_dir}${CODEGRAPH_MOUNT_SUFFIX}" ]
+    [ -d "${index_dir}" ]
+    [ "$(stat -c %a "${index_dir}")" = "700" ]
+    [ "$(stat -c %a "${SESSION_BASE_DIR}/codegraph")" = "700" ]
+}
+
+@test "the index is kept across runs of the same item and survives the checkout's git clean -fdX" {
+    local args_log="${TEST_TMP}/podman_args"
+    stub_podman_run_logging_args "${args_log}"
+    git -C "${REPO_WORK_DIR}" init -q
+    printf '.codegraph/\n' > "${REPO_WORK_DIR}/.gitignore"
+    make_codegraph_index "Issue_42"
+
+    invoke_claude "test prompt" "Issue" "42" "# per-item instructions" 2>/dev/null
+    # The empty mountpoint podman leaves in the checkout is what the clean after a session removes.
+    mkdir -p "${REPO_WORK_DIR}/.codegraph"
+    git -C "${REPO_WORK_DIR}" clean -q -fdX
+    invoke_claude "test prompt" "Issue" "42" "# per-item instructions" 2>/dev/null
+
+    [ ! -e "${REPO_WORK_DIR}/.codegraph" ]
+    [ "$(cat "${SESSION_BASE_DIR}/codegraph/Issue_42/codegraph.db")" = "index" ]
+    [ "$(codegraph_mounts "${args_log}" | sort -u)" = "${SESSION_BASE_DIR}/codegraph/Issue_42${CODEGRAPH_MOUNT_SUFFIX}" ]
+    [ "$(codegraph_mounts "${args_log}" | wc -l)" -eq 2 ]
+}
+
+@test "a different work item gets its own empty index directory, so the entrypoint runs a fresh init" {
+    local args_log="${TEST_TMP}/podman_args"
+    stub_podman_run_logging_args "${args_log}"
+    make_codegraph_index "Issue_42"
+
+    invoke_claude "test prompt" "Issue" "43" "# per-item instructions" 2>/dev/null
+
+    [ "$(codegraph_mounts "${args_log}")" = "${SESSION_BASE_DIR}/codegraph/Issue_43${CODEGRAPH_MOUNT_SUFFIX}" ]
+    [ ! -e "${SESSION_BASE_DIR}/codegraph/Issue_43/codegraph.db" ]
+    [ -f "${SESSION_BASE_DIR}/codegraph/Issue_42/codegraph.db" ]
+}
+
+@test "invoke_claude warns and launches without the index mount when the index directory cannot be created" {
+    local args_log="${TEST_TMP}/podman_args"
+    stub_podman_run_logging_args "${args_log}"
+    mkdir -p "${SESSION_BASE_DIR}"
+    printf 'not a directory\n' > "${SESSION_BASE_DIR}/codegraph"
+    run invoke_claude "test prompt" "Issue" "42" "# per-item instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to create CodeGraph index directory: ${SESSION_BASE_DIR}/codegraph/Issue_42 - this session's index will not be kept"* ]]
+    [ "$(grep -cx 'run' "${args_log}")" -eq 1 ]
+    [ -z "$(codegraph_mounts "${args_log}")" ]
+}
+
+@test "invoke_claude purges an idle item's CodeGraph index before launching and keeps a fresh one" {
+    local args_log="${TEST_TMP}/podman_args"
+    stub_podman_run_logging_args "${args_log}"
+    make_codegraph_index "Issue_5"
+    age_codegraph_index_files "Issue_5" 15
+    make_codegraph_index "Issue_6"
+    age_codegraph_index_files "Issue_6" 8
+    invoke_claude "test prompt" "Issue" "42" "# per-item instructions" 2>/dev/null
+    [ ! -e "${SESSION_BASE_DIR}/codegraph/Issue_5" ]
+    [ -f "${SESSION_BASE_DIR}/codegraph/Issue_6/codegraph.db" ]
+    [ -d "${SESSION_BASE_DIR}/codegraph/Issue_42" ]
+}
+
+@test "prune_codegraph_indexes warns in CodeGraph terms when a purge or a link removal fails" {
+    make_codegraph_index "Issue_15"
+    age_codegraph_index_files "Issue_15" 15
+    ln -s "Issue_99" "${SESSION_BASE_DIR}/codegraph/PullRequest_98"
+    # Defined inside the function so the failing rm only exists in run's subshell and never
+    # reaches teardown, which needs the real rm.
+    prune_with_failing_deletes() {
+        rm() { return 1; }
+        prune_codegraph_indexes
+    }
+    run prune_with_failing_deletes
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to purge CodeGraph index files at ${SESSION_BASE_DIR}/codegraph/Issue_15 - will retry on the next launch"* ]]
+    [[ "${output}" == *"Failed to remove CodeGraph index link at ${SESSION_BASE_DIR}/codegraph/PullRequest_98 - will retry on the next launch"* ]]
+}
+
+@test "prune_codegraph_indexes removes a dangling link and is a no-op when the tree does not exist" {
+    run prune_codegraph_indexes
+    [ "${status}" -eq 0 ]
+    [ ! -e "${SESSION_BASE_DIR}/codegraph" ]
+    mkdir -p "${SESSION_BASE_DIR}/codegraph"
+    ln -s "Issue_99" "${SESSION_BASE_DIR}/codegraph/PullRequest_98"
+    run prune_codegraph_indexes
+    [ "${status}" -eq 0 ]
+    [ ! -L "${SESSION_BASE_DIR}/codegraph/PullRequest_98" ]
+}
+
+@test "link_pivot_pr_codegraph_index links the PR's index directory to the Issue's and records pivot activity" {
+    make_codegraph_index "Issue_10"
+    age_codegraph_index_files "Issue_10" 15
+    run link_pivot_pr_codegraph_index "10" "99"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    [ "$(readlink "${SESSION_BASE_DIR}/codegraph/PullRequest_99")" = "Issue_10" ]
+    [ -f "${SESSION_BASE_DIR}/codegraph/Issue_10/${TRANSCRIPT_PIVOT_ACTIVITY_FILE_NAME}" ]
+    # The pivot's activity keeps the Issue's idle index through the prune before the launch.
+    run prune_codegraph_indexes
+    [ -f "${SESSION_BASE_DIR}/codegraph/PullRequest_99/codegraph.db" ]
+}
+
+@test "link_pivot_pr_codegraph_index keeps a PR index of its own and says so in CodeGraph terms" {
+    make_codegraph_index "PullRequest_99"
+    run link_pivot_pr_codegraph_index "10" "99"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 already has CodeGraph index files of its own at ${SESSION_BASE_DIR}/codegraph/PullRequest_99, so they are kept and not linked to Issue #10"* ]]
+    [ ! -L "${SESSION_BASE_DIR}/codegraph/PullRequest_99" ]
+}
+
+@test "invoke_claude mounts a pivoted PR's linked index directory, so the PR syncs the Issue's index" {
+    local args_log="${TEST_TMP}/podman_args"
+    stub_podman_run_logging_args "${args_log}"
+    make_codegraph_index "Issue_10"
+    link_pivot_pr_codegraph_index "10" "99"
+    invoke_claude "test prompt" "PullRequest" "99" "# per-item instructions" 2>/dev/null
+    [ "$(codegraph_mounts "${args_log}")" = "${SESSION_BASE_DIR}/codegraph/PullRequest_99${CODEGRAPH_MOUNT_SUFFIX}" ]
+    [ "$(readlink "${SESSION_BASE_DIR}/codegraph/PullRequest_99")" = "Issue_10" ]
+    [ -f "${SESSION_BASE_DIR}/codegraph/Issue_10/codegraph.db" ]
+}
+
+@test "main links the CodeGraph index of the PR an Issue pivots to into the Issue's directory" {
+    setup_main_pivot_mocks
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"closingIssuesReferences":[{"number":10}]}\n'; }
+    pr_json_has_blocked_label() { return 0; }
+    try_auto_unblock_env_diagnosed_pr() { return 1; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(readlink "${SESSION_BASE_DIR}/codegraph/PullRequest_99")" = "Issue_10" ]
+    [ -d "${SESSION_BASE_DIR}/codegraph/Issue_10" ]
+}
