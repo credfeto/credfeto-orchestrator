@@ -224,6 +224,34 @@ make_git_repo() {
     [ "${output}" = "$(printf '%s\n' dotnet "cwd=${USER_HOME}" "root=${WORK}" argc=6 tool run credfeto-build-dotnet --flag 'two words' '')" ]
 }
 
+@test "DOTNET_NOLOGO is forced to 1 for either tool, over a value the caller set" {
+    # shellcheck disable=SC2016  # expanded by the stub, not here
+    make_stub dotnet 'printf "%s\n" "dotnet" "nologo=${DOTNET_NOLOGO-unset}"'
+    make_global_tool
+    # shellcheck disable=SC2016  # expanded by the stub, not here
+    printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "global" "nologo=${DOTNET_NOLOGO-unset}"' > "${GLOBAL_TOOL}"
+
+    run_wrapper "${WORK}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(printf '%s\n' global nologo=1)" ]
+
+    WRAPPER_ENV=(DOTNET_NOLOGO=0)
+    run_wrapper "${WORK}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(printf '%s\n' global nologo=1)" ]
+
+    write_manifest "${USER_HOME}/dotnet-tools.json" credfeto-build-dotnet
+    WRAPPER_ENV=()
+    run_wrapper "${WORK}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(printf '%s\n' dotnet nologo=1)" ]
+
+    WRAPPER_ENV=(DOTNET_NOLOGO=false)
+    run_wrapper "${WORK}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(printf '%s\n' dotnet nologo=1)" ]
+}
+
 @test "with neither tool found it fails with a message on stderr and nothing on stdout" {
     run_wrapper "${WORK}"
     [ "${status}" -ne 0 ]
