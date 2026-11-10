@@ -58,9 +58,13 @@ CodeGraph needs. Nothing has to be done by hand.
   }
   ```
 
-- **Permissions.** `claude-managed-settings.json` allows `mcp__codegraph__*` and
-  `Bash(codegraph *)`. The hook allowlist, `claude-hooks/command-allowlist`, lists `codegraph` as
-  a `writer`, because `init` and `sync` write the repository's `.codegraph/` index.
+- **Permissions.** `claude-managed-settings.json` allows `mcp__codegraph__*`, and in the shell
+  only `codegraph explore` and `codegraph sync` (`Bash(codegraph explore *)`,
+  `Bash(codegraph sync)` and `Bash(codegraph sync *)`). It has no blanket `Bash(codegraph *)`, so
+  `install`, `uninstall`, `upgrade`, `uninit` and `telemetry` are not allowed, and `init` is left
+  to the entrypoint (in the container) or the user (on a workstation). The hook allowlist,
+  `claude-hooks/command-allowlist`, lists `codegraph` as a `writer`, because `init` and `sync`
+  write the repository's `.codegraph/` index.
 - **The index.** The entrypoint builds or refreshes the index just before it starts `claude`. With
   no `.codegraph/codegraph.db` it runs `codegraph init --yes -v`; otherwise it runs
   `codegraph sync -q`. The index lives in the host's checkout, so it persists between containers.
@@ -148,9 +152,10 @@ the only platforms the pinned archives cover. Other platforms are listed on the
 
 1. **Re-run `install-claude-hooks` after the container change is merged.** Pull this repository's
    checkout first. The re-run installs the managed files that now include CodeGraph: `codegraph`
-   in the hook allowlist, `mcp__codegraph__*` and `Bash(codegraph *)` in the managed permissions,
-   and the `codegraph` server in `/etc/claude-code/managed-mcp.json`. Until then, the host's hooks
-   refuse every `codegraph` shell command with
+   in the hook allowlist, `mcp__codegraph__*` and the `codegraph explore` and `codegraph sync`
+   entries in the managed permissions, and the `codegraph` server in
+   `/etc/claude-code/managed-mcp.json`. Until then, the host's hooks refuse every `codegraph`
+   shell command with
    `command is not permitted - no legitimate need for it in this workflow`. Start a new Claude Code
    session to pick up the change.
 
