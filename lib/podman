@@ -810,7 +810,7 @@ is_never_secret_file() {
 
 # Mounts the work item's CodeGraph index directory (codegraph_index_dir_path in lib/state, which
 # explains the layout and lifecycle) at the container's ${CONTAINER_REPO_PATH}/.codegraph, where
-# the entrypoint's codegraph init/sync and the codegraph MCP server look for it. Kept outside the
+# the entrypoint's codegraph init and the codegraph MCP server look for it. Kept outside the
 # checkout, the index survives the git clean -fdX that follows every session and pre-check.
 # Called by invoke_claude only, after prepare_claude_container_args: the pre-check never builds
 # or reads the index, so its container gets no mount. podman creates the empty .codegraph
