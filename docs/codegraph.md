@@ -22,7 +22,7 @@ TypeScript/JavaScript.
 | --- | --- | --- |
 | [Agent container](#agent-container) | Pinned CLI, managed MCP server, permissions, hook allowlist, index at start | Done in this repository |
 | [Developer workstations](#developer-workstations) | Pinned CLI, Claude Code wiring, `install-claude-hooks` re-run, per-repository index | Manual, per workstation |
-| [Every repository](#every-repository) | `.codegraph/` in `.gitignore` | Templates done; reaches each repository through the `.gitignore` sync |
+| [Every repository](#every-repository) | `.codegraph/` in `.gitignore` | Templates done; reaches each repository through the `.gitignore` sync. The agent container also excludes it in every checkout it works on |
 | [Agent definitions](#agent-definitions) | `mcp__codegraph__*` in the agents' tool lists, plus a usage note | [credfeto/credfeto-ai-skills#60](https://github.com/credfeto/credfeto-ai-skills/issues/60) |
 | [Shared instructions](#shared-instructions) | The CodeGraph section in cs-template's global instructions | Not started |
 
@@ -200,14 +200,18 @@ not cover a repository, add the two lines by hand:
 
 `git check-ignore -q .codegraph/` confirms the result.
 
-**Open gap.** `codegraph init` writes `.codegraph/.gitignore` (`*` and `!.gitignore`). That keeps
-the index itself out of git, but leaves that one file visible. In a repository that does not yet
-ignore `.codegraph/`, a `git add -A`, by an agent in the container or anyone else, would commit
-`.codegraph/.gitignore`. The image sets no global git excludes file to hide it (see
+**The container closes the gap.** `codegraph init` writes `.codegraph/.gitignore` (`*` and
+`!.gitignore`). That keeps the index itself out of git, but leaves that one file visible. In a
+repository that does not yet ignore `.codegraph/`, a `git add -A` would commit
+`.codegraph/.gitignore`. So before it indexes, and in pre-check mode too, the agent container's
+entrypoint adds `.codegraph/` to the checkout's `.git/info/exclude` (`exclude_codegraph_from_git`
+in `containers/agent/entrypoint.sh`). It appends the line only when it is missing, creates
+`.git/info/` when needed, and never touches the repository's tracked `.gitignore`. If the write
+fails it only warns (see
 [agent-container.md](agent-container.md#what-the-entrypoint-checks-before-the-agent-ever-starts)).
-A container-side fix, with the entrypoint adding `.codegraph/` to the checkout's
-`.git/info/exclude`, is not decided yet and is tracked on #1882. Until then, check that a
-repository ignores `.codegraph/` before agents work on it.
+The exclude is local to that checkout and is never pushed, so the `.gitignore` lines above are
+still wanted. On a workstation nothing writes the exclude, so check that a repository ignores
+`.codegraph/` before indexing it there.
 
 To undo this part, leave the ignore line in place. It does nothing when no index exists.
 
@@ -257,7 +261,8 @@ To undo this part, revert the cs-template change.
 ## Rollout order
 
 1. Confirm that the repositories the agents work on ignore `.codegraph/` (templates done; check
-   that the sync has reached them).
+   that the sync has reached them). The container's `.git/info/exclude` entry covers a repository
+   the sync has not reached yet.
 1. Merge this repository's container change. The image rebuilds, and the next agent sessions
    index their repository at start.
 1. Merge [credfeto/credfeto-ai-skills#60](https://github.com/credfeto/credfeto-ai-skills/issues/60)
@@ -266,7 +271,6 @@ To undo this part, revert the cs-template change.
    `install-claude-hooks`, and index the repositories wanted.
 1. Move the CodeGraph section into cs-template's global instructions and remove the per-user
    block.
-1. Decide the `.git/info/exclude` question in [Every repository](#every-repository).
 
 ## Judging whether it is worth it
 
@@ -302,4 +306,6 @@ If agents rarely call it, or the counts do not drop, roll it back.
    1. Pull the reverted checkout of this repository and re-run `install-claude-hooks`, so the
       managed files no longer list `codegraph`. The order matters: a `codegraph` entry still in
       `~/.claude.json` would be copied back into `/etc/claude-code/managed-mcp.json`.
-1. **Repositories.** Leave `.codegraph/` in `.gitignore`.
+1. **Repositories.** Leave `.codegraph/` in `.gitignore`. The `.codegraph/` line the container
+   added to each checkout's `.git/info/exclude` is local, never pushed and harmless; it can be
+   left or deleted by hand.
