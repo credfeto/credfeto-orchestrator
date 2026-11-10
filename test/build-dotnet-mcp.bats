@@ -30,6 +30,9 @@ setup() {
 
     WORK="$(cd "${TEST_TMP}" && pwd -P)/work"
     mkdir -p "${WORK}"
+    # Every wrapper run gets these, so git never finds a repository above the test's own
+    # directory (GIT_CEILING_DIRECTORIES) or reads the host's system config.
+    GIT_ISOLATION_ENV=("GIT_CEILING_DIRECTORIES=${WORK}" GIT_CONFIG_NOSYSTEM=1)
 }
 
 teardown() {
@@ -40,14 +43,13 @@ teardown() {
 # Runs the wrapper from the given start directory with only the variables Claude Code would pass
 # (env -i drops every BUILD_MCP_REPO_ROOT the host exported) plus any NAME=value in WRAPPER_ENV,
 # passing the remaining arguments through, stdout in output and stderr in stderr.
-# GIT_CEILING_DIRECTORIES stops git finding any repository above the test's own directory.
 WRAPPER_ENV=()
 run_wrapper() {
     local start_dir="$1"
     shift
     cd "${start_dir}" || return 1
     run --separate-stderr env -i "PATH=${STUB_BIN}" "HOME=${USER_HOME}" \
-        "GIT_CEILING_DIRECTORIES=${WORK}" GIT_CONFIG_NOSYSTEM=1 "${WRAPPER_ENV[@]}" "${WRAPPER}" "$@"
+        "${GIT_ISOLATION_ENV[@]}" "${WRAPPER_ENV[@]}" "${WRAPPER}" "$@"
 }
 
 # Writes a tool manifest at the given path listing the given commands.
@@ -296,12 +298,12 @@ assert_forced_for_both_tools() {
 @test "with HOME unset or empty it fails with a message on stderr and nothing on stdout" {
     make_global_tool
     cd "${WORK}" || return 1
-    run --separate-stderr env -i "PATH=${STUB_BIN}" "${WRAPPER}"
+    run --separate-stderr env -i "PATH=${STUB_BIN}" "${GIT_ISOLATION_ENV[@]}" "${WRAPPER}"
     [ "${status}" -ne 0 ]
     [ -z "${output}" ]
     [ "${stderr}" = "build-dotnet-mcp: HOME is not set" ]
 
-    run --separate-stderr env -i "PATH=${STUB_BIN}" HOME= "${WRAPPER}"
+    run --separate-stderr env -i "PATH=${STUB_BIN}" HOME= "${GIT_ISOLATION_ENV[@]}" "${WRAPPER}"
     [ "${status}" -ne 0 ]
     [ -z "${output}" ]
     [ "${stderr}" = "build-dotnet-mcp: HOME is not set" ]
@@ -312,7 +314,7 @@ assert_forced_for_both_tools() {
     mkdir -p "${WORK}/gone"
     cd "${WORK}/gone" || return 1
     rm -rf "${WORK}/gone"
-    run --separate-stderr env -i "PATH=${STUB_BIN}" "HOME=${USER_HOME}" "${WRAPPER}"
+    run --separate-stderr env -i "PATH=${STUB_BIN}" "HOME=${USER_HOME}" "${GIT_ISOLATION_ENV[@]}" "${WRAPPER}"
     [ "${status}" -ne 0 ]
     [ -z "${output}" ]
     [[ "${stderr}" == *"build-dotnet-mcp: cannot read the directory Claude Code was started in" ]]
@@ -324,7 +326,7 @@ assert_forced_for_both_tools() {
     cd "${WORK}/gone" || return 1
     rm -rf "${WORK}/gone"
     run --separate-stderr env -i "PATH=${STUB_BIN}" "HOME=${USER_HOME}" \
-        "GIT_CEILING_DIRECTORIES=${WORK}" "CLAUDE_PROJECT_DIR=${WORK}/project" "${WRAPPER}"
+        "${GIT_ISOLATION_ENV[@]}" "CLAUDE_PROJECT_DIR=${WORK}/project" "${WRAPPER}"
     [ "${status}" -eq 0 ]
     [ "${lines[0]}" = "global" ]
     [ "${lines[2]}" = "root=${WORK}/project" ]
