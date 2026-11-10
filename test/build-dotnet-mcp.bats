@@ -230,58 +230,42 @@ make_git_repo() {
     [ "${output}" = "$(printf '%s\n' dotnet "cwd=${USER_HOME}" "root=${WORK}" argc=6 tool run credfeto-build-dotnet --flag 'two words' '')" ]
 }
 
-@test "DOTNET_NOLOGO is forced to 1 for either tool, over a value the caller set" {
-    # shellcheck disable=SC2016  # expanded by the stub, not here
-    make_stub dotnet 'printf "%s\n" "dotnet" "nologo=${DOTNET_NOLOGO-unset}"'
-    # shellcheck disable=SC2016  # expanded by the stub, not here
-    make_global_tool 'printf "%s\n" "global" "nologo=${DOTNET_NOLOGO-unset}"'
+# Checks that the variable named "$1" reaches both tools as "$2": unset by the caller and over the
+# caller's "$3" for the global tool, then unset and over the caller's "$4" for the local tool.
+assert_forced_for_both_tools() {
+    local name="$1" forced="$2" global_override="$3" local_override="$4"
+    local report="printf \"%s\\n\" \"\${0##*/}\" \"value=\${${name}-unset}\""
+    make_stub dotnet "${report}"
+    make_global_tool "${report}"
 
+    WRAPPER_ENV=()
     run_wrapper "${WORK}"
     [ "${status}" -eq 0 ]
-    [ "${output}" = "$(printf '%s\n' global nologo=1)" ]
+    [ "${output}" = "$(printf '%s\n' credfeto-build-dotnet "value=${forced}")" ]
 
-    WRAPPER_ENV=(DOTNET_NOLOGO=0)
+    WRAPPER_ENV=("${name}=${global_override}")
     run_wrapper "${WORK}"
     [ "${status}" -eq 0 ]
-    [ "${output}" = "$(printf '%s\n' global nologo=1)" ]
+    [ "${output}" = "$(printf '%s\n' credfeto-build-dotnet "value=${forced}")" ]
 
     write_manifest "${USER_HOME}/dotnet-tools.json" credfeto-build-dotnet
     WRAPPER_ENV=()
     run_wrapper "${WORK}"
     [ "${status}" -eq 0 ]
-    [ "${output}" = "$(printf '%s\n' dotnet nologo=1)" ]
+    [ "${output}" = "$(printf '%s\n' dotnet "value=${forced}")" ]
 
-    WRAPPER_ENV=(DOTNET_NOLOGO=false)
+    WRAPPER_ENV=("${name}=${local_override}")
     run_wrapper "${WORK}"
     [ "${status}" -eq 0 ]
-    [ "${output}" = "$(printf '%s\n' dotnet nologo=1)" ]
+    [ "${output}" = "$(printf '%s\n' dotnet "value=${forced}")" ]
+}
+
+@test "DOTNET_NOLOGO is forced to 1 for either tool, over a value the caller set" {
+    assert_forced_for_both_tools DOTNET_NOLOGO 1 0 false
 }
 
 @test "SuppressNETCoreSdkPreviewMessage is forced to true for either tool, over a value the caller set" {
-    # shellcheck disable=SC2016  # expanded by the stub, not here
-    make_stub dotnet 'printf "%s\n" "dotnet" "preview=${SuppressNETCoreSdkPreviewMessage-unset}"'
-    # shellcheck disable=SC2016  # expanded by the stub, not here
-    make_global_tool 'printf "%s\n" "global" "preview=${SuppressNETCoreSdkPreviewMessage-unset}"'
-
-    run_wrapper "${WORK}"
-    [ "${status}" -eq 0 ]
-    [ "${output}" = "$(printf '%s\n' global preview=true)" ]
-
-    WRAPPER_ENV=(SuppressNETCoreSdkPreviewMessage=false)
-    run_wrapper "${WORK}"
-    [ "${status}" -eq 0 ]
-    [ "${output}" = "$(printf '%s\n' global preview=true)" ]
-
-    write_manifest "${USER_HOME}/dotnet-tools.json" credfeto-build-dotnet
-    WRAPPER_ENV=()
-    run_wrapper "${WORK}"
-    [ "${status}" -eq 0 ]
-    [ "${output}" = "$(printf '%s\n' dotnet preview=true)" ]
-
-    WRAPPER_ENV=(SuppressNETCoreSdkPreviewMessage=)
-    run_wrapper "${WORK}"
-    [ "${status}" -eq 0 ]
-    [ "${output}" = "$(printf '%s\n' dotnet preview=true)" ]
+    assert_forced_for_both_tools SuppressNETCoreSdkPreviewMessage true false ''
 }
 
 @test "with neither tool found it fails with a message on stderr and nothing on stdout" {
