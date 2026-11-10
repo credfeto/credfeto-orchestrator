@@ -148,8 +148,14 @@ This step is non-fatal: if `codegraph` fails, the entrypoint prints a warning an
 checkout has no `.git` directory, and in pre-check mode (below). Running it before `claude` keeps
 indexing from competing with the agent's own builds and tests for the container's memory.
 `codegraph init` writes `.codegraph/.gitignore`, which ignores everything else in that directory.
-That file is itself left untracked, and the image sets no global git excludes file to hide it,
-so a repository must ignore `.codegraph/` itself (see [codegraph.md](codegraph.md#every-repository)).
+That file is itself left untracked, and the image sets no global git excludes file to hide it.
+So before indexing, the entrypoint adds `.codegraph/` to the checkout's `.git/info/exclude`
+(`exclude_codegraph_from_git`), which keeps a `git add -A` from committing it in a repository
+whose `.gitignore` does not yet ignore `.codegraph/` (see
+[codegraph.md](codegraph.md#every-repository)). It runs in pre-check mode too, appends the line
+only when it is missing, creates `.git/info/` when needed and never touches the tracked
+`.gitignore`. If the write fails it only warns, because the repository's own `.gitignore` may
+already ignore `.codegraph/`.
 Because the mount sits over the checkout, `git` inside the container sees those files exactly as
 it would in a plain directory.
 
@@ -271,7 +277,10 @@ code. If it cannot be created, `oneshot` warns and starts the session without th
 entrypoint then builds an index in the checkout, which the `git clean` afterwards deletes. Only
 the agent's own container gets the mount. The pre-check container does not, because the
 entrypoint never builds or reads the index in pre-check mode. Podman creates the empty
-`.codegraph` mountpoint in the checkout, and the `git clean` after the session removes it.
+`.codegraph` mountpoint in the checkout, and the `git clean` after the session removes it. That
+works in every repository, because `git clean -X` removes only ignored files and the
+entrypoint's `.git/info/exclude` entry makes `.codegraph/` ignored even where `.gitignore` does
+not list it.
 CodeGraph's SQLite database and its lock files sit on a plain bind mount of a local directory,
 owned by the user the container's `developer` maps to, so they behave as they would in the
 checkout.

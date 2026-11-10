@@ -379,6 +379,34 @@ refresh_codegraph_index() {
         || warn "codegraph ${codegraph_args[0]} failed in ${repo_dir}, continuing without an up-to-date code index"
 }
 
+# Adds .codegraph/ to the checkout's .git/info/exclude, so a repository whose .gitignore does not
+# yet ignore it can never have the .codegraph/.gitignore that `codegraph init` writes committed by
+# a `git add -A`, and so oneshot's git clean -fdX removes the .codegraph mountpoint afterwards.
+# The repository's tracked .gitignore is never touched. It runs in both the agent and pre-check
+# containers, which share the checkout, and writes as the host user that owns .git (keep-id).
+# Idempotent: appends only when the exact line is missing, after adding a final newline to an
+# exclude file that lacks one, so the entry never joins the last line. Non-fatal on failure:
+# the repository's own .gitignore may still ignore .codegraph/.
+# WORKSPACE_REPO_DIR overrides the repo path (used by tests).
+exclude_codegraph_from_git() {
+    local repo_dir="${WORKSPACE_REPO_DIR:-/workspace/repo}"
+    [ -d "${repo_dir}/.git" ] || return 0
+
+    local exclude_file="${repo_dir}/.git/info/exclude"
+    grep -qxF '.codegraph/' "${exclude_file}" 2>/dev/null && return 0
+
+    if ! mkdir -p "${repo_dir}/.git/info" 2>/dev/null; then
+        warn "Failed to create ${repo_dir}/.git/info, .codegraph/ is not excluded from git"
+        return 0
+    fi
+    local separator=""
+    if [ -s "${exclude_file}" ] && [ -n "$(tail -c 1 "${exclude_file}" 2>/dev/null)" ]; then
+        separator=$'\n'
+    fi
+    printf '%s.codegraph/\n' "${separator}" 2>/dev/null >> "${exclude_file}" \
+        || warn "Failed to add .codegraph/ to ${exclude_file}, .codegraph/ is not excluded from git"
+}
+
 enforce_gh_git_protocol_ssh
 verify_gpg_signing
 ensure_github_known_hosts
@@ -441,6 +469,8 @@ export XDG_RUNTIME_DIR="${WORKSPACE_TMP_DIR:-/workspace/tmp}"
 # even though TMPDIR is set (upstream only partially respects it: some paths, e.g.
 # CWD tracking files, still hardcode /tmp/claude-* regardless - anthropics/claude-code#31024).
 export CLAUDE_CODE_TMPDIR="${WORKSPACE_TMP_DIR:-/workspace/tmp}"
+
+exclude_codegraph_from_git
 
 # Pre-check mode (#1785): oneshot's run_precommit_precheck (lib/podman) launches this image
 # with ORCHESTRATOR_PRECHECK=1 to run pre-commit-check on the checked-out head before an agent
