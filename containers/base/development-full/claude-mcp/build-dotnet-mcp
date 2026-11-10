@@ -69,10 +69,17 @@ manifest_lists_tool() {
     # A manifest that cannot be read is fatal rather than "not listed": falling back would start
     # the global tool, or report it missing, when the user asked for their local one.
     command -v jq >/dev/null 2>&1 || fail "${local_manifest} exists, but jq is not on PATH to read it"
-    # jq -e exits 1 for a false result and above 1 when it cannot read, parse or index the file;
-    # its own message goes to stderr ahead of ours.
-    jq -e --arg command "${tool_command}" 'any(.tools[]?.commands?[]?; $command == .)' \
-        "${local_manifest}" >/dev/null
+    # jq -e exits 1 for a false result and above 1 when it cannot read or parse the file, or the
+    # filter raises an error; its own message goes to stderr ahead of ours. Anything but exactly
+    # one object whose tools is an object (including an empty file) raises one, so only a real
+    # manifest that does not list the command falls back; a tool whose commands is not an array
+    # never matches.
+    jq -e -n --arg command "${tool_command}" '
+        [inputs]
+        | if length == 1 and (.[0] | type) == "object" and (.[0].tools | type) == "object"
+          then any(.[0].tools[]; type == "object" and (.commands | type) == "array" and any(.commands[]; . == $command))
+          else error("not a dotnet tool manifest")
+          end' "${local_manifest}" >/dev/null
     case $? in
         0) return 0 ;;
         1) return 1 ;;
