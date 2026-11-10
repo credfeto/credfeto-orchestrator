@@ -79,6 +79,15 @@ STUBEOF
     # gpg stub: always succeeds (simulates key present + test sign succeeds).
     make_stub gpg 'exit 0'
 
+    # codegraph stub: records its working directory and arguments, then succeeds, so no test
+    # runs a real index build against a fixture repo.
+    cat > "${STUB_BIN}/codegraph" << 'STUBEOF'
+#!/usr/bin/env bash
+printf '%s|%s\n' "$(pwd)" "$*" >> "${TEST_TMP}/codegraph_calls"
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/codegraph"
+
     # gh stub: a fake login for `gh api user --jq '.login'` (seed_orchestrator_cache's own
     # call) so the default case is a successfully-populated cache; tests of the
     # cache-miss/failure paths override this stub themselves after calling this function.
@@ -1511,4 +1520,120 @@ BIND_SOCKET='python3 -I -c "import os, socket; socket.socket(socket.AF_UNIX).bin
         bash "${ENTRYPOINT}"
     [ "${status}" -eq 0 ]
     [[ "${output}" != *"Working on:"* ]]
+}
+
+# --- refresh_codegraph_index -----------------------------------------------------
+
+# Runs the entrypoint against a fake repo checkout with a claude stub that records it ran.
+run_entrypoint_in_repo() {
+    local repo_dir="$1"
+    shift
+    cat > "${STUB_BIN}/claude" << 'STUBEOF'
+#!/usr/bin/env bash
+touch "${TEST_TMP}/claude_ran"
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/claude"
+    run env "$@" WORKSPACE_REPO_DIR="${repo_dir}" CLAUDE_CODE_OAUTH_TOKEN=token \
+        GIT_USER_NAME="Alice" GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+}
+
+@test "entrypoint runs codegraph init in the repo when it has no .codegraph directory" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${TEST_TMP}/codegraph_calls")" = "${repo_dir}|init --yes -v" ]
+    [ -e "${TEST_TMP}/claude_ran" ]
+}
+
+@test "entrypoint runs codegraph init when .codegraph exists without its database" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git" "${repo_dir}/.codegraph"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${TEST_TMP}/codegraph_calls")" = "${repo_dir}|init --yes -v" ]
+}
+
+@test "entrypoint runs codegraph sync in the repo when the index already exists" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git" "${repo_dir}/.codegraph"
+    touch "${repo_dir}/.codegraph/codegraph.db"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${TEST_TMP}/codegraph_calls")" = "${repo_dir}|sync -q" ]
+    [ -e "${TEST_TMP}/claude_ran" ]
+}
+
+@test "entrypoint warns and still starts claude when codegraph init fails" {
+    setup_entrypoint_stubs
+    make_stub codegraph 'exit 3'
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"codegraph init failed in ${repo_dir}, continuing without an up-to-date code index"* ]]
+    [ -e "${TEST_TMP}/claude_ran" ]
+}
+
+@test "entrypoint warns and still starts claude when codegraph sync fails" {
+    setup_entrypoint_stubs
+    make_stub codegraph 'exit 1'
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git" "${repo_dir}/.codegraph"
+    touch "${repo_dir}/.codegraph/codegraph.db"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"codegraph sync failed in ${repo_dir}, continuing without an up-to-date code index"* ]]
+    [ -e "${TEST_TMP}/claude_ran" ]
+}
+
+@test "entrypoint gives codegraph no stdin so it can never wait on a prompt" {
+    setup_entrypoint_stubs
+    cat > "${STUB_BIN}/codegraph" << 'STUBEOF'
+#!/usr/bin/env bash
+cat > "${TEST_TMP}/codegraph_stdin"
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/codegraph"
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git"
+
+    make_stub claude 'exit 0'
+    printf 'prompt text\n' | env WORKSPACE_REPO_DIR="${repo_dir}" CLAUDE_CODE_OAUTH_TOKEN=token \
+        GIT_USER_NAME="Alice" GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}" 2>/dev/null
+    [ ! -s "${TEST_TMP}/codegraph_stdin" ]
+}
+
+@test "entrypoint skips codegraph when the repo directory is not a git checkout" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ ! -e "${TEST_TMP}/codegraph_calls" ]
+    [ -e "${TEST_TMP}/claude_ran" ]
+}
+
+@test "entrypoint skips codegraph in ORCHESTRATOR_PRECHECK mode" {
+    setup_entrypoint_stubs
+    make_stub pre-commit-check 'exit 0'
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git"
+
+    run_entrypoint_in_repo "${repo_dir}" ORCHESTRATOR_PRECHECK=1
+    [ "${status}" -eq 0 ]
+    [ ! -e "${TEST_TMP}/codegraph_calls" ]
+    [ ! -e "${TEST_TMP}/claude_ran" ]
 }
