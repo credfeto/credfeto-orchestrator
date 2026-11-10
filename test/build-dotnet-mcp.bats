@@ -117,13 +117,39 @@ make_git_repo() {
     [ "${lines[0]}" = "global" ]
 }
 
-@test "the global tool runs when ~/dotnet-tools.json is not a valid manifest" {
+@test "a ~/dotnet-tools.json that is not valid JSON, or not a manifest, fails instead of falling back" {
     mkdir -p "${USER_HOME}"
-    printf '{ not json' > "${USER_HOME}/dotnet-tools.json"
     make_global_tool
+    printf '{ not json' > "${USER_HOME}/dotnet-tools.json"
+    run_wrapper "${WORK}"
+    [ "${status}" -ne 0 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == *"build-dotnet-mcp: cannot read ${USER_HOME}/dotnet-tools.json as a dotnet tool manifest" ]]
+
+    printf '[1, 2]' > "${USER_HOME}/dotnet-tools.json"
+    run_wrapper "${WORK}"
+    [ "${status}" -ne 0 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == *"build-dotnet-mcp: cannot read ${USER_HOME}/dotnet-tools.json as a dotnet tool manifest" ]]
+}
+
+@test "with jq missing from PATH a ~/dotnet-tools.json fails instead of falling back" {
+    write_manifest "${USER_HOME}/dotnet-tools.json" credfeto-build-dotnet
+    make_global_tool
+    rm -f "${STUB_BIN}/jq"
+    run_wrapper "${WORK}"
+    [ "${status}" -ne 0 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "build-dotnet-mcp: ${USER_HOME}/dotnet-tools.json exists, but jq is not on PATH to read it" ]
+}
+
+@test "with jq missing from PATH and no ~/dotnet-tools.json the global tool still runs" {
+    make_global_tool
+    rm -f "${STUB_BIN}/jq"
     run_wrapper "${WORK}"
     [ "${status}" -eq 0 ]
     [ "${lines[0]}" = "global" ]
+    [ -z "${stderr}" ]
 }
 
 @test "the old ~/.config/dotnet-tools.json manifest name is not looked for" {
