@@ -17,7 +17,8 @@
 # repository's own root manifest would otherwise hide the user's, and asking
 # dotnet means the check finds exactly the manifest dotnet tool run will use.
 # Otherwise it is the global tool in ~/.dotnet/tools, as the container installs
-# it.
+# it. Either tool is started from $HOME, so the server's working directory is the
+# same whichever one runs.
 #
 # BUILD_MCP_TOOL=global, which only the container image sets, skips both the git
 # and the dotnet tool list probes and runs the global tool directly: in the image
@@ -126,7 +127,7 @@ local_tool_is_listed() {
     # report it missing, when the user's own local one is there.
     command -v jq >/dev/null 2>&1 || fail "jq is not on PATH to read dotnet tool list's output"
     # Only stdout is captured, so dotnet never writes to the MCP stream; its stderr passes through.
-    # The subshell keeps the cd from moving the global tool's working directory.
+    # The subshell keeps this cd to itself; each exec below changes to HOME on its own.
     # Its stdin is /dev/null for the same reason as git's above.
     list_json=$(cd "${HOME}" && dotnet tool list --local --format json </dev/null) \
         || fail "dotnet tool list --local --format json failed in ${HOME}"
@@ -150,6 +151,8 @@ local_tool_is_listed() {
 if [ "${BUILD_MCP_TOOL:-}" = global ]; then
     [ -f "${global_tool}" ] && [ -x "${global_tool}" ] \
         || fail "BUILD_MCP_TOOL=global, but ${global_tool} is missing or not executable"
+    # From HOME, like the local tool, so the server starts in the same directory either way.
+    cd "${HOME}" || fail "cannot change to ${HOME} to run the global ${tool_command}"
     exec "${global_tool}" "$@"
 fi
 
@@ -163,6 +166,8 @@ if local_tool_is_listed; then
 fi
 
 if [ -f "${global_tool}" ] && [ -x "${global_tool}" ]; then
+    # From HOME, like the local tool, so the server starts in the same directory either way.
+    cd "${HOME}" || fail "cannot change to ${HOME} to run the global ${tool_command}"
     exec "${global_tool}" "$@"
 fi
 
