@@ -385,7 +385,9 @@ RUN ARCH=$(dpkg --print-architecture) \
 # is linked onto PATH. The archive is verified against the pinned SHA256
 # before extraction; upstream's install.sh does no verification, so it is not
 # used. Asset naming uses "x64"/"arm64". Telemetry is on by default upstream,
-# so it is switched off here.
+# so it is switched off here, before the first `codegraph` run below.
+ENV CODEGRAPH_TELEMETRY=0
+
 RUN ARCH=$(dpkg --print-architecture) \
     && case "$ARCH" in \
          amd64) CG_ARCH=x64;   SHA256="${CODEGRAPH_SHA256_AMD64}" ;; \
@@ -402,8 +404,6 @@ RUN ARCH=$(dpkg --print-architecture) \
     && chmod -R go-w /opt/codegraph \
     && ln -s /opt/codegraph/bin/codegraph /usr/local/bin/codegraph \
     && codegraph --version
-
-ENV CODEGRAPH_TELEMETRY=0
 
 # ---- bats (bats-core) — Bash Automated Testing System -----------------------
 # Cloned at the pinned tag and checked against the pinned commit, so a moved
