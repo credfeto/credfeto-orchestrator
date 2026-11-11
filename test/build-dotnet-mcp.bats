@@ -442,6 +442,27 @@ assert_forced_for_both_tools() {
     [ "${output}" = "$(printf '%s\n' dotnet logs=/srv/build-logs)" ]
 }
 
+@test "a BUILD_MCP_LOG_DIR that is not absolute fails instead of reaching the server" {
+    make_global_tool
+    WRAPPER_ENV=(BUILD_MCP_LOG_DIR=logs)
+    run_wrapper "${WORK}"
+    [ "${status}" -ne 0 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "build-dotnet-mcp: the log directory 'logs' from BUILD_MCP_LOG_DIR is not an absolute path" ]
+
+    WRAPPER_ENV=("BUILD_MCP_LOG_DIR= ")
+    run_wrapper "${WORK}"
+    [ "${status}" -ne 0 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "build-dotnet-mcp: the log directory ' ' from BUILD_MCP_LOG_DIR is not an absolute path" ]
+
+    cd "${WORK}" || return 1
+    run --separate-stderr env -i "PATH=${STUB_BIN}" HOME=relative-home "${GIT_ISOLATION_ENV[@]}" "${WRAPPER}"
+    [ "${status}" -ne 0 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "build-dotnet-mcp: the log directory 'relative-home/.local/state/credfeto-build-mcp' from HOME is not an absolute path" ]
+}
+
 @test "with neither tool found it fails with a message on stderr and nothing on stdout" {
     run_wrapper "${WORK}"
     [ "${status}" -ne 0 ]

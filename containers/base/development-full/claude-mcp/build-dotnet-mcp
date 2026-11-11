@@ -68,12 +68,21 @@ export BUILD_MCP_REPO_ROOT
 # avoids that; the server creates it, with its parents, itself. XDG_STATE_HOME counts only when
 # absolute, as the XDG spec requires, and because the server ignores a relative path and falls back
 # to the shared directory.
+log_source="BUILD_MCP_LOG_DIR"
 if [ -z "${BUILD_MCP_LOG_DIR:-}" ]; then
     case "${XDG_STATE_HOME:-}" in
         /*) BUILD_MCP_LOG_DIR="${XDG_STATE_HOME}/credfeto-build-mcp" ;;
-        *) BUILD_MCP_LOG_DIR="${HOME}/.local/state/credfeto-build-mcp" ;;
+        *)
+            log_source="HOME"
+            BUILD_MCP_LOG_DIR="${HOME}/.local/state/credfeto-build-mcp"
+            ;;
     esac
 fi
+# The server silently replaces a log directory that is not absolute with the shared one above.
+case "${BUILD_MCP_LOG_DIR}" in
+    /*) ;;
+    *) fail "the log directory '${BUILD_MCP_LOG_DIR}' from ${log_source} is not an absolute path" ;;
+esac
 export BUILD_MCP_LOG_DIR
 
 # dotnet prints its first-run welcome and telemetry notice to stdout, which would corrupt the MCP
