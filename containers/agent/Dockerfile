@@ -190,7 +190,9 @@ RUN set -e; \
     echo "== verify entrypoint is present and executable =="; \
     test -x /usr/local/bin/agent-entrypoint \
         || { echo "FATAL sanity: /usr/local/bin/agent-entrypoint is missing or not executable" >&2; exit 1; }; \
-    echo "== verify the entrypoint's root stage can drop to developer =="; \
+    echo "== verify the entrypoint's root stage can start the token broker and drop to developer =="; \
+    [ "$(stat -c '%U:%G %a' /usr/local/sbin/token-broker)" = "root:root 755" ] \
+        || { echo "FATAL sanity: /usr/local/sbin/token-broker is missing or not root:root 755" >&2; exit 1; }; \
     setpriv --reuid=developer --regid=developer --init-groups --no-new-privs \
         --bounding-set=-all --inh-caps=-all -- id -un | grep -qx developer \
         || { echo "FATAL sanity: setpriv cannot drop from root to developer as the entrypoint does" >&2; exit 1; }; \
