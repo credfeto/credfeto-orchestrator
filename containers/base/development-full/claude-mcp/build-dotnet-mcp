@@ -131,9 +131,9 @@ export DOTNET_NOLOGO
 DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE=true
 export DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE
 
-# Turns off the prerelease warning, as asked for: the server's child dotnet build, restore and test
-# runs inherit this environment, and under a preview SDK MSBuild would otherwise print NETSDK1057
-# ("You are using a preview version of .NET") into their build output and the server's job logs.
+# Suppresses NETSDK1057 ("You are using a preview version of .NET"): the server's child dotnet
+# build, restore and test runs inherit this environment, and under a preview SDK MSBuild would
+# otherwise print the warning into their build output and the server's job logs.
 # The server captures its children's stdout, so the warning never reaches the MCP stream. Forced,
 # like DOTNET_NOLOGO, so a caller's value cannot turn it back on.
 SuppressNETCoreSdkPreviewMessage=true
