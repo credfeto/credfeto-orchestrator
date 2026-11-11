@@ -17,14 +17,15 @@
 # repository's own root manifest would otherwise hide the user's, and asking
 # dotnet means the check finds exactly the manifest dotnet tool run will use.
 # Otherwise it is the global tool in .dotnet/tools under DOTNET_CLI_HOME, or under
-# $HOME when that is unset or empty, where dotnet tool install -g puts it and the
-# container installs it. Either tool is started from $HOME, so the server's working directory is the
-# same whichever one runs.
+# $HOME when that is unset or empty, where dotnet tool install -g puts it. Either
+# tool is started from $HOME, so the server's working directory is the same
+# whichever one runs.
 #
 # BUILD_MCP_TOOL=global, which only the container image sets, skips both the git
-# and the dotnet tool list probes and runs the global tool directly: in the image
-# the tool, HOME and the repository root are all fixed, so there is nothing to
-# choose. It then needs BUILD_MCP_REPO_ROOT set, as the image does.
+# and the dotnet tool list probes and runs the global tool under $HOME directly,
+# ignoring DOTNET_CLI_HOME: in the image the tool, HOME and the repository root
+# are all fixed, so there is nothing to choose. It then needs BUILD_MCP_REPO_ROOT
+# set, as the image does.
 #
 # stdout is the MCP stream, so only the server writes to it: every message here
 # goes to stderr.
@@ -45,21 +46,26 @@ require_absolute() {
 tool_command="credfeto-build-dotnet"
 
 [ -n "${HOME:-}" ] || fail "HOME is not set"
+
+case "${BUILD_MCP_TOOL:-}" in
+    "" | global) ;;
+    *) fail "BUILD_MCP_TOOL is '${BUILD_MCP_TOOL}', but it takes only global, or is left unset to choose the tool" ;;
+esac
+
 # dotnet tool install -g puts the tool under DOTNET_CLI_HOME when that is set and not empty, as
 # the SDK reads it, and under HOME otherwise. A relative one would depend on the directory dotnet
-# ran in, so the tool could be anywhere.
-if [ -n "${DOTNET_CLI_HOME:-}" ]; then
+# ran in, so the tool could be anywhere. The image (BUILD_MCP_TOOL=global) bakes the tool in under
+# its fixed HOME, the path its sanity block checks, so there DOTNET_CLI_HOME is ignored: a runtime
+# value must not point the wrapper at a tool the image never checked.
+if [ "${BUILD_MCP_TOOL:-}" = global ]; then
+    dotnet_cli_home="${HOME}"
+elif [ -n "${DOTNET_CLI_HOME:-}" ]; then
     require_absolute "dotnet CLI home" "${DOTNET_CLI_HOME}" "DOTNET_CLI_HOME"
     dotnet_cli_home="${DOTNET_CLI_HOME}"
 else
     dotnet_cli_home="${HOME}"
 fi
 global_tool="${dotnet_cli_home}/.dotnet/tools/${tool_command}"
-
-case "${BUILD_MCP_TOOL:-}" in
-    "" | global) ;;
-    *) fail "BUILD_MCP_TOOL is '${BUILD_MCP_TOOL}', but it takes only global, or is left unset to choose the tool" ;;
-esac
 
 root_source="BUILD_MCP_REPO_ROOT"
 if [ -z "${BUILD_MCP_REPO_ROOT:-}" ]; then
