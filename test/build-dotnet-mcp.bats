@@ -512,6 +512,86 @@ assert_forced_for_both_tools() {
     [ "${stderr}" = "build-dotnet-mcp: the log directory 'relative-home/.local/state/credfeto-build-mcp' from HOME is not an absolute path" ]
 }
 
+# Replaces git and dotnet with stubs that only record that they ran, for the tests that prove the
+# wrapper never starts them.
+make_recording_probes() {
+    rm -f "${STUB_BIN}/git"
+    local calls
+    calls="$(printf '%q' "${TEST_TMP}/probe-calls")"
+    make_stub git "printf '%s\\n' \"git \$*\" >> ${calls}; exit 1"
+    make_stub dotnet "printf '%s\\n' \"dotnet \$*\" >> ${calls}; exit 1"
+}
+
+@test "BUILD_MCP_TOOL=global runs the global tool directly, starting neither git nor dotnet" {
+    make_global_tool
+    make_recording_probes
+    # A listed local tool would win without the setting; the stubs would also fail it.
+    list_local_tool credfeto-build-dotnet
+    WRAPPER_ENV=(BUILD_MCP_TOOL=global BUILD_MCP_REPO_ROOT=/workspace/repo)
+    run_wrapper "${WORK}" --flag
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(printf '%s\n' global "cwd=${WORK}" root=/workspace/repo argc=1 --flag)" ]
+    [ -z "${stderr}" ]
+    [ ! -e "${TEST_TMP}/probe-calls" ]
+
+    # Without the setting the same run probes, so the stubs do record a call when there is one.
+    WRAPPER_ENV=()
+    run_wrapper "${WORK}"
+    [ "$(<"${TEST_TMP}/probe-calls")" = "$(printf '%s\n' 'git -C '"${WORK}"' rev-parse --show-toplevel' 'dotnet tool list --local --format json')" ]
+}
+
+@test "BUILD_MCP_TOOL=global still sets the forced variables and the log directory before the exec" {
+    # shellcheck disable=SC2016  # expanded by the stub, not here
+    make_global_tool 'printf "%s\n" "nologo=${DOTNET_NOLOGO-unset}" "workload=${DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE-unset}" "preview=${SuppressNETCoreSdkPreviewMessage-unset}" "logs=${BUILD_MCP_LOG_DIR-unset}"'
+    make_recording_probes
+    WRAPPER_ENV=(BUILD_MCP_TOOL=global BUILD_MCP_REPO_ROOT=/workspace/repo DOTNET_NOLOGO=0)
+    run_wrapper "${WORK}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(printf '%s\n' nologo=1 workload=true preview=true "logs=${USER_HOME}/.local/state/credfeto-build-mcp")" ]
+    [ ! -e "${TEST_TMP}/probe-calls" ]
+}
+
+@test "BUILD_MCP_TOOL=global fails without a preset root, or without the global tool, and never probes" {
+    make_global_tool
+    make_recording_probes
+    WRAPPER_ENV=(BUILD_MCP_TOOL=global)
+    run_wrapper "${WORK}"
+    [ "${status}" -ne 0 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "build-dotnet-mcp: BUILD_MCP_TOOL=global skips the git probe, so it needs BUILD_MCP_REPO_ROOT set" ]
+
+    rm -f "${GLOBAL_TOOL}"
+    WRAPPER_ENV=(BUILD_MCP_TOOL=global BUILD_MCP_REPO_ROOT=/workspace/repo)
+    run_wrapper "${WORK}"
+    [ "${status}" -ne 0 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "build-dotnet-mcp: BUILD_MCP_TOOL=global, but ${GLOBAL_TOOL} is missing or not executable" ]
+    [ ! -e "${TEST_TMP}/probe-calls" ]
+}
+
+@test "an unknown BUILD_MCP_TOOL value fails before anything runs" {
+    make_global_tool
+    make_recording_probes
+    local value
+    for value in local Global auto ' '; do
+        WRAPPER_ENV=("BUILD_MCP_TOOL=${value}" BUILD_MCP_REPO_ROOT=/workspace/repo)
+        run_wrapper "${WORK}"
+        [ "${status}" -ne 0 ]
+        [ -z "${output}" ]
+        [ "${stderr}" = "build-dotnet-mcp: BUILD_MCP_TOOL is '${value}', but it takes only global, or is left unset to choose the tool" ]
+    done
+    [ ! -e "${TEST_TMP}/probe-calls" ]
+}
+
+@test "an empty BUILD_MCP_TOOL chooses the tool as an unset one does" {
+    list_local_tool credfeto-build-dotnet
+    make_global_tool
+    WRAPPER_ENV=(BUILD_MCP_TOOL=)
+    run_wrapper "${WORK}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(printf '%s\n' dotnet "cwd=${USER_HOME}" "root=${WORK}" argc=3 tool run credfeto-build-dotnet)" ]
+}
+
 @test "with neither tool found it fails with a message on stderr and nothing on stdout" {
     run_wrapper "${WORK}"
     [ "${status}" -ne 0 ]
