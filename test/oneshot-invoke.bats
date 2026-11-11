@@ -1621,6 +1621,32 @@ STUBEOF
     [ "${output}" = "160000" ]
 }
 
+@test "invoke_claude passes CODEGRAPH_INIT_TIMEOUT_SECS as container env var" {
+    local args_log="${TEST_TMP}/podman_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    CODEGRAPH_INIT_TIMEOUT_SECS=1200
+    cat > "${STUB_BIN}/podman" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
+    grep -qx 'CODEGRAPH_INIT_TIMEOUT_SECS=1200' "${args_log}"
+}
+
+@test "CODEGRAPH_INIT_TIMEOUT_SECS defaults to 900 and falls back to it for an invalid value" {
+    run bash -c 'BASEDIR="$1"; unset CODEGRAPH_INIT_TIMEOUT_SECS; source "$1/lib/globals"; printf "%s" "${CODEGRAPH_INIT_TIMEOUT_SECS}"' _ "${REPO_ROOT}"
+    [ "${output}" = "900" ]
+    run bash -c 'BASEDIR="$1"; CODEGRAPH_INIT_TIMEOUT_SECS=abc; source "$1/lib/globals"; printf "%s" "${CODEGRAPH_INIT_TIMEOUT_SECS}"' _ "${REPO_ROOT}"
+    [ "${output}" = "900" ]
+    run bash -c 'BASEDIR="$1"; CODEGRAPH_INIT_TIMEOUT_SECS=0; source "$1/lib/globals"; printf "%s" "${CODEGRAPH_INIT_TIMEOUT_SECS}"' _ "${REPO_ROOT}"
+    [ "${output}" = "900" ]
+}
+
 @test "invoke_claude passes GIT_USER_EMAIL as container env var when set" {
     local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
