@@ -197,8 +197,9 @@ whatever the repository's language. The wrapper keeps `BUILD_MCP_REPO_ROOT`, whi
 `/workspace/repo` as an `ENV`, or otherwise resolves it from the directory Claude Code was started in. It
 keeps a preset `BUILD_MCP_LOG_DIR` or else points it at the per-user `~/.local/state/credfeto-build-mcp`
 (or under an absolute `XDG_STATE_HOME`), so one user's logs never lock others out of a shared `/tmp`, and
-forces `DOTNET_NOLOGO=1` and `SuppressNETCoreSdkPreviewMessage=true` so neither the .NET welcome banner
-nor a preview SDK's NETSDK1057 message reaches the MCP stream on stdout. It then runs the
+forces `DOTNET_NOLOGO=1`, `DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE=true` and
+`SuppressNETCoreSdkPreviewMessage=true` so neither the .NET welcome banner, the workload update notice nor a
+preview SDK's NETSDK1057 message reaches the MCP stream on stdout. It then runs the
 local tool when `dotnet tool list --local`, run from `~`, reports `credfeto-build-dotnet`, or else the
 global tool `/home/developer/.dotnet/tools/credfeto-build-dotnet`, which is what runs in the container. The
 same file therefore works for every user on a host. The sanity block pins that exact entry, the wrapper's
