@@ -275,8 +275,13 @@ follows the same lifecycle as the [session transcripts](#session-transcripts):
   same rules as the transcript link (`link_pivot_pr_codegraph_index` in `lib/state`), so the PR's
   sessions reuse the index the Issue's sessions built, which the MCP server catches up on connect.
 - Before every launch, `prune_codegraph_indexes` (`lib/podman`) applies the transcript purge to
-  this tree: an item's directory is deleted once no file in it has been modified for 14 days,
-  and a link whose target is gone is deleted.
+  this tree, with one difference: the directory's own modification time also counts as use.
+  A session that only queries the index writes no file in it, so `add_codegraph_index_podman_args`
+  touches the directory each time it is mounted (through a pivoted PR's link, the Issue's
+  directory). An item's directory is therefore deleted once no session has mounted it and no
+  file in it has been modified for 14 days, and a link whose target is gone is deleted. The purge
+  runs before the mount, so an index last used more than 14 days ago is still deleted and the
+  session starts a fresh `init`.
 
 The directory is created mode `0700` before the mount, because the index holds the repository's
 code. If it cannot be created, `oneshot` warns and starts the session without the mount; the
