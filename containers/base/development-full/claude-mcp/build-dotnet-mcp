@@ -148,15 +148,8 @@ local_tool_is_listed() {
     esac
 }
 
-if [ "${BUILD_MCP_TOOL:-}" = global ]; then
-    [ -f "${global_tool}" ] && [ -x "${global_tool}" ] \
-        || fail "BUILD_MCP_TOOL=global, but ${global_tool} is missing or not executable"
-    # From HOME, like the local tool, so the server starts in the same directory either way.
-    cd "${HOME}" || fail "cannot change to ${HOME} to run the global ${tool_command}"
-    exec "${global_tool}" "$@"
-fi
-
-if local_tool_is_listed; then
+# BUILD_MCP_TOOL=global skips the probe and goes straight to the global tool below.
+if [ "${BUILD_MCP_TOOL:-}" != global ] && local_tool_is_listed; then
     # The list above ran from HOME, so the cd only fails if HOME changes in between. That is fatal
     # rather than a fall through to the global tool, because the user's listed local tool is never
     # replaced, and dotnet never runs outside HOME. A listed tool that is not restored fails in
@@ -171,4 +164,6 @@ if [ -f "${global_tool}" ] && [ -x "${global_tool}" ]; then
     exec "${global_tool}" "$@"
 fi
 
+[ "${BUILD_MCP_TOOL:-}" != global ] \
+    || fail "BUILD_MCP_TOOL=global, but ${global_tool} is missing or not executable"
 fail "${tool_command} not found: install it as a local tool from ${HOME} with dotnet tool install --local, or as a global tool in ${global_tool%/*}"
