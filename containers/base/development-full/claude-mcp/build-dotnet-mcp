@@ -11,11 +11,13 @@
 # directory itself outside a repository. It is resolved before the cd below,
 # which would otherwise lose the start directory.
 #
-# The server is the credfeto-build-dotnet local tool when ~/dotnet-tools.json
-# lists it, run from $HOME: dotnet tool run looks for a manifest from the
-# current directory upwards, so a repository's own root manifest would
-# otherwise hide the user's. Otherwise it is the global tool in
-# ~/.dotnet/tools, as the container installs it.
+# The server is the credfeto-build-dotnet local tool when dotnet tool list
+# --local, run from $HOME, reports it, and it is then run from $HOME too:
+# dotnet looks for a manifest from the current directory upwards, so a
+# repository's own root manifest would otherwise hide the user's, and asking
+# dotnet means the check finds exactly the manifest dotnet tool run will use.
+# Otherwise it is the global tool in ~/.dotnet/tools, as the container installs
+# it.
 #
 # stdout is the MCP stream, so only the server writes to it: every message here
 # goes to stderr.
@@ -28,7 +30,6 @@ fail() {
 tool_command="credfeto-build-dotnet"
 
 [ -n "${HOME:-}" ] || fail "HOME is not set"
-local_manifest="${HOME}/dotnet-tools.json"
 global_tool="${HOME}/.dotnet/tools/${tool_command}"
 
 project_dir() {
@@ -64,33 +65,37 @@ export DOTNET_NOLOGO
 SuppressNETCoreSdkPreviewMessage=true
 export SuppressNETCoreSdkPreviewMessage
 
-manifest_lists_tool() {
-    [ -f "${local_manifest}" ] || return 1
-    # A manifest that cannot be read is fatal rather than "not listed": falling back would start
-    # the global tool, or report it missing, when the user asked for their local one.
-    command -v jq >/dev/null 2>&1 || fail "${local_manifest} exists, but jq is not on PATH to read it"
-    # jq -e exits 1 for a false result and above 1 when it cannot read or parse the file, or the
-    # filter raises an error; its own message goes to stderr ahead of ours. Anything but exactly
-    # one object whose tools is an object (including an empty file) raises one, so only a real
-    # manifest that does not list the command falls back; a tool whose commands is not an array
-    # never matches.
-    jq -e -n --arg command "${tool_command}" '
+local_tool_is_listed() {
+    # A local tool cannot run without dotnet, so with no dotnet there is no local tool to choose
+    # and the global tool, a native executable, is tried instead.
+    command -v dotnet >/dev/null 2>&1 || return 1
+    # Without jq the list cannot be read, and guessing "not listed" would start the global tool, or
+    # report it missing, when the user's own local one is there.
+    command -v jq >/dev/null 2>&1 || fail "jq is not on PATH to read dotnet tool list's output"
+    # Only stdout is captured, so dotnet never writes to the MCP stream; its stderr passes through.
+    # The subshell keeps the cd from moving the global tool's working directory.
+    list_json=$(cd "${HOME}" && dotnet tool list --local --format json) \
+        || fail "dotnet tool list --local --format json failed in ${HOME}"
+    # jq -e exits 1 for a false result and above 1 when it cannot parse the output or the filter
+    # raises an error. With no manifest dotnet reports an empty data array, so that is "not
+    # listed"; anything but exactly one object whose data is an array (including no output) is
+    # fatal, and a tool whose commands is not an array never matches.
+    printf '%s' "${list_json}" | jq -e -n --arg command "${tool_command}" '
         [inputs]
-        | if length == 1 and (.[0] | type) == "object" and (.[0].tools | type) == "object"
-          then any(.[0].tools[]; type == "object" and (.commands | type) == "array" and any(.commands[]; . == $command))
-          else error("not a dotnet tool manifest")
-          end' "${local_manifest}" >/dev/null
+        | if length == 1 and (.[0] | type) == "object" and (.[0].data | type) == "array"
+          then any(.[0].data[]; type == "object" and (.commands | type) == "array" and any(.commands[]; . == $command))
+          else error("not dotnet tool list output")
+          end' >/dev/null
     case $? in
         0) return 0 ;;
         1) return 1 ;;
-        *) fail "cannot read ${local_manifest} as a dotnet tool manifest" ;;
+        *) fail "cannot read the output of dotnet tool list --local --format json in ${HOME}" ;;
     esac
 }
 
-if manifest_lists_tool; then
-    command -v dotnet >/dev/null 2>&1 || fail "${local_manifest} lists ${tool_command}, but dotnet is not on PATH"
-    # Reading the manifest above needs the same search permission on HOME as this cd, so the
-    # cd only fails if HOME changes in between; dotnet then never runs outside HOME.
+if local_tool_is_listed; then
+    # The list above ran from HOME, so the cd only fails if HOME changes in between; dotnet then
+    # never runs outside HOME. A listed tool that is not restored fails in dotnet tool run itself.
     cd "${HOME}" && exec dotnet tool run "${tool_command}" "$@"
 fi
 
@@ -98,4 +103,4 @@ if [ -f "${global_tool}" ] && [ -x "${global_tool}" ]; then
     exec "${global_tool}" "$@"
 fi
 
-fail "${tool_command} not found: install it as a local tool in ${local_manifest} or as a global tool in ${global_tool%/*}"
+fail "${tool_command} not found: install it as a local tool from ${HOME} with dotnet tool install --local, or as a global tool in ${global_tool%/*}"
