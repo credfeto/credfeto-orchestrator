@@ -794,6 +794,7 @@ codegraph_index_root_path() {
 # (link_pivot_pr_codegraph_index), and purged once no session has mounted it for
 # TRANSCRIPT_ITEM_RETENTION_DAYS (prune_codegraph_indexes in lib/podman). A new
 # item therefore starts with an empty directory and the entrypoint runs a full codegraph init.
+# A checkout that tracks files under .codegraph gets no mount (add_codegraph_index_podman_args).
 codegraph_index_dir_path() {
     local item_type="$1" item_id="$2"
     printf '%s/%s_%s' "$(codegraph_index_root_path)" "${item_type}" "${item_id}"
