@@ -269,7 +269,7 @@ follows the same lifecycle as the [session transcripts](#session-transcripts):
   entrypoint runs a fresh `codegraph init`. The other item's index is not touched.
 - On the Issue-to-PR pivot, `codegraph/PullRequest_<m>` becomes a link to `Issue_<n>`, by the
   same rules as the transcript link (`link_pivot_pr_codegraph_index` in `lib/state`), so the PR's
-  sessions keep syncing the index the Issue's sessions built.
+  sessions reuse the index the Issue's sessions built, which the MCP server catches up on connect.
 - Before every launch, `prune_codegraph_indexes` (`lib/podman`) applies the transcript purge to
   this tree: an item's directory is deleted once no file in it has been modified for 14 days,
   and a link whose target is gone is deleted.
