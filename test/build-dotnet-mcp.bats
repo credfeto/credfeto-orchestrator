@@ -658,12 +658,26 @@ make_recording_probes() {
     [ "${status}" -ne 0 ]
     [ -z "${output}" ]
     [ "${stderr}" = "build-dotnet-mcp: credfeto-build-dotnet not found: install it as a local tool from ${USER_HOME} with dotnet tool install --local, or as a global tool in ${cli_home}/.dotnet/tools" ]
+}
 
-    WRAPPER_ENV=(BUILD_MCP_TOOL=global BUILD_MCP_REPO_ROOT=/workspace/repo "DOTNET_CLI_HOME=${cli_home}")
-    run_wrapper "${WORK}"
-    [ "${status}" -ne 0 ]
-    [ -z "${output}" ]
-    [ "${stderr}" = "build-dotnet-mcp: BUILD_MCP_TOOL=global, but ${cli_home}/.dotnet/tools/credfeto-build-dotnet is missing or not executable" ]
+@test "with BUILD_MCP_TOOL=global, DOTNET_CLI_HOME is ignored and the tool under HOME runs" {
+    local cli_home="${USER_HOME}/cli-home"
+    make_global_tool
+    # A tool under DOTNET_CLI_HOME, the one an unchecked runtime value would point at, is never run.
+    local home_tool="${GLOBAL_TOOL}"
+    GLOBAL_TOOL="${cli_home}/.dotnet/tools/credfeto-build-dotnet"
+    make_global_tool 'printf "%s\n" cli-home-tool'
+    GLOBAL_TOOL="${home_tool}"
+    make_recording_probes
+    local value
+    for value in "${cli_home}" cli-home ' '; do
+        WRAPPER_ENV=(BUILD_MCP_TOOL=global BUILD_MCP_REPO_ROOT=/workspace/repo "DOTNET_CLI_HOME=${value}")
+        run_wrapper "${WORK}"
+        [ "${status}" -eq 0 ]
+        [ "${output}" = "$(printf '%s\n' global "cwd=${USER_HOME}" root=/workspace/repo argc=0)" ]
+        [ -z "${stderr}" ]
+    done
+    [ ! -e "${TEST_TMP}/probe-calls" ]
 }
 
 @test "an empty DOTNET_CLI_HOME finds the global tool under HOME, as an unset one does" {
