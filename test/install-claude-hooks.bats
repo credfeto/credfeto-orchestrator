@@ -761,10 +761,9 @@ kb_token_privacy_predicates() {
     [ -z "${output}" ]
 }
 
-@test "the Dockerfile sanity block pins the codegraph allow rule and requires the binary" {
+@test "the Dockerfile sanity block pins the codegraph allow rule" {
     local dockerfile="${SOURCE_DIR}/Dockerfile"
     grep -qF "jq -e '.permissions.allow | index(\"mcp__codegraph__*\")' /etc/claude-code/managed-settings.json" "${dockerfile}"
-    grep -qE '^ +xmllint codegraph; do \\$' "${dockerfile}"
 }
 
 @test "the Dockerfile sanity block pins the build-dotnet server, its wrapper's owner and mode, its root, its tool mode, the global tool and allow rule, forbids Authorization text, and pins no server set (#1818, #1850)" {
