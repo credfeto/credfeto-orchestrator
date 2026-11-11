@@ -16,8 +16,9 @@
 # dotnet looks for a manifest from the current directory upwards, so a
 # repository's own root manifest would otherwise hide the user's, and asking
 # dotnet means the check finds exactly the manifest dotnet tool run will use.
-# Otherwise it is the global tool in ~/.dotnet/tools, as the container installs
-# it. Either tool is started from $HOME, so the server's working directory is the
+# Otherwise it is the global tool in .dotnet/tools under DOTNET_CLI_HOME, or under
+# $HOME when that is unset or empty, where dotnet tool install -g puts it and the
+# container installs it. Either tool is started from $HOME, so the server's working directory is the
 # same whichever one runs.
 #
 # BUILD_MCP_TOOL=global, which only the container image sets, skips both the git
@@ -44,7 +45,16 @@ require_absolute() {
 tool_command="credfeto-build-dotnet"
 
 [ -n "${HOME:-}" ] || fail "HOME is not set"
-global_tool="${HOME}/.dotnet/tools/${tool_command}"
+# dotnet tool install -g puts the tool under DOTNET_CLI_HOME when that is set and not empty, as
+# the SDK reads it, and under HOME otherwise. A relative one would depend on the directory dotnet
+# ran in, so the tool could be anywhere.
+if [ -n "${DOTNET_CLI_HOME:-}" ]; then
+    require_absolute "dotnet CLI home" "${DOTNET_CLI_HOME}" "DOTNET_CLI_HOME"
+    dotnet_cli_home="${DOTNET_CLI_HOME}"
+else
+    dotnet_cli_home="${HOME}"
+fi
+global_tool="${dotnet_cli_home}/.dotnet/tools/${tool_command}"
 
 case "${BUILD_MCP_TOOL:-}" in
     "" | global) ;;
