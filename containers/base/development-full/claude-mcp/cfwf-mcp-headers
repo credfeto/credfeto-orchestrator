@@ -6,8 +6,15 @@
 #
 #   {"Authorization":"Bearer <token>"}
 #
-# The token is the GitHub token already in the environment: GH_ENTERPRISE_TOKEN,
-# then GH_TOKEN, then (on a host where neither is set) whatever gh holds for
+# Inside the agent container the token is held by the root-owned token broker,
+# so while its socket exists the helper asks the broker for the headers and
+# never falls back: the broker answers only this helper started by Claude Code,
+# and a refusal exits 1. The broker client runs as a child rather than through
+# exec, because the broker checks that its caller's parent is this helper.
+#
+# Without the broker the token is the GitHub token in the environment:
+# GH_ENTERPRISE_TOKEN, then GH_TOKEN, then (on a host where neither is set)
+# whatever gh holds for
 # GH_HOST, or gh's default host when GH_HOST is unset. Only Claude Code's MCP
 # client reads stdout, so the token is never written anywhere else: gh's own
 # stderr is discarded and the failure message names no token.
@@ -20,6 +27,12 @@ fail() {
     printf 'cfwf-mcp-headers: %s\n' "$*" >&2
     exit 1
 }
+
+broker_socket="${TOKEN_BROKER_SOCKET:-/run/token-broker/socket}"
+if [ -e "${broker_socket}" ] || [ -L "${broker_socket}" ]; then
+    "${TOKEN_BROKER_BIN:-/usr/local/sbin/token-broker}" header cfwf
+    exit $?
+fi
 
 token_from_gh() {
     command -v gh >/dev/null 2>&1 || return 1

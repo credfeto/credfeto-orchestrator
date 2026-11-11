@@ -38,12 +38,21 @@
 #   GIT_SIGNING_KEY — GPG key ID for commit signing; also enables commit.gpgsign=true
 #
 # Inherited environment variables (have defaults from base images; can be overridden):
-#   GH_HOST             — GitHub API proxy hostname; override with "github.com" and
-#                         supply GH_TOKEN for direct access bypassing the proxy
-#                         (set by development-tools)
-#   GH_ENTERPRISE_TOKEN — proxy placeholder token substituted by OneCLI at egress;
-#                         not a real PAT — pass GH_TOKEN instead for direct access
-#                         (set by development-tools)
+#   GH_HOST             — GitHub API proxy hostname; override with "github.com" for
+#                         direct access bypassing the proxy (set by development-tools)
+#   GH_ENTERPRISE_TOKEN — placeholder token (set by development-tools); oneshot never
+#                         passes the real token as a variable: see the token files below
+#
+# Root-only token files (podman secrets, mode 0400, read only by the token broker):
+#   /run/secrets/gh-token     — the GitHub token, used as GH_ENTERPRISE_TOKEN for a proxy
+#                               GH_HOST and as GH_TOKEN for github.com
+#   /run/secrets/kb-mcp-token — the kb MCP server token (optional)
+#
+# The container starts as root (oneshot passes --user 0:0): the entrypoint starts the
+# root-owned token broker, unsets the token variables, then re-runs itself as developer
+# with setpriv. gh and the MCP header helpers get the tokens' use only through the
+# broker's socket, /run/token-broker/socket. Started as developer instead, the
+# entrypoint skips the broker and gh and the helpers fall back to the environment.
 #   DOTNET_ROOT         — .NET SDK install path (/usr/share/dotnet, do not override)
 #   DOTNET_*            — .NET runtime tuning flags (do not override)
 #   MSBUILDTERMINALLOGGER — MSBuild output mode (auto, do not override)
@@ -92,7 +101,10 @@ RUN rm -f \
     && rm -rf /var/lib/apt /var/cache/apt
 
 # ---- Agent entrypoint --------------------------------------------------------
-# Validates CLAUDE_CODE_OAUTH_TOKEN then execs claude with all passed arguments.
+# Started as root, it starts the token broker and re-runs itself as developer
+# with setpriv; as developer it validates CLAUDE_CODE_OAUTH_TOKEN then execs
+# claude with all passed arguments. setpriv is deliberately kept, unlike the
+# escalation tools removed above: it can only ever give up privilege.
 # Owned root:root 0755 — readable and executable by all, not modifiable by
 # the unprivileged developer user the agent runs as.
 COPY --chown=root:root --chmod=0755 entrypoint.sh /usr/local/bin/agent-entrypoint
@@ -178,6 +190,12 @@ RUN set -e; \
     echo "== verify entrypoint is present and executable =="; \
     test -x /usr/local/bin/agent-entrypoint \
         || { echo "FATAL sanity: /usr/local/bin/agent-entrypoint is missing or not executable" >&2; exit 1; }; \
+    echo "== verify the entrypoint's root stage can start the token broker and drop to developer =="; \
+    [ "$(stat -c '%U:%G %a' /usr/local/sbin/token-broker)" = "root:root 755" ] \
+        || { echo "FATAL sanity: /usr/local/sbin/token-broker is missing or not root:root 755" >&2; exit 1; }; \
+    setpriv --reuid=developer --regid=developer --init-groups --no-new-privs \
+        --bounding-set=-all --inh-caps=-all -- id -un | grep -qx developer \
+        || { echo "FATAL sanity: setpriv cannot drop from root to developer as the entrypoint does" >&2; exit 1; }; \
     echo "== re-verify inherited binaries (binary presence + version probe) =="; \
     for cmd in git gh dotnet python3 gpg curl sqlite3 timeout \
                shellcheck bats shfmt checkbashisms uv ruff sqlfluff actionlint markdownlint-cli2 pre-commit \

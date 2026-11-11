@@ -1,0 +1,16 @@
+#!/bin/sh
+
+# Installed as /usr/bin/gh. While the token broker runs, every gh command goes
+# through it, so the GitHub token stays in the root-owned broker and is only
+# handed to the real gh (moved to /usr/libexec/token-broker/gh, mode 0711 so no
+# other process of the user can read its environment) in a clean environment.
+# With no broker (a build step, or a container started without the entrypoint)
+# the real gh runs directly, with whatever token the environment holds.
+
+socket="${TOKEN_BROKER_SOCKET:-/run/token-broker/socket}"
+
+if [ -e "${socket}" ] || [ -L "${socket}" ]; then
+    exec "${TOKEN_BROKER_BIN:-/usr/local/sbin/token-broker}" gh "$@"
+fi
+
+exec "${TOKEN_BROKER_GH_BIN:-/usr/libexec/token-broker/gh}" "$@"

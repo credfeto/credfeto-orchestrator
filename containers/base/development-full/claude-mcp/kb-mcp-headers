@@ -6,8 +6,15 @@
 #
 #   {"Authorization":"Bearer <token>"}
 #
-# The token is KB_MCP_TOKEN or, when that is unset or empty, the first non-blank
-# line of ${XDG_CONFIG_HOME:-$HOME/.config}/kb-mcp/token. The file is only read
+# Inside the agent container the token is held by the root-owned token broker,
+# so while its socket exists the helper asks the broker for the headers and
+# never falls back: the broker answers only this helper started by Claude Code,
+# and a refusal exits 1. The broker client runs as a child rather than through
+# exec, because the broker checks that its caller's parent is this helper.
+#
+# Without the broker the token is KB_MCP_TOKEN or, when that is unset or
+# empty, the first non-blank line of
+# ${XDG_CONFIG_HOME:-$HOME/.config}/kb-mcp/token. The file is only read
 # when it is a regular file owned by the current user with mode 0600, so a token
 # other local users can read or replace is never sent. Only Claude Code's MCP
 # client reads stdout, so the token is never written anywhere else, and no
@@ -21,6 +28,12 @@ fail() {
     printf 'kb-mcp-headers: %s\n' "$*" >&2
     exit 1
 }
+
+broker_socket="${TOKEN_BROKER_SOCKET:-/run/token-broker/socket}"
+if [ -e "${broker_socket}" ] || [ -L "${broker_socket}" ]; then
+    "${TOKEN_BROKER_BIN:-/usr/local/sbin/token-broker}" header kb
+    exit $?
+fi
 
 token_file="${XDG_CONFIG_HOME:-${HOME}/.config}/kb-mcp/token"
 
