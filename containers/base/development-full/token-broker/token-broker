@@ -27,7 +27,9 @@ A gh request is accepted from any process of the developer user. The real gh
 runs with a clean environment holding the token, an empty PATH (so it never
 starts git, a pager or an editor that could read its environment) and a
 root-owned configuration, and requests that could send the token to another
-host or print it are refused: see refusal_reason. As gh cannot start git,
+host or print it are refused: see refusal_reason. The only URL allowed is a
+github.com issue or pull request as the --url of gh project item-add, which
+takes the item in no other form. As gh cannot start git,
 commands that need a local repository (gh pr checkout, gh repo clone, or any
 command run without --repo or GH_REPO) fail.
 """
@@ -58,6 +60,13 @@ HOST_PATH = re.compile(
     r"(?P<host>[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)(?::[0-9]+)?/[^/]+/.+")
 JQ_ENV = re.compile(r"\$ENV\b|(?<![\w.$])env\b")
 URL_PREFIXES = ("http://", "https://", "ssh://", "git://", "git@")
+# The one URL gh needs: gh project item-add takes the issue or pull request
+# only as --url. GH_HOST answers with github.com URLs, so only that host is
+# allowed, and only an exact issue or pull request URL: no query, fragment or
+# further path.
+PROJECT_ITEM_URL = re.compile(
+    r"(?i:https://github\.com)/" + PLAIN_REPO.pattern
+    + r"/(?:issues|pull)/[1-9][0-9]*")
 
 REFUSED_COMMANDS = frozenset(
     ("auth", "alias", "extension", "ext", "config", "codespace", "cs",
@@ -232,6 +241,38 @@ def option_values(argv, long_name, short_name):
     return values
 
 
+def project_item_urls(argv):
+    """The indexes of argv that are the --url of gh project item-add, when
+    that value is an exact github.com issue or pull request URL."""
+    if argv[:2] != ["project", "item-add"]:
+        return set()
+    allowed = set()
+    for index, arg in enumerate(argv):
+        if arg == "--":
+            break
+        if (arg == "--url" and index + 1 < len(argv)
+                and PROJECT_ITEM_URL.fullmatch(argv[index + 1])):
+            allowed.add(index + 1)
+        elif (arg.startswith("--url=")
+              and PROJECT_ITEM_URL.fullmatch(arg[len("--url="):])):
+            allowed.add(index)
+    return allowed
+
+
+def is_url(arg):
+    """True when arg, or the value of a --name=value arg, is a URL."""
+    if arg.startswith("--") and "=" in arg:
+        arg = arg.split("=", 1)[1]
+    return arg.lower().startswith(URL_PREFIXES)
+
+
+def refuses_url(argv):
+    """True when argv holds a URL other than an allowed project item URL."""
+    allowed = project_item_urls(argv)
+    return any(is_url(arg) and index not in allowed
+               for index, arg in enumerate(argv))
+
+
 def refuses_host(arg, gh_host):
     """True when arg names a repository on a host other than gh_host."""
     if arg.startswith("-") or "=" in arg or "@" in arg:
@@ -252,7 +293,7 @@ def refusal_reason(argv, gh_host):
         (any(not PLAIN_REPO.fullmatch(value)
              for value in option_values(argv, "--repo", "R")),
          "--repo must be OWNER/REPO"),
-        (any(arg.lower().startswith(URL_PREFIXES) for arg in argv),
+        (refuses_url(argv),
          "URLs are not allowed; use OWNER/REPO or a number"),
         (any(refuses_host(arg, gh_host) for arg in argv),
          "only repositories on GH_HOST are allowed"),

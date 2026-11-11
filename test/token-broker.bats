@@ -268,6 +268,90 @@ run_helper() {
     done
 }
 
+@test "a github.com issue or pull request URL is allowed as the --url of gh project item-add" {
+    start_broker
+    local -a allowed=(
+        "project item-add 3 --owner owner --url https://github.com/owner/repo/issues/5"
+        "project item-add 3 --owner owner --url=https://github.com/owner/repo.name/pull/12"
+        "project item-add 3 --url HTTPS://GitHub.com/Owner/repo_1/issues/7 --owner owner"
+    )
+    local args
+    for args in "${allowed[@]}"; do
+        # shellcheck disable=SC2086  # each entry is a space-separated argument list
+        run --separate-stderr "${BROKER}" gh ${args} </dev/null
+        if [ "${status}" -ne 7 ]; then
+            echo "refused: gh ${args}: ${stderr}" >&2
+            return 1
+        fi
+        [[ "${output}" == *"argv:${args}"* ]]
+    done
+}
+
+@test "every other URL is refused, including one near the --url of gh project item-add" {
+    start_broker
+    local -a refused=(
+        "project item-add 3 --owner owner https://github.com/owner/repo/issues/5"
+        "project item-add 3 --owner owner --url https://github.com/owner/repo/issues/5 https://github.com/owner/repo/issues/6"
+        "project item-edit --id x --url https://github.com/owner/repo/issues/5"
+        "issue view https://github.com/owner/repo/issues/5"
+        "pr view --url https://github.com/owner/repo/pull/5"
+        "api --url=https://github.com/owner/repo/issues/5"
+        "pr list -R owner/repo --search=https://evil.example.com/x"
+        "project item-add 3 --owner owner --url https://evil.example.com/owner/repo/issues/5"
+        "project item-add 3 --owner owner --url=https://evil.example.com/owner/repo/pull/5"
+        "project item-add 3 --owner owner --url https://github-api.example.com/owner/repo/issues/5"
+        "project item-add 3 --owner owner --url https://github.com.evil.example.com/owner/repo/issues/5"
+        "project item-add 3 --owner owner --url https://github.com:8443/owner/repo/issues/5"
+        "project item-add 3 --owner owner --url https://user@github.com/owner/repo/issues/5"
+        "project item-add 3 --owner owner --url http://github.com/owner/repo/issues/5"
+        "project item-add 3 --owner owner --url https://github.com/owner/repo/issues/5/extra"
+        "project item-add 3 --owner owner --url https://github.com/owner/repo/issues/5?x=1"
+        "project item-add 3 --owner owner --url https://github.com/owner/repo/issues/5#frag"
+        "project item-add 3 --owner owner --url https://github.com/owner/repo/issues/5/"
+        "project item-add 3 --owner owner --url https://github.com/owner/repo/discussions/5"
+        "project item-add 3 --owner owner --url https://github.com/owner/repo/issues/05"
+        "project item-add 3 --owner owner --url https://github.com/a/b/c/issues/5"
+        "project item-add 3 --owner owner --url=https://github.com/owner/repo/pull/x"
+        "project item-add 3 --owner owner -- --url https://github.com/owner/repo/issues/5"
+        "project item-add 3 --owner owner --url ssh://github.com/owner/repo/issues/5"
+        "project item-add 3 --owner owner --url git@github.com:owner/repo/issues/5"
+    )
+    local args
+    for args in "${refused[@]}"; do
+        # shellcheck disable=SC2086  # each entry is a space-separated argument list
+        run --separate-stderr "${BROKER}" gh ${args} </dev/null
+        if [ "${status}" -ne 1 ]; then
+            echo "accepted: gh ${args}" >&2
+            return 1
+        fi
+        if [[ "${stderr}" != *'URLs are not allowed'* ]]; then
+            echo "wrong reason for gh ${args}: ${stderr}" >&2
+            return 1
+        fi
+    done
+    [ ! -e "${BROKER_DIR}/gh-ran" ]
+}
+
+@test "a project item URL does not loosen the --repo, --hostname or --jq rules" {
+    start_broker
+    local -a refused=(
+        "project item-add 3 --url https://github.com/owner/repo/issues/5 --hostname evil.example.com"
+        "project item-add 3 --url https://github.com/owner/repo/issues/5 -R evil.example.com/owner/repo"
+        "project item-add 3 --url https://github.com/owner/repo/issues/5 --jq \$ENV.GH_ENTERPRISE_TOKEN"
+        "project item-add 3 --url https://github.com/owner/repo/issues/5 evil.example.com/owner/repo"
+    )
+    local args
+    for args in "${refused[@]}"; do
+        # shellcheck disable=SC2086  # each entry is a space-separated argument list
+        run --separate-stderr "${BROKER}" gh ${args} </dev/null
+        if [ "${status}" -ne 1 ]; then
+            echo "accepted: gh ${args}" >&2
+            return 1
+        fi
+    done
+    [ ! -e "${BROKER_DIR}/gh-ran" ]
+}
+
 @test "ordinary gh requests are allowed" {
     start_broker
     local -a allowed=(
