@@ -640,6 +640,55 @@ make_recording_probes() {
     [[ "${stderr}" == "build-dotnet-mcp: credfeto-build-dotnet not found"* ]]
 }
 
+@test "the global tool is found under DOTNET_CLI_HOME when it is set, and still started from HOME" {
+    local cli_home="${USER_HOME}/cli-home"
+    GLOBAL_TOOL="${cli_home}/.dotnet/tools/credfeto-build-dotnet"
+    make_global_tool
+    WRAPPER_ENV=("DOTNET_CLI_HOME=${cli_home}")
+    run_wrapper "${WORK}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(printf '%s\n' global "cwd=${USER_HOME}" "root=${WORK}" argc=0)" ]
+    [ -z "${stderr}" ]
+
+    # The one under HOME is not used in its place.
+    rm -f "${GLOBAL_TOOL}"
+    GLOBAL_TOOL="${USER_HOME}/.dotnet/tools/credfeto-build-dotnet"
+    make_global_tool
+    run_wrapper "${WORK}"
+    [ "${status}" -ne 0 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "build-dotnet-mcp: credfeto-build-dotnet not found: install it as a local tool from ${USER_HOME} with dotnet tool install --local, or as a global tool in ${cli_home}/.dotnet/tools" ]
+
+    WRAPPER_ENV=(BUILD_MCP_TOOL=global BUILD_MCP_REPO_ROOT=/workspace/repo "DOTNET_CLI_HOME=${cli_home}")
+    run_wrapper "${WORK}"
+    [ "${status}" -ne 0 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "build-dotnet-mcp: BUILD_MCP_TOOL=global, but ${cli_home}/.dotnet/tools/credfeto-build-dotnet is missing or not executable" ]
+}
+
+@test "an empty DOTNET_CLI_HOME finds the global tool under HOME, as an unset one does" {
+    make_global_tool
+    WRAPPER_ENV=(DOTNET_CLI_HOME=)
+    run_wrapper "${WORK}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(printf '%s\n' global "cwd=${USER_HOME}" "root=${WORK}" argc=0)" ]
+    [ -z "${stderr}" ]
+}
+
+@test "a DOTNET_CLI_HOME that is not absolute fails before anything runs" {
+    make_global_tool
+    make_recording_probes
+    local value
+    for value in cli-home ' '; do
+        WRAPPER_ENV=("DOTNET_CLI_HOME=${value}")
+        run_wrapper "${WORK}"
+        [ "${status}" -ne 0 ]
+        [ -z "${output}" ]
+        [ "${stderr}" = "build-dotnet-mcp: the dotnet CLI home '${value}' from DOTNET_CLI_HOME is not an absolute path" ]
+    done
+    [ ! -e "${TEST_TMP}/probe-calls" ]
+}
+
 @test "with HOME unset or empty it fails with a message on stderr and nothing on stdout" {
     make_global_tool
     cd "${WORK}" || return 1
