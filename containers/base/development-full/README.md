@@ -187,7 +187,9 @@ with `kb` shown as failed to connect. See
 started by the root-owned wrapper `/etc/claude-code/mcp/build-dotnet-mcp`, with no `env`, and
 `mcp__build-dotnet__*` in `permissions.allow` allows all of its tools. It is registered for every session,
 whatever the repository's language. The wrapper keeps `BUILD_MCP_REPO_ROOT`, which the image sets to
-`/workspace/repo` as an `ENV`, or otherwise resolves it from the directory Claude Code was started in, and
+`/workspace/repo` as an `ENV`, or otherwise resolves it from the directory Claude Code was started in. It
+keeps a preset `BUILD_MCP_LOG_DIR` or else points it at the per-user `~/.local/state/credfeto-build-mcp`
+(or under an absolute `XDG_STATE_HOME`), so one user's logs never lock others out of a shared `/tmp`, and
 forces `DOTNET_NOLOGO=1` and `SuppressNETCoreSdkPreviewMessage=true` so neither the .NET welcome banner
 nor a preview SDK's NETSDK1057 message reaches the MCP stream on stdout. It then runs the
 local tool when `dotnet tool list --local`, run from `~`, reports `credfeto-build-dotnet`, or else the
