@@ -285,7 +285,11 @@ follows the same lifecycle as the [session transcripts](#session-transcripts):
 
 The directory is created mode `0700` before the mount, because the index holds the repository's
 code. If it cannot be created, `oneshot` warns and starts the session without the mount; the
-entrypoint then builds an index in the checkout, which the `git clean` afterwards deletes. Only
+entrypoint then builds an index in the checkout, which the `git clean` afterwards deletes. The
+same happens, with a warning, when the checkout tracks any file under `.codegraph/`: the mount
+would hide those files, `git` in the container would see them as deleted, and the agent's
+`git add -A` could commit the deletion. The index directory is then neither created nor touched,
+and the index built beside the tracked files is rebuilt every session. Only
 the agent's own container gets the mount. The pre-check container does not, because the
 entrypoint never builds or reads the index in pre-check mode. Podman creates the empty
 `.codegraph` mountpoint in the checkout, and the `git clean` after the session removes it. That

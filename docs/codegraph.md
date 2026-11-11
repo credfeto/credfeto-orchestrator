@@ -78,7 +78,9 @@ CodeGraph needs. Nothing has to be done by hand.
   after every session would delete it. `oneshot` mounts a host directory per work item at
   `.codegraph`, so the index persists between that item's containers, an Issue and the PR it
   pivots to share one, a different item starts with a fresh `init`, and a directory no session
-  has used for 14 days is purged, the same lifecycle as the session transcripts. See
+  has used for 14 days is purged, the same lifecycle as the session transcripts. A repository
+  that tracks files under `.codegraph/` gets no mount, because it would hide them, so its index
+  is rebuilt in the checkout every session. See
   [agent-container.md](agent-container.md#the-codegraph-index) for the details. While the
   session runs, the MCP server watches the checkout and updates the index as files change.
 - **Time and memory.** The first `init` for a work item builds the whole index. On a large
