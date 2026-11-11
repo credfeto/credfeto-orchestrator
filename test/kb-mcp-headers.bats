@@ -24,9 +24,48 @@ teardown() {
 }
 
 # Runs the helper with only the given NAME=value variables (env -i drops every token the host
-# exported), stdout in output and stderr in stderr.
+# exported), stdout in output and stderr in stderr. The broker socket points at a path that does
+# not exist unless a test passes its own TOKEN_BROKER_SOCKET.
 run_helper() {
-    run --separate-stderr env -i "PATH=${STUB_BIN}" "HOME=${HOME}" "XDG_CONFIG_HOME=${XDG_CONFIG_HOME}" "$@" "${HELPER}"
+    run --separate-stderr env -i "PATH=${STUB_BIN}" "HOME=${HOME}" "XDG_CONFIG_HOME=${XDG_CONFIG_HOME}" \
+        "TOKEN_BROKER_SOCKET=${TEST_TMP}/no-broker.sock" "$@" "${HELPER}"
+}
+
+# A token-broker stub that logs its arguments, prints the given output and exits with the given
+# status; the helper finds it through TOKEN_BROKER_BIN and a socket path that exists.
+stub_broker() {
+    export BROKER_LOG="${TEST_TMP}/broker.log"
+    : > "${TEST_TMP}/broker.sock"
+    make_stub token-broker "printf '%s\n' \"\$*\" >> '${BROKER_LOG}'; printf '%s' '$1'; exit $2"
+}
+
+@test "while the broker socket exists the headers come from the broker" {
+    stub_broker '{"Authorization":"Bearer from_broker"}' 0
+    write_token_file $'kb_from_file\n' 600
+    run_helper "TOKEN_BROKER_SOCKET=${TEST_TMP}/broker.sock" \
+        "TOKEN_BROKER_BIN=${STUB_BIN}/token-broker" KB_MCP_TOKEN=kb_from_env
+    [ "${status}" -eq 0 ]
+    [ "${output}" = '{"Authorization":"Bearer from_broker"}' ]
+    [ "$(cat "${BROKER_LOG}")" = 'header kb' ]
+}
+
+@test "a broker refusal exits non-zero and never falls back to KB_MCP_TOKEN or the token file" {
+    stub_broker '' 1
+    write_token_file $'kb_from_file\n' 600
+    run_helper "TOKEN_BROKER_SOCKET=${TEST_TMP}/broker.sock" \
+        "TOKEN_BROKER_BIN=${STUB_BIN}/token-broker" KB_MCP_TOKEN=kb_from_env
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+}
+
+@test "a dangling symlink at the socket path still routes to the broker" {
+    stub_broker '' 1
+    ln -s "${TEST_TMP}/missing" "${TEST_TMP}/link.sock"
+    run_helper "TOKEN_BROKER_SOCKET=${TEST_TMP}/link.sock" \
+        "TOKEN_BROKER_BIN=${STUB_BIN}/token-broker" KB_MCP_TOKEN=kb_from_env
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "$(cat "${BROKER_LOG}")" = 'header kb' ]
 }
 
 # Writes the given content to the token file with the given mode.
@@ -59,7 +98,8 @@ write_token_file() {
     mkdir -p "${HOME}/.config/kb-mcp"
     printf 'kb_from_home\n' > "${HOME}/.config/kb-mcp/token"
     chmod 600 "${HOME}/.config/kb-mcp/token"
-    run --separate-stderr env -i "PATH=${STUB_BIN}" "HOME=${HOME}" "${HELPER}"
+    run --separate-stderr env -i "PATH=${STUB_BIN}" "HOME=${HOME}" \
+        "TOKEN_BROKER_SOCKET=${TEST_TMP}/no-broker.sock" "${HELPER}"
     [ "${status}" -eq 0 ]
     [ "${output}" = '{"Authorization":"Bearer kb_from_home"}' ]
 }

@@ -852,16 +852,23 @@ remove_podman_secret() {
 }
 
 # Recreates the podman secret <secret_name> from <token> and appends its --secret argument
-# (type=env, target <target>) to PODMAN_RUN_ARGS. On failure it notifies Discord and dies with
+# (<secret_name>,<options>) to PODMAN_RUN_ARGS. On failure it notifies Discord and dies with
 # "Failed to create Podman secret for <label>". The token reaches podman only on stdin, never as
 # an argument. Call it directly, never in a pipeline or $(...): a subshell would lose the
 # PODMAN_RUN_ARGS append and turn die into a subshell exit.
-create_podman_env_secret() {
-    local item_type="$1" item_id="$2" secret_name="$3" token="$4" target="$5" label="$6"
+create_podman_secret() {
+    local item_type="$1" item_id="$2" secret_name="$3" token="$4" options="$5" label="$6"
     remove_podman_secret "${secret_name}"
     printf '%s' "${token}" | podman secret create "${secret_name}" - \
         || { notify_discord_claude_error "${item_type}" "${item_id}" "Failed to create Podman secret for ${label}"; die "Failed to create Podman secret for ${label}"; }
-    PODMAN_RUN_ARGS+=( --secret "${secret_name},type=env,target=${target}" )
+    PODMAN_RUN_ARGS+=( --secret "${secret_name},${options}" )
+}
+
+# The --secret options for a token only the container's root-owned token broker may read: a
+# file at /run/secrets/<file>, owned by root with mode 0400, rather than an environment
+# variable every process the agent starts would inherit.
+root_only_secret_options() {
+    printf 'type=mount,target=%s,uid=0,gid=0,mode=0400' "$1"
 }
 
 # Runs a single FRESH claude session for one workflow phase and returns 0 on success.
@@ -1301,9 +1308,10 @@ ensure_agent_container_ready() {
 # container launch, and creates the per-invocation host-side state it mounts: CLAUDE_MD_TMPFILE
 # (the generated CLAUDE.md), CLAUDE_SCRATCH_TMPDIR (the /workspace/tmp scratch mount), the
 # persistent CLAUDE_STATE_DIR/ORCHESTRATOR_CACHE_DIR subdirectories, the work item's transcript
-# directory (transcript_dir_path), and the Podman secrets for the Claude OAuth token and
-# GH_ENTERPRISE_TOKEN, plus one for KB_MCP_TOKEN when it is set (run_precommit_precheck unsets
-# it, so its container gets none). Any earlier secret of each kind for the container is removed
+# directory (transcript_dir_path), and the Podman secrets for the Claude OAuth token (an
+# environment variable) and GH_ENTERPRISE_TOKEN (a root-only file for the token broker), plus a
+# root-only file for KB_MCP_TOKEN when it is set (run_precommit_precheck unsets it, so its
+# container gets none). Any earlier secret of each kind for the container is removed
 # either way. item_type and item_id (both set, checked by invoke_claude) select the
 # transcript directory and feed the WORK_ITEM_URL banner and the Discord error notifications.
 # Installs the EXIT trap before the first mktemp, so a die() from inside here cannot leak a
@@ -1373,6 +1381,9 @@ prepare_claude_container_args() {
         # owned by the host user appear as owned by the container's developer user,
         # giving it full owner-level access without world-writable permissions.
         "--userns=keep-id:uid=1000,gid=1000"
+        # The entrypoint starts as root only long enough to start the token broker, which alone
+        # can read the GitHub and kb token files, then drops to developer for good with setpriv.
+        --user "0:0"
         --cpus="4"
         --memory="12g"
         --memory-swap="12g"
@@ -1452,31 +1463,28 @@ prepare_claude_container_args() {
     remove_podman_secret "claude-oauth-${container_name}"
     if [ -n "${owner_token}" ]; then
         PODMAN_SECRET_NAME="claude-oauth-${container_name}"
-        create_podman_env_secret "${item_type}" "${item_id}" "${PODMAN_SECRET_NAME}" "${owner_token}" \
-            "CLAUDE_CODE_OAUTH_TOKEN" "Claude OAuth token"
+        create_podman_secret "${item_type}" "${item_id}" "${PODMAN_SECRET_NAME}" "${owner_token}" \
+            "type=env,target=CLAUDE_CODE_OAUTH_TOKEN" "Claude OAuth token"
     fi
     # Removed on every launch, set or not: a run killed before its EXIT trap leaves the secret
     # behind, and once GH_ENTERPRISE_TOKEN is dropped from .env nothing else would ever sweep it.
+    # The token broker picks the variable gh needs (GH_TOKEN for github.com, GH_ENTERPRISE_TOKEN
+    # otherwise) from GH_HOST when it runs gh.
     remove_podman_secret "gh-enterprise-token-${container_name}"
     if [ -n "${GH_ENTERPRISE_TOKEN:-}" ]; then
-        # gh only honours GH_ENTERPRISE_TOKEN for a non-github.com GH_HOST; for a direct
-        # github.com login (an unproxied .env) the same token has to arrive as GH_TOKEN or every
-        # gh call in the container fails.
-        local gh_token_target="GH_ENTERPRISE_TOKEN"
-        [ "$(normalize_gh_host "${GH_HOST:-}")" = "github.com" ] && gh_token_target="GH_TOKEN"
         GH_ENTERPRISE_SECRET_NAME="gh-enterprise-token-${container_name}"
-        create_podman_env_secret "${item_type}" "${item_id}" "${GH_ENTERPRISE_SECRET_NAME}" "${GH_ENTERPRISE_TOKEN}" \
-            "${gh_token_target}" "GH_ENTERPRISE_TOKEN"
+        create_podman_secret "${item_type}" "${item_id}" "${GH_ENTERPRISE_SECRET_NAME}" "${GH_ENTERPRISE_TOKEN}" \
+            "$(root_only_secret_options gh-token)" "GH_ENTERPRISE_TOKEN"
     fi
-    # Read by the kb MCP server's headersHelper (kb-mcp-headers). Unset, the container gets
-    # nothing and the kb server simply fails to connect. Removed on every launch, set or not: a
-    # run killed before its EXIT trap leaves the secret behind, and once KB_MCP_TOKEN is dropped
-    # from .env nothing else would ever sweep it.
+    # Served by the token broker to the kb MCP server's headersHelper (kb-mcp-headers). Unset,
+    # the container gets nothing and the kb server simply fails to connect. Removed on every
+    # launch, set or not: a run killed before its EXIT trap leaves the secret behind, and once
+    # KB_MCP_TOKEN is dropped from .env nothing else would ever sweep it.
     remove_podman_secret "kb-mcp-token-${container_name}"
     if [ -n "${KB_MCP_TOKEN:-}" ]; then
         KB_MCP_SECRET_NAME="kb-mcp-token-${container_name}"
-        create_podman_env_secret "${item_type}" "${item_id}" "${KB_MCP_SECRET_NAME}" "${KB_MCP_TOKEN}" \
-            "KB_MCP_TOKEN" "KB_MCP_TOKEN"
+        create_podman_secret "${item_type}" "${item_id}" "${KB_MCP_SECRET_NAME}" "${KB_MCP_TOKEN}" \
+            "$(root_only_secret_options kb-mcp-token)" "KB_MCP_TOKEN"
     fi
     [ -n "${GH_HOST:-}" ]                && PODMAN_RUN_ARGS+=( --env "GH_HOST=$(normalize_gh_host "${GH_HOST}")" )
     PODMAN_RUN_ARGS+=( --env "CLAUDE_CODE_AUTO_COMPACT_WINDOW=${CLAUDE_CODE_AUTO_COMPACT_WINDOW}" )

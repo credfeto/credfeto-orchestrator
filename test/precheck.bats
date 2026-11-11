@@ -161,7 +161,7 @@ write_failing_run_body() {
     # The pre-check launch itself happened, with the other secrets untouched.
     grep -qx -- "ORCHESTRATOR_PRECHECK=1" "${args}"
     grep -q -- ":/home/developer/.claude/CLAUDE.md:ro$" "${args}"
-    grep -q -- "^gh-enterprise-token-orchestrator-credfeto,type=env," "${args}"
+    grep -q -- "^gh-enterprise-token-orchestrator-credfeto,type=mount,target=gh-token," "${args}"
     grep -qx -- "secret create gh-enterprise-token-orchestrator-credfeto -" "${TEST_TMP}/podman_secret"
     # No kb secret is created for it or passed to it, and the token never reaches its argv.
     [ "$(grep -c 'kb-mcp-token' "${args}")" -eq 0 ]
