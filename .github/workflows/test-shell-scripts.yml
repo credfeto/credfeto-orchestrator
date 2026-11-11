@@ -42,11 +42,39 @@ jobs:
       # shfmt is needed because the Claude Code hook scripts under test parse
       # commands with it (see containers/base/development-full/claude-hooks/)
       # and fail closed without it.
+      # Both tools come from pinned upstream GitHub releases, each verified
+      # against its SHA256 before use, not from apt: Ubuntu's package mirrors
+      # can hang or fail to resolve on the hosted runners, which blocked this
+      # check while every other one passed. Update a tool's VERSION and SHA256
+      # together when bumping it.
       - name: "Install bats and shfmt"
         shell: bash
+        timeout-minutes: 5
+        env:
+          BATS_VERSION: "1.14.0"
+          BATS_SHA256: "bb537b70b15b732f6d8827dd6578e3d8ce166636ce1f18ea9a074184fcce9177"
+          SHFMT_VERSION: "3.14.1"
+          SHFMT_SHA256_AMD64: "76e77641faa025814b77f153b29796b8e6fa2fca03e0c76a691608b86c7ea7bf"
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends bats shfmt
+          set -euo pipefail
+          download() {
+            curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 20 --max-time 120 -o "$2" "$1"
+          }
+          tools_dir="${RUNNER_TEMP}/shell-test-tools"
+          mkdir -p "${tools_dir}/bin" "${tools_dir}/src"
+
+          download "https://github.com/bats-core/bats-core/archive/refs/tags/v${BATS_VERSION}.tar.gz" "${tools_dir}/bats.tar.gz"
+          echo "${BATS_SHA256}  ${tools_dir}/bats.tar.gz" | sha256sum -c -
+          tar -xzf "${tools_dir}/bats.tar.gz" -C "${tools_dir}/src"
+          "${tools_dir}/src/bats-core-${BATS_VERSION}/install.sh" "${tools_dir}"
+
+          download "https://github.com/mvdan/sh/releases/download/v${SHFMT_VERSION}/shfmt_v${SHFMT_VERSION}_linux_amd64" "${tools_dir}/bin/shfmt"
+          echo "${SHFMT_SHA256_AMD64}  ${tools_dir}/bin/shfmt" | sha256sum -c -
+          chmod 0755 "${tools_dir}/bin/shfmt"
+
+          echo "${tools_dir}/bin" >> "$GITHUB_PATH"
+          "${tools_dir}/bin/bats" --version
+          "${tools_dir}/bin/shfmt" --version
 
       - name: "Run shell tests"
         shell: bash
