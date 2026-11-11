@@ -155,7 +155,7 @@ codegraph_mounts() {
     [ ! -L "${SESSION_BASE_DIR}/codegraph/PullRequest_99" ]
 }
 
-@test "invoke_claude mounts a pivoted PR's linked index directory, so the PR syncs the Issue's index" {
+@test "invoke_claude mounts a pivoted PR's linked index directory, so the PR reuses the Issue's index" {
     local args_log="${TEST_TMP}/podman_args"
     stub_podman_run_logging_args "${args_log}"
     make_codegraph_index "Issue_10"
