@@ -16,10 +16,6 @@ setup() {
     for tool in git jq env bash; do
         ln -s "$(which "${tool}")" "${STUB_BIN}/${tool}"
     done
-    # Each stub server prints where it ran, the root it was given and its arguments, one a line,
-    # so the tests can tell which one the wrapper started and how.
-    # shellcheck disable=SC2016  # expanded by the stub, not here
-    make_stub dotnet 'printf "%s\n" "dotnet" "cwd=$(pwd -P)" "root=${BUILD_MCP_REPO_ROOT}" "argc=$#" "$@"'
 
     # The user's home must allow execution for the global tool stub, which the system temp
     # directory may not, so it lives in the repository tree like the stub directory. git is only
@@ -33,6 +29,13 @@ setup() {
     # Every wrapper run gets these, so git never finds a repository above the test's own
     # directory (GIT_CEILING_DIRECTORIES) or reads the host's system config.
     GIT_ISOLATION_ENV=("GIT_CEILING_DIRECTORIES=${WORK}" GIT_CONFIG_NOSYSTEM=1)
+
+    # dotnet tool list's canned answer and what the stub saw, outside the wrapper's environment.
+    DOTNET_STUB_STATE="${TEST_TMP}/dotnet-stub"
+    mkdir -p "${DOTNET_STUB_STATE}"
+    make_dotnet_stub
+    # What dotnet prints when no manifest is found from HOME upwards.
+    set_dotnet_list '{"version":1,"data":[]}'
 }
 
 teardown() {
@@ -52,13 +55,44 @@ run_wrapper() {
         "${GIT_ISOLATION_ENV[@]}" "${WRAPPER_ENV[@]}" "${WRAPPER}" "$@"
 }
 
-# Writes a tool manifest at the given path listing the given commands.
-write_manifest() {
-    local path="$1"
-    shift
-    mkdir -p "${path%/*}"
-    jq -n '{version: 1, isRoot: true, tools: {"credfeto.build.dotnet.server": {version: "1.0.0", commands: $ARGS.positional}}}' \
-        --args "$@" > "${path}"
+# Installs the dotnet stub. It answers "tool list" with the canned stdout, stderr and exit status
+# set_dotnet_list wrote, recording where it ran and its arguments; anything else runs the given
+# report line, or by default one that prints where it ran, the root it was given and its arguments,
+# one a line, so the tests can tell which server the wrapper started and how. Only bash builtins
+# are used, because the wrapper's PATH holds the stub directory alone.
+make_dotnet_stub() {
+    # shellcheck disable=SC2016  # expanded by the stub, not here
+    local report='printf "%s\n" "dotnet" "cwd=$(pwd -P)" "root=${BUILD_MCP_REPO_ROOT}" "argc=$#" "$@"'
+    [ "$#" -eq 0 ] || report="$1"
+    local state
+    state="$(printf '%q' "${DOTNET_STUB_STATE}")"
+    # shellcheck disable=SC2016  # expanded by the stub, not here
+    make_stub_multiline dotnet \
+        'if [ "${1-}" = tool ] && [ "${2-}" = list ]; then' \
+        "    state=${state}" \
+        '    printf "%s\n" "$(pwd -P)" > "${state}/list-cwd"' \
+        '    printf "%s\n" "$*" > "${state}/list-args"' \
+        '    [ ! -s "${state}/list-stderr" ] || printf "%s\n" "$(<"${state}/list-stderr")" >&2' \
+        '    printf "%s" "$(<"${state}/list-stdout")"' \
+        '    exit "$(<"${state}/list-status")"' \
+        'fi' \
+        "${report}"
+}
+
+# Sets what the dotnet stub's "tool list" prints on stdout ("$1") and stderr ("$3") and its exit
+# status ("$2", 0 when not given).
+set_dotnet_list() {
+    printf '%s' "$1" > "${DOTNET_STUB_STATE}/list-stdout"
+    printf '%s' "${2:-0}" > "${DOTNET_STUB_STATE}/list-status"
+    printf '%s' "${3-}" > "${DOTNET_STUB_STATE}/list-stderr"
+}
+
+# Makes the dotnet stub's "tool list" report one local tool with the given commands, in the shape
+# dotnet tool list --local --format json prints.
+list_local_tool() {
+    set_dotnet_list "$(jq -nc --arg manifest "${USER_HOME}/dotnet-tools.json" \
+        '{version: 1, data: [{manifest: $manifest, packageId: "credfeto.build.dotnet.server", version: "1.0.0", commands: $ARGS.positional}]}' \
+        --args "$@")"
 }
 
 # Installs a global tool stub whose body is the given line, or by default one that prints the same
@@ -81,27 +115,20 @@ make_git_repo() {
     mkdir -p "$1/src/deep"
 }
 
-@test "the local tool from ~/dotnet-tools.json runs through dotnet tool run, from HOME, with the start directory as the root" {
-    write_manifest "${USER_HOME}/dotnet-tools.json" credfeto-build-dotnet
+@test "a local tool dotnet tool list reports runs through dotnet tool run, from HOME, with the start directory as the root" {
+    list_local_tool credfeto-build-dotnet
     make_global_tool
     run_wrapper "${WORK}"
     [ "${status}" -eq 0 ]
     [ "${output}" = "$(printf '%s\n' dotnet "cwd=${USER_HOME}" "root=${WORK}" argc=3 tool run credfeto-build-dotnet)" ]
     [ -z "${stderr}" ]
+    # The list ran from HOME too, so it saw the manifest dotnet tool run uses, not the start
+    # directory's.
+    [ "$(<"${DOTNET_STUB_STATE}/list-cwd")" = "${USER_HOME}" ]
+    [ "$(<"${DOTNET_STUB_STATE}/list-args")" = "tool list --local --format json" ]
 }
 
-@test "the local tool runs from HOME even when the start directory has its own root manifest" {
-    write_manifest "${USER_HOME}/dotnet-tools.json" credfeto-build-dotnet
-    make_git_repo "${WORK}/repo"
-    write_manifest "${WORK}/repo/dotnet-tools.json" some-other-tool
-    run_wrapper "${WORK}/repo"
-    [ "${status}" -eq 0 ]
-    [ "${lines[0]}" = "dotnet" ]
-    [ "${lines[1]}" = "cwd=${USER_HOME}" ]
-    [ "${lines[2]}" = "root=${WORK}/repo" ]
-}
-
-@test "the global tool runs when there is no ~/dotnet-tools.json" {
+@test "the global tool runs when dotnet tool list finds no manifest, and the list's stdout never reaches stdout" {
     make_global_tool
     run_wrapper "${WORK}"
     [ "${status}" -eq 0 ]
@@ -109,82 +136,94 @@ make_git_repo() {
     [ -z "${stderr}" ]
 }
 
-@test "the global tool runs when ~/dotnet-tools.json does not list credfeto-build-dotnet" {
-    write_manifest "${USER_HOME}/dotnet-tools.json" some-other-tool
+@test "the global tool runs when dotnet tool list reports only other tools" {
+    list_local_tool some-other-tool
     make_global_tool
     run_wrapper "${WORK}"
     [ "${status}" -eq 0 ]
-    [ "${lines[0]}" = "global" ]
+    [ "${output}" = "$(printf '%s\n' global "cwd=${WORK}" "root=${WORK}" argc=0)" ]
+    [ -z "${stderr}" ]
 }
 
-@test "a ~/dotnet-tools.json that is not valid JSON, or not a manifest, fails instead of falling back" {
-    mkdir -p "${USER_HOME}"
+@test "a failing dotnet tool list fails, with its message on stderr, instead of falling back" {
     make_global_tool
-    # Each is one file's whole content: invalid JSON, JSON that is not one object whose tools is an
-    # object, several documents, and an empty file.
+    set_dotnet_list '' 1 "Json parsing error in file ${USER_HOME}/dotnet-tools.json"
+    run_wrapper "${WORK}"
+    [ "${status}" -ne 0 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "$(printf '%s\n' "Json parsing error in file ${USER_HOME}/dotnet-tools.json" \
+        "build-dotnet-mcp: dotnet tool list --local --format json failed in ${USER_HOME}")" ]
+}
+
+@test "dotnet tool list output that is not one object with a data array fails instead of falling back" {
+    make_global_tool
+    # Each is the list's whole stdout: invalid JSON, JSON of the wrong shape, several documents,
+    # and nothing at all.
     local content
-    for content in '{ not json' '[1, 2]' '{}' 'null' '{"tools": 5}' '{"tools": "x"}' \
-        '{"tools": {}} {"tools": {}}' '{"tools": {}}
-{"tools": {}}' ''; do
-        printf '%s' "${content}" > "${USER_HOME}/dotnet-tools.json"
+    for content in '{ not json' '[1, 2]' '{}' 'null' '{"data": 5}' '{"data": "x"}' '{"data": {}}' \
+        '{"data": []} {"data": []}' '{"data": []}
+{"data": []}' ''; do
+        set_dotnet_list "${content}"
         run_wrapper "${WORK}"
         [ "${status}" -ne 0 ]
         [ -z "${output}" ]
-        [[ "${stderr}" == *"build-dotnet-mcp: cannot read ${USER_HOME}/dotnet-tools.json as a dotnet tool manifest" ]]
+        [[ "${stderr}" == *"build-dotnet-mcp: cannot read the output of dotnet tool list --local --format json in ${USER_HOME}" ]]
     done
 }
 
-@test "a tool whose commands is not an array never matches, and does not stop the others being read" {
-    mkdir -p "${USER_HOME}"
+@test "a listed tool whose commands is not an array never matches, and does not stop the others being read" {
     make_global_tool
     local content
-    for content in '{"tools": {"a": {"commands": "credfeto-build-dotnet"}}}' \
-        '{"tools": {"a": 5, "b": {}, "c": {"commands": ["some-other-tool"]}}}'; do
-        printf '%s' "${content}" > "${USER_HOME}/dotnet-tools.json"
+    for content in '{"data": [{"commands": "credfeto-build-dotnet"}]}' \
+        '{"data": [5, {}, {"commands": ["some-other-tool"]}]}'; do
+        set_dotnet_list "${content}"
         run_wrapper "${WORK}"
         [ "${status}" -eq 0 ]
         [ "${lines[0]}" = "global" ]
         [ -z "${stderr}" ]
     done
 
-    printf '%s' '{"tools": {"a": {"commands": "x"}, "b": 5, "c": {"commands": [1, "credfeto-build-dotnet"]}}}' \
-        > "${USER_HOME}/dotnet-tools.json"
+    set_dotnet_list '{"data": [{"commands": "x"}, 5, {"commands": [1, "credfeto-build-dotnet"]}]}'
     run_wrapper "${WORK}"
     [ "${status}" -eq 0 ]
     [ "${lines[0]}" = "dotnet" ]
     [ -z "${stderr}" ]
 }
 
-@test "with jq missing from PATH a ~/dotnet-tools.json fails instead of falling back" {
-    write_manifest "${USER_HOME}/dotnet-tools.json" credfeto-build-dotnet
+@test "a listed local tool that dotnet tool run cannot start fails without falling back to the global tool" {
+    list_local_tool credfeto-build-dotnet
     make_global_tool
-    rm -f "${STUB_BIN}/jq"
+    # shellcheck disable=SC2016  # expanded by the stub, not here
+    make_dotnet_stub 'printf "%s\n" "Run dotnet tool restore to make the tool available." >&2; exit 1'
     run_wrapper "${WORK}"
-    [ "${status}" -ne 0 ]
+    [ "${status}" -eq 1 ]
     [ -z "${output}" ]
-    [ "${stderr}" = "build-dotnet-mcp: ${USER_HOME}/dotnet-tools.json exists, but jq is not on PATH to read it" ]
+    [ "${stderr}" = "Run dotnet tool restore to make the tool available." ]
 }
 
-@test "with jq missing from PATH and no ~/dotnet-tools.json the global tool still runs" {
+@test "with dotnet missing from PATH the global tool runs, or the wrapper fails when there is none" {
     make_global_tool
-    rm -f "${STUB_BIN}/jq"
+    rm -f "${STUB_BIN}/dotnet"
     run_wrapper "${WORK}"
     [ "${status}" -eq 0 ]
-    [ "${lines[0]}" = "global" ]
+    [ "${output}" = "$(printf '%s\n' global "cwd=${WORK}" "root=${WORK}" argc=0)" ]
     [ -z "${stderr}" ]
-}
-
-@test "the old ~/.config/dotnet-tools.json manifest name is not looked for" {
-    write_manifest "${USER_HOME}/.config/dotnet-tools.json" credfeto-build-dotnet
-    make_global_tool
-    run_wrapper "${WORK}"
-    [ "${status}" -eq 0 ]
-    [ "${lines[0]}" = "global" ]
 
     rm -f "${GLOBAL_TOOL}"
     run_wrapper "${WORK}"
     [ "${status}" -ne 0 ]
     [ -z "${output}" ]
+    [[ "${stderr}" == "build-dotnet-mcp: credfeto-build-dotnet not found"* ]]
+}
+
+@test "with jq missing from PATH and dotnet present it fails instead of falling back" {
+    list_local_tool credfeto-build-dotnet
+    make_global_tool
+    rm -f "${STUB_BIN}/jq"
+    run_wrapper "${WORK}"
+    [ "${status}" -ne 0 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "build-dotnet-mcp: jq is not on PATH to read dotnet tool list's output" ]
 }
 
 @test "a preset BUILD_MCP_REPO_ROOT is kept" {
@@ -195,7 +234,7 @@ make_git_repo() {
     [ "${status}" -eq 0 ]
     [ "${lines[2]}" = "root=/workspace/repo" ]
 
-    write_manifest "${USER_HOME}/dotnet-tools.json" credfeto-build-dotnet
+    list_local_tool credfeto-build-dotnet
     run_wrapper "${WORK}/repo/src"
     [ "${status}" -eq 0 ]
     [ "${lines[0]}" = "dotnet" ]
@@ -274,7 +313,7 @@ make_git_repo() {
     [ "${status}" -eq 0 ]
     [ "${output}" = "$(printf '%s\n' global "cwd=${WORK}" "root=${WORK}" argc=3 --flag 'two words' '')" ]
 
-    write_manifest "${USER_HOME}/dotnet-tools.json" credfeto-build-dotnet
+    list_local_tool credfeto-build-dotnet
     run_wrapper "${WORK}" --flag 'two words' ''
     [ "${status}" -eq 0 ]
     [ "${output}" = "$(printf '%s\n' dotnet "cwd=${USER_HOME}" "root=${WORK}" argc=6 tool run credfeto-build-dotnet --flag 'two words' '')" ]
@@ -285,7 +324,7 @@ make_git_repo() {
 assert_forced_for_both_tools() {
     local name="$1" forced="$2" global_override="$3" local_override="$4"
     local report="printf \"%s\\n\" \"\${0##*/}\" \"value=\${${name}-unset}\""
-    make_stub dotnet "${report}"
+    make_dotnet_stub "${report}"
     make_global_tool "${report}"
 
     WRAPPER_ENV=()
@@ -298,7 +337,7 @@ assert_forced_for_both_tools() {
     [ "${status}" -eq 0 ]
     [ "${output}" = "$(printf '%s\n' credfeto-build-dotnet "value=${forced}")" ]
 
-    write_manifest "${USER_HOME}/dotnet-tools.json" credfeto-build-dotnet
+    list_local_tool credfeto-build-dotnet
     WRAPPER_ENV=()
     run_wrapper "${WORK}"
     [ "${status}" -eq 0 ]
@@ -332,15 +371,6 @@ assert_forced_for_both_tools() {
     [ "${status}" -ne 0 ]
     [ -z "${output}" ]
     [[ "${stderr}" == "build-dotnet-mcp: credfeto-build-dotnet not found"* ]]
-}
-
-@test "a listed local tool with no dotnet on PATH fails with a message on stderr and nothing on stdout" {
-    write_manifest "${USER_HOME}/dotnet-tools.json" credfeto-build-dotnet
-    rm -f "${STUB_BIN}/dotnet"
-    run_wrapper "${WORK}"
-    [ "${status}" -ne 0 ]
-    [ -z "${output}" ]
-    [[ "${stderr}" == "build-dotnet-mcp: ${USER_HOME}/dotnet-tools.json lists credfeto-build-dotnet, but dotnet is not on PATH" ]]
 }
 
 @test "with HOME unset or empty it fails with a message on stderr and nothing on stdout" {
