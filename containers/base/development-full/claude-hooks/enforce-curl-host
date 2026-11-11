@@ -2,7 +2,8 @@
 # Restricts curl to a closed grammar: a small, exact-spelling allowlist of flags plus exactly
 # one literal https://... (or http://...) URL argument, whose host must not be one of a fixed
 # denied set matching this repo's own claude-managed-settings.json WebFetch(domain:...) deny entries:
-# api.github.com, github.com, registry.npmjs.org, raw.githubusercontent.com, api.nuget.org.
+# api.github.com, github.com, registry.npmjs.org, raw.githubusercontent.com, api.nuget.org,
+# workflow-mcp.markridgwell.com, memory.markridgwell.com.
 # Exit 2 = blocked, 0 = allowed.
 #
 # curl is on claude-managed-settings.json's blanket Bash(curl *) permissions.allow, and its danger is
@@ -107,7 +108,10 @@ MARKER='(non-literal)'
 # with that file by test/enforce-curl-host.bats's own parity test, mirroring how
 # test/command-allowlist-parity.bats already keeps command-allowlist and permissions.allow
 # from drifting apart.
-DENIED_HOSTS=(api.github.com github.com registry.npmjs.org raw.githubusercontent.com api.nuget.org)
+#
+# The MCP hosts are here because Claude Code itself is their only intended client: the agent
+# talking to them directly would bypass the MCP tools' own surface.
+DENIED_HOSTS=(api.github.com github.com registry.npmjs.org raw.githubusercontent.com api.nuget.org workflow-mcp.markridgwell.com memory.markridgwell.com)
 
 # Flags this repo's own curl usage actually needs, spelled exactly - no globbing, no
 # combined-cluster resolution. Anything not listed here is rejected outright by the loop

@@ -167,6 +167,8 @@ JQSTUB
     grep -qFx -- '--memory-swap=12g' "${args_log}"
     grep -qFx -- '--pids-limit=4096' "${args_log}"
     grep -qFx -- '--userns=keep-id:uid=1000,gid=1000' "${args_log}"
+    # The entrypoint starts as root to start the token broker, then drops to developer.
+    [ "$(grep -A1 -Fx -- '--user' "${args_log}" | grep -cx '0:0')" -eq 1 ]
 }
 
 # --- invoke_claude error handling ---------------------------------------------
@@ -529,10 +531,12 @@ STUBEOF
     run grep -q 'GH_ENTERPRISE_TOKEN=my-gh-token' "${args_log}"
     [ "${status}" -ne 0 ]
     # --secret flag IS present in the podman run args
-    grep -qx 'gh-enterprise-token-orchestrator-credfeto,type=env,target=GH_ENTERPRISE_TOKEN' "${args_log}"
+    # as a root-only file for the token broker, never an environment variable
+    grep -qx 'gh-enterprise-token-orchestrator-credfeto,type=mount,target=gh-token,uid=0,gid=0,mode=0400' "${args_log}"
+    [ "$(grep -c 'type=env,target=GH_' "${args_log}")" -eq 0 ]
 }
 
-@test "invoke_claude passes the gh token as GH_TOKEN when GH_HOST is github.com (unproxied .env)" {
+@test "invoke_claude mounts the same root-only gh token file when GH_HOST is github.com (unproxied .env)" {
     local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     # shellcheck disable=SC2030
@@ -550,9 +554,10 @@ STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
     invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
-    grep -qx 'gh-enterprise-token-orchestrator-credfeto,type=env,target=GH_TOKEN' "${args_log}"
+    # The token broker picks GH_TOKEN for github.com from GH_HOST, so the mount is unchanged.
+    grep -qx 'gh-enterprise-token-orchestrator-credfeto,type=mount,target=gh-token,uid=0,gid=0,mode=0400' "${args_log}"
     grep -qx 'GH_HOST=github.com' "${args_log}"
-    [ "$(grep -c 'target=GH_ENTERPRISE_TOKEN' "${args_log}")" -eq 0 ]
+    [ "$(grep -c 'type=env,target=GH_' "${args_log}")" -eq 0 ]
 }
 
 @test "invoke_claude notifies Discord before dying when creating the GH_ENTERPRISE_TOKEN Podman secret fails (#1103)" {
@@ -607,7 +612,7 @@ STUBEOF
     grep -qx 'kb-secret-token' "${TEST_TMP}/podman_secret_stdin"
     # The token itself is never a podman argument, as --env or otherwise.
     [ "$(cat "${TEST_TMP}/podman_args" "${TEST_TMP}/podman_secret" | grep -c 'kb-secret-token')" -eq 0 ]
-    grep -qx 'kb-mcp-token-orchestrator-credfeto,type=env,target=KB_MCP_TOKEN' "${TEST_TMP}/podman_args"
+    grep -qx 'kb-mcp-token-orchestrator-credfeto,type=mount,target=kb-mcp-token,uid=0,gid=0,mode=0400' "${TEST_TMP}/podman_args"
     # Removed again on the way out.
     [ "$(grep -A1 -x 'rm' "${TEST_TMP}/podman_secret" | grep -cx 'kb-mcp-token-orchestrator-credfeto')" -ge 2 ]
     [ -z "${KB_MCP_SECRET_NAME}" ]

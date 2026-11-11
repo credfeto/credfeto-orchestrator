@@ -9,6 +9,32 @@ die()  { printf '\n\033[31m✗\033[0m %s\n' "$*" >&2; exit 1; }
 warn() { printf '\n\033[33m!\033[0m %s\n' "$*" >&2; }
 info() { printf '\n\033[32m→\033[0m %s\n' "$*" >&2; }
 
+# The container starts as root (lib/podman passes --user 0:0) only for this stage. The GitHub
+# and kb tokens are root-only files under /run/secrets, so the root-owned token broker is
+# started here to hold them, then this script runs itself again as developer with setpriv,
+# which keeps the same PID: claude ends up as this PID, which the broker uses to recognise
+# Claude Code's own MCP header helpers. Nothing the agent runs can read the token files, the
+# broker's environment or its memory. --no-new-privs and the emptied capability sets mean the
+# developer stage can never regain root.
+# TOKEN_BROKER_SOCKET overrides the socket path (used by tests).
+start_token_broker_and_drop_root() {
+    local socket="${TOKEN_BROKER_SOCKET:-/run/token-broker/socket}" broker_pid attempt
+    TOKEN_BROKER_CLAUDE_PID="$$" token-broker serve </dev/null >&2 &
+    broker_pid=$!
+    for attempt in $(seq 1 50); do
+        [ -S "${socket}" ] && break
+        kill -0 "${broker_pid}" 2>/dev/null || die "The token broker exited before creating ${socket}"
+        [ "${attempt}" -eq 50 ] && die "The token broker did not create ${socket} within 5 seconds"
+        sleep 0.1
+    done
+    unset GH_TOKEN GH_ENTERPRISE_TOKEN KB_MCP_TOKEN
+    export HOME=/home/developer USER=developer LOGNAME=developer
+    exec setpriv --reuid=developer --regid=developer --init-groups --no-new-privs \
+        --bounding-set=-all --inh-caps=-all -- "$0" "$@"
+}
+
+[ "$(id -u)" -eq 0 ] && start_token_broker_and_drop_root "$@"
+
 # Log the git SHA baked into each image layer at build time. Logged before the
 # required-env-var checks so provenance is visible even when required vars are missing.
 info "Image layer provenance (git SHA of orchestrator commit used for each build):"
@@ -172,36 +198,6 @@ ensure_github_known_hosts() {
     chmod 600 "${known_hosts}"
 }
 
-# Ensure gh uses SSH for git operations on every host it knows about.
-# GH_HOST routes API calls through the proxy, but gh also uses it for git remote
-# URLs in commands like `gh pr checkout` — which would write git@<proxy>: into
-# .git/config. We bake `git_protocol: ssh` into the image; this function verifies
-# that setting is still in effect and re-applies it if it has been overwritten.
-enforce_gh_git_protocol_ssh() {
-    local hosts host current
-    # Collect every host gh knows about (from its config file).
-    hosts=$(gh config list 2>/dev/null | awk -F'[. ]' '/^hosts\./ {print $2}' | sort -u || true)
-    # Always include the proxy host (it may not have an explicit entry yet).
-    [ -n "${GH_HOST:-}" ] && hosts=$(printf '%s\n%s\n' "${hosts}" "${GH_HOST}" | sort -u)
-    [ -n "${hosts}" ] || return 0
-    while IFS= read -r host; do
-        [ -z "${host}" ] && continue
-        current=$(gh config get git_protocol --host "${host}" 2>/dev/null || true)
-        if [ "${current}" != "ssh" ]; then
-            warn "gh git_protocol for ${host} is '${current}' — resetting to ssh"
-            gh config set git_protocol ssh --host "${host}" 2>/dev/null \
-                || warn "Failed to reset gh git_protocol for ${host}"
-        fi
-    done <<< "${hosts}"
-    # Also ensure the global default is ssh.
-    current=$(gh config get git_protocol 2>/dev/null || true)
-    if [ "${current}" != "ssh" ]; then
-        warn "gh global git_protocol is '${current}' — resetting to ssh"
-        gh config set git_protocol ssh 2>/dev/null \
-            || warn "Failed to reset gh global git_protocol"
-    fi
-}
-
 # Fail fast if the workspace repo has any remote URL that is not SSH (git@github.com:).
 # oneshot resets the URL to SSH before every container launch, so a non-SSH URL
 # here means something has gone wrong upstream.
@@ -360,7 +356,6 @@ seed_orchestrator_cache() {
     fi
 }
 
-enforce_gh_git_protocol_ssh
 verify_gpg_signing
 ensure_github_known_hosts
 verify_ssh_signing

@@ -165,22 +165,29 @@ allowed and not checked (#1850). While the file exists it has exclusive control,
 project, plugin or `--mcp-config` server can be added. `mcp__cfwf__*` in `permissions.allow` lets every
 agent use all of its tools. The file is world-readable, so it holds no token. Its `headersHelper`, the
 root-owned `cfwf-mcp-headers`, runs at connect time and prints `{"Authorization":"Bearer <token>"}`. The
-token comes from `GH_ENTERPRISE_TOKEN`, then `GH_TOKEN` (the GitHub token that already reaches the
-container as a Podman secret), then `gh auth token`. With no token it exits non-zero and prints nothing,
-and the token is never written to stderr, a file or the image. `enforce-curl-host` does not yet block the
-server's host, so it does not stop an agent sending that token there with `curl` (#1840). No prompt routes
-work to the server yet. See
+token comes from the root-owned token broker while its socket exists (the agent container), and
+otherwise from `GH_ENTERPRISE_TOKEN`, then `GH_TOKEN`, then `gh auth token`. With no token it exits
+non-zero and prints nothing, and the token is never written to stderr, a file or the image.
+`enforce-curl-host` denies the server's host, so an agent cannot send a token there with `curl`. See
 [docs/development/claude-hooks.md](../../../docs/development/claude-hooks.md#the-cfwf-mcp-server).
 
 `kb` is the knowledge-base MCP server, and `mcp__kb__*` in `permissions.allow` allows all of its tools, with
 no deny entries. Its `headersHelper`, the root-owned `kb-mcp-headers`, prints
 `{"Authorization":"Bearer <token>"}` from `KB_MCP_TOKEN` or, when that is unset, from the first line of
 `${XDG_CONFIG_HOME:-$HOME/.config}/kb-mcp/token`, read only when that file is a regular file owned by the
-user with mode 0600. In the container the token arrives as `KB_MCP_TOKEN`: `oneshot` turns an optional
+user with mode 0600. In the container it comes from the token broker instead: `oneshot` turns an optional
 `KB_MCP_TOKEN=` line in `orchestrator/.env` into a per-container Podman secret, `kb-mcp-token-<container>`,
-and removes it on exit. With no token the helper exits non-zero and prints nothing, so the session starts
+mounted as the root-only file `/run/secrets/kb-mcp-token` that only the broker reads, and removes it on exit.
+With no token the helper exits non-zero and prints nothing, so the session starts
 with `kb` shown as failed to connect. See
 [docs/development/claude-hooks.md](../../../docs/development/claude-hooks.md#the-kb-mcp-server).
+
+The token broker, `token-broker/token-broker` installed as `/usr/local/sbin/token-broker`, is started as root
+by the agent container's entrypoint before it drops to `developer` with `setpriv`. It serves MCP headers only to
+the helpers Claude Code runs, and runs `gh` (the real binary is moved to `/usr/libexec/token-broker/gh`;
+`/usr/bin/gh` is a wrapper) with the GitHub token for the developer user, refusing requests that could
+send the token elsewhere or print it. See
+[docs/development/claude-hooks.md](../../../docs/development/claude-hooks.md#the-token-broker).
 
 `build-dotnet` is the .NET build, test and coverage MCP server (#1818), `credfeto-build-dotnet` from the
 `Credfeto.Build.Dotnet.Server` package that `development-credfeto-tools` installs. It is a stdio server
@@ -274,8 +281,13 @@ Paths locked down by this image. NuGet.Config and the .NET tool paths are locked
 | `/etc/claude-code/managed-settings.json` | root:root | 0444 | Baked-in Claude Code managed settings: permissions, hooks, sandbox (from `claude-managed-settings.json`); read-only for all users |
 | `/etc/claude-code/managed-mcp.json` | root:root | 0444 | Baked-in MCP server list, the required `cfwf`, `kb` and `build-dotnet` servers and any others, with no token (from `claude-managed-mcp.json`); read-only for all users |
 | `/etc/claude-code/mcp/` | root:root | 0755 | MCP headers helper directory; agent can read/execute but not modify |
-| `/etc/claude-code/mcp/cfwf-mcp-headers` | root:root | 0755 | `headersHelper` printing the `cfwf` server's `Authorization` header from the GitHub token in the environment (from `claude-mcp/cfwf-mcp-headers`); read/execute only |
-| `/etc/claude-code/mcp/kb-mcp-headers` | root:root | 0755 | `headersHelper` printing the `kb` server's `Authorization` header from `KB_MCP_TOKEN` or the user's 0600 token file (from `claude-mcp/kb-mcp-headers`); read/execute only |
+| `/etc/claude-code/mcp/cfwf-mcp-headers` | root:root | 0755 | `headersHelper` printing the `cfwf` server's `Authorization` header from the token broker while its socket exists, otherwise from the GitHub token in the environment (from `claude-mcp/cfwf-mcp-headers`); read/execute only |
+| `/etc/claude-code/mcp/kb-mcp-headers` | root:root | 0755 | `headersHelper` printing the `kb` server's `Authorization` header from the token broker while its socket exists, otherwise from `KB_MCP_TOKEN` or the user's 0600 token file (from `claude-mcp/kb-mcp-headers`); read/execute only |
+| `/usr/local/sbin/token-broker` | root:root | 0755 | Token broker (from `token-broker/token-broker`), started as root by the agent entrypoint; serves MCP headers to the helpers and runs `gh` with the GitHub token |
+| `/usr/bin/gh` | root:root | 0755 | Wrapper (from `token-broker/gh`) running `token-broker gh` while the broker's socket exists, otherwise the real `gh` |
+| `/usr/libexec/token-broker/gh` | root:root | 0711 | The real `gh`; execute-only, so its process is not dumpable |
+| `/usr/libexec/token-broker/empty/` | root:root | 0755 | Empty directory used as the broker's `gh` `PATH` and `HOME` |
+| `/etc/token-broker/gh/config.yml` | root:root | 0444 | Root-owned `gh` configuration the broker runs `gh` with (from `token-broker/gh-config.yml`) |
 | `/etc/claude-code/hooks/` | root:root | 0755 | Baked-in Claude Code hooks directory; agent can read/execute but not modify |
 | `/etc/claude-code/hooks/reject-obfuscated-commands` | root:root | 0755 | Baked-in hook script (from `claude-hooks/reject-obfuscated-commands`); read/execute only |
 | `/etc/claude-code/hooks/enforce-allowed-dirs` | root:root | 0755 | Baked-in hook script (from `claude-hooks/enforce-allowed-dirs`); read/execute only |

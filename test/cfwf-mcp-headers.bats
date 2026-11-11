@@ -23,9 +23,49 @@ teardown() {
 }
 
 # Runs the helper with only the given NAME=value variables (env -i drops every token the host
-# exported), stdout in output and stderr in stderr.
+# exported), stdout in output and stderr in stderr. The broker socket points at a path that does
+# not exist unless a test passes its own TOKEN_BROKER_SOCKET.
 run_helper() {
-    run --separate-stderr env -i "PATH=${STUB_BIN}" "HOME=${HOME}" "$@" "${HELPER}"
+    run --separate-stderr env -i "PATH=${STUB_BIN}" "HOME=${HOME}" \
+        "TOKEN_BROKER_SOCKET=${TEST_TMP}/no-broker.sock" "$@" "${HELPER}"
+}
+
+# A token-broker stub that logs its arguments, prints the given output and exits with the given
+# status; the helper finds it through TOKEN_BROKER_BIN and a socket path that exists.
+stub_broker() {
+    export BROKER_LOG="${TEST_TMP}/broker.log"
+    : > "${TEST_TMP}/broker.sock"
+    make_stub token-broker "printf '%s\n' \"\$*\" >> '${BROKER_LOG}'; printf '%s' '$1'; exit $2"
+}
+
+@test "while the broker socket exists the headers come from the broker" {
+    stub_broker '{"Authorization":"Bearer from_broker"}' 0
+    stub_gh_token gho_from_gh
+    run_helper "TOKEN_BROKER_SOCKET=${TEST_TMP}/broker.sock" \
+        "TOKEN_BROKER_BIN=${STUB_BIN}/token-broker" GH_TOKEN=ghp_direct
+    [ "${status}" -eq 0 ]
+    [ "${output}" = '{"Authorization":"Bearer from_broker"}' ]
+    [ "$(cat "${BROKER_LOG}")" = 'header cfwf' ]
+    [ ! -e "${GH_LOG}" ]
+}
+
+@test "a broker refusal exits non-zero and never falls back to the environment or gh" {
+    stub_broker '' 1
+    stub_gh_token gho_from_gh
+    run_helper "TOKEN_BROKER_SOCKET=${TEST_TMP}/broker.sock" \
+        "TOKEN_BROKER_BIN=${STUB_BIN}/token-broker" GH_TOKEN=ghp_direct
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ ! -e "${GH_LOG}" ]
+}
+
+@test "the broker client runs as a child of the helper, not in its place" {
+    stub_broker '' 0
+    make_stub token-broker "ps -o args= -p \"\${PPID}\" > '${TEST_TMP}/parent'"
+    ln -s "$(which ps)" "${STUB_BIN}/ps"
+    run_helper "TOKEN_BROKER_SOCKET=${TEST_TMP}/broker.sock" "TOKEN_BROKER_BIN=${STUB_BIN}/token-broker"
+    [ "${status}" -eq 0 ]
+    [[ "$(cat "${TEST_TMP}/parent")" == *"${HELPER}"* ]]
 }
 
 # A gh stub that logs its arguments and prints the given token for `gh auth token`.
