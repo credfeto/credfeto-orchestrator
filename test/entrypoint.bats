@@ -1712,6 +1712,71 @@ run_entrypoint_in_repo() {
     [ "$(cat "${repo_dir}/.git/info/exclude")" = "$(printf '.codegraph/\n*.local')" ]
 }
 
+# Runs the entrypoint against a checkout whose exclude file holds only the given line, so a test
+# can check whether exclude_codegraph_from_git treats that line as already excluding .codegraph.
+run_entrypoint_with_exclude_line() {
+    local repo_dir="$1"
+    local existing_line="$2"
+    mkdir -p "${repo_dir}/.git/info"
+    printf '%s\n' "${existing_line}" > "${repo_dir}/.git/info/exclude"
+    run_entrypoint_in_repo "${repo_dir}"
+}
+
+@test "entrypoint does not append .codegraph/ when the exclude file already lists .codegraph" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+
+    run_entrypoint_with_exclude_line "${repo_dir}" '.codegraph'
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${repo_dir}/.git/info/exclude")" = ".codegraph" ]
+}
+
+@test "entrypoint does not append .codegraph/ when the exclude file already lists /.codegraph" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+
+    run_entrypoint_with_exclude_line "${repo_dir}" '/.codegraph'
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${repo_dir}/.git/info/exclude")" = "/.codegraph" ]
+}
+
+@test "entrypoint does not append .codegraph/ when the exclude file already lists /.codegraph/" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+
+    run_entrypoint_with_exclude_line "${repo_dir}" '/.codegraph/'
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${repo_dir}/.git/info/exclude")" = "/.codegraph/" ]
+}
+
+@test "entrypoint does not append .codegraph/ when the existing entry has trailing spaces" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+
+    run_entrypoint_with_exclude_line "${repo_dir}" '.codegraph/  '
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${repo_dir}/.git/info/exclude")" = ".codegraph/  " ]
+}
+
+# Git keeps leading spaces as part of the pattern, so " .codegraph/" does not exclude .codegraph.
+@test "entrypoint appends .codegraph/ when the existing entry has leading spaces" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+
+    run_entrypoint_with_exclude_line "${repo_dir}" ' .codegraph/'
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${repo_dir}/.git/info/exclude")" = "$(printf ' .codegraph/\n.codegraph/')" ]
+}
+
+@test "entrypoint appends .codegraph/ when the exclude file only lists a similar but different path" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+
+    run_entrypoint_with_exclude_line "${repo_dir}" '.codegraph-old/'
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${repo_dir}/.git/info/exclude")" = "$(printf '.codegraph-old/\n.codegraph/')" ]
+}
+
 @test "entrypoint warns and still starts claude when .git/info cannot be created" {
     setup_entrypoint_stubs
     local repo_dir="${TEST_TMP}/codegraph-repo"
