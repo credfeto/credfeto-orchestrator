@@ -364,6 +364,10 @@ seed_orchestrator_cache() {
 # rather than the directory because a .codegraph/ without codegraph.db is not a usable index, and
 # `init` rebuilds it. `--yes` is required: without it `init` can wait on a stdin select prompt
 # even with no TTY. Non-fatal on failure: a missing index only makes code lookups slower.
+# The build is bounded by CODEGRAPH_INIT_TIMEOUT_SECS (oneshot passes lib/globals' value; the
+# same default and fallback apply here for manual runs), because it runs inside the session's
+# AGENT_TIMEOUT and a hung build would otherwise end the session as an agent timeout. A build
+# that ignores SIGTERM is killed 10 seconds later.
 # WORKSPACE_REPO_DIR overrides the repo path (used by tests).
 build_missing_codegraph_index() {
     local repo_dir="${WORKSPACE_REPO_DIR:-/workspace/repo}"
@@ -374,9 +378,18 @@ build_missing_codegraph_index() {
         return 0
     fi
 
-    info "Running codegraph init in ${repo_dir}"
-    (cd "${repo_dir}" && codegraph init --yes -v < /dev/null) \
-        || warn "codegraph init failed in ${repo_dir}, continuing without a code index"
+    local timeout_secs="${CODEGRAPH_INIT_TIMEOUT_SECS:-900}"
+    [[ "${timeout_secs}" =~ ^[1-9][0-9]*$ ]] || timeout_secs=900
+
+    info "Running codegraph init in ${repo_dir} (time limit ${timeout_secs}s)"
+    local init_status=0
+    (cd "${repo_dir}" && timeout --kill-after=10 "${timeout_secs}" codegraph init --yes -v < /dev/null) \
+        || init_status=$?
+    if [ "${init_status}" -eq 124 ]; then
+        warn "codegraph init timed out after ${timeout_secs}s in ${repo_dir}, continuing without a code index"
+    elif [ "${init_status}" -ne 0 ]; then
+        warn "codegraph init failed in ${repo_dir}, continuing without a code index"
+    fi
 }
 
 # Adds .codegraph/ to the checkout's .git/info/exclude, so a repository whose .gitignore does not

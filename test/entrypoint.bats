@@ -1578,6 +1578,55 @@ run_entrypoint_in_repo() {
     [ -e "${TEST_TMP}/claude_ran" ]
 }
 
+@test "entrypoint warns and still starts claude when codegraph init exceeds its time limit" {
+    setup_entrypoint_stubs
+    # exec so the timeout's signal reaches sleep itself and no orphan keeps the output pipe open.
+    # shellcheck disable=SC2016  # the stub body expands at stub run time
+    make_stub_multiline codegraph 'touch "${TEST_TMP}/codegraph_started"' 'exec sleep 30'
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git"
+
+    run_entrypoint_in_repo "${repo_dir}" CODEGRAPH_INIT_TIMEOUT_SECS=1
+    [ "${status}" -eq 0 ]
+    [ -e "${TEST_TMP}/codegraph_started" ]
+    [[ "${output}" == *"codegraph init timed out after 1s in ${repo_dir}, continuing without a code index"* ]]
+    [[ "${output}" != *"codegraph init failed"* ]]
+    [ -e "${TEST_TMP}/claude_ran" ]
+}
+
+@test "entrypoint lets codegraph init finish within the configured time limit" {
+    setup_entrypoint_stubs
+    # shellcheck disable=SC2016  # the stub body expands at stub run time
+    make_stub_multiline codegraph 'sleep 2' 'touch "${TEST_TMP}/codegraph_finished"'
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git"
+
+    run_entrypoint_in_repo "${repo_dir}" CODEGRAPH_INIT_TIMEOUT_SECS=30
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Running codegraph init in ${repo_dir} (time limit 30s)"* ]]
+    [ -e "${TEST_TMP}/codegraph_finished" ]
+    [[ "${output}" != *"codegraph init timed out"* ]]
+    [ -e "${TEST_TMP}/claude_ran" ]
+}
+
+@test "entrypoint falls back to a 900s codegraph init time limit when the setting is unset or invalid" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Running codegraph init in ${repo_dir} (time limit 900s)"* ]]
+
+    run_entrypoint_in_repo "${repo_dir}" CODEGRAPH_INIT_TIMEOUT_SECS=0
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Running codegraph init in ${repo_dir} (time limit 900s)"* ]]
+
+    run_entrypoint_in_repo "${repo_dir}" CODEGRAPH_INIT_TIMEOUT_SECS=abc
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Running codegraph init in ${repo_dir} (time limit 900s)"* ]]
+}
+
 @test "entrypoint gives codegraph no stdin so it can never wait on a prompt" {
     setup_entrypoint_stubs
     # shellcheck disable=SC2016  # the stub body expands at stub run time
