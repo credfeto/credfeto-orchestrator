@@ -393,7 +393,7 @@ RUN set -e; \
                trufflehog hadolint dotenv-linter sqlcmd pwsh \
                yamllint ansible-lint flake8 pylint cfn-lint \
                markdownlint stylelint eslint \
-               xmllint codegraph; do \
+               xmllint; do \
         if ! command -v "$cmd" >/dev/null 2>&1; then \
             echo "FATAL sanity: required binary '$cmd' is missing" >&2; exit 1; \
         fi; \
