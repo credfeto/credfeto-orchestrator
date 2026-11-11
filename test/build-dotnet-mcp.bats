@@ -353,6 +353,10 @@ assert_forced_for_both_tools() {
     assert_forced_for_both_tools DOTNET_NOLOGO 1 0 false
 }
 
+@test "DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE is forced to true for either tool, over a value the caller set" {
+    assert_forced_for_both_tools DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE true false 0
+}
+
 @test "SuppressNETCoreSdkPreviewMessage is forced to true for either tool, over a value the caller set" {
     assert_forced_for_both_tools SuppressNETCoreSdkPreviewMessage true false ''
 }

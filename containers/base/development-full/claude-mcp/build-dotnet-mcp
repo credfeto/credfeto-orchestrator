@@ -72,6 +72,11 @@ export BUILD_MCP_LOG_DIR
 DOTNET_NOLOGO=1
 export DOTNET_NOLOGO
 
+# The "workload updates are available" advertisement is written to stdout too, which would corrupt
+# both the dotnet tool list output read below and the MCP stream. The docs give only true for it.
+DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE=true
+export DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE
+
 # The server's child dotnet build, restore and test runs inherit this environment, and under a
 # preview SDK MSBuild would otherwise print NETSDK1057 ("You are using a preview version of .NET")
 # to stdout. Forced for the same reason as DOTNET_NOLOGO.
