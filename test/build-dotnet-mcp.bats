@@ -61,7 +61,8 @@ run_wrapper() {
 # one a line, so the tests can tell which server the wrapper started and how. Only bash builtins
 # are used, because the wrapper's PATH holds the stub directory alone, except that with a
 # lock-home-after-list file in the state directory "tool list" makes HOME unenterable once it has
-# answered (a test that wants that links chmod in).
+# answered (a test that wants that links chmod in), and with a read-stdin-in-list file it first
+# reads all of its stdin, as a child that took the MCP stream would.
 make_dotnet_stub() {
     # shellcheck disable=SC2016  # expanded by the stub, not here
     local report='printf "%s\n" "dotnet" "cwd=$(pwd -P)" "root=${BUILD_MCP_REPO_ROOT}" "argc=$#" "$@"'
@@ -77,6 +78,7 @@ make_dotnet_stub() {
         '    [ ! -s "${state}/list-stderr" ] || printf "%s\n" "$(<"${state}/list-stderr")" >&2' \
         '    printf "%s" "$(<"${state}/list-stdout")"' \
         '    [ ! -e "${state}/lock-home-after-list" ] || chmod 000 "$(pwd -P)"' \
+        '    [ ! -e "${state}/read-stdin-in-list" ] || IFS= read -r -d "" _ || true' \
         '    exit "$(<"${state}/list-status")"' \
         'fi' \
         "${report}"
@@ -191,6 +193,33 @@ make_git_repo() {
     [ "${status}" -eq 0 ]
     [ "${lines[0]}" = "dotnet" ]
     [ -z "${stderr}" ]
+}
+
+@test "the git and dotnet tool list probes never read stdin, so either server gets the whole MCP stream" {
+    # git and dotnet tool list both read all of their stdin before doing their work, so if the
+    # wrapper let them inherit it they would take the stream; each server reports what it reads.
+    local real_git
+    real_git="$(printf '%q' "$(readlink -f "$(which git)")")"
+    rm -f "${STUB_BIN}/git"
+    # shellcheck disable=SC2016  # expanded by the stub, not here
+    make_stub_multiline git 'IFS= read -r -d "" _ || true' "exec ${real_git} \"\$@\""
+    touch "${DOTNET_STUB_STATE}/read-stdin-in-list"
+    # shellcheck disable=SC2016  # expanded by the stub, not here
+    local report='IFS= read -r -d "" payload || true; printf "%s\n" "${0##*/}" "stdin=${payload}"'
+    make_dotnet_stub "${report}"
+    make_global_tool "${report}"
+    local payload='{"jsonrpc":"2.0","id":1,"method":"initialize"}
+{"jsonrpc":"2.0","method":"notifications/initialized"}'
+    printf '%s' "${payload}" > "${TEST_TMP}/mcp-stream"
+
+    run_wrapper "${WORK}" < "${TEST_TMP}/mcp-stream"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(printf '%s\n' credfeto-build-dotnet "stdin=${payload}")" ]
+
+    list_local_tool credfeto-build-dotnet
+    run_wrapper "${WORK}" < "${TEST_TMP}/mcp-stream"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(printf '%s\n' dotnet "stdin=${payload}")" ]
 }
 
 @test "a listed local tool fails without falling back to the global tool when HOME cannot be entered to run it" {
