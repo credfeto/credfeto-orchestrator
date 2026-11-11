@@ -725,7 +725,7 @@ kb_token_privacy_predicates() {
     jq -r '.permissions.allow[]' "${SOURCE_MANAGED_SETTINGS}" | grep -qxF 'mcp__build-dotnet__*'
 }
 
-@test "the Dockerfile sanity block pins the build-dotnet server, its wrapper's owner and mode, its root, the global tool and allow rule, forbids Authorization text, and pins no server set (#1818, #1850)" {
+@test "the Dockerfile sanity block pins the build-dotnet server, its wrapper's owner and mode, its root, its tool mode, the global tool and allow rule, forbids Authorization text, and pins no server set (#1818, #1850)" {
     local dockerfile="${SOURCE_DIR}/Dockerfile"
     [ "$(grep -cF '.mcpServers | keys' "${dockerfile}")" -eq 0 ]
     grep -qF "! grep -qi 'authorization' /etc/claude-code/managed-mcp.json" "${dockerfile}"
@@ -733,6 +733,8 @@ kb_token_privacy_predicates() {
     grep -qF "[ \"\$(stat -c '%U:%G %a' /etc/claude-code/mcp/build-dotnet-mcp)\" = \"root:root 755\" ]" "${dockerfile}"
     # shellcheck disable=SC2016  # the literal ${...} the sanity block's shell expands
     grep -qF '[ "${BUILD_MCP_REPO_ROOT}" = "/workspace/repo" ]' "${dockerfile}"
+    # shellcheck disable=SC2016  # the literal ${...} the sanity block's shell expands
+    grep -qF '[ "${BUILD_MCP_TOOL}" = "global" ]' "${dockerfile}"
     grep -qF '[ -x /home/developer/.dotnet/tools/credfeto-build-dotnet ]' "${dockerfile}"
     grep -qF "jq -e '.permissions.allow | index(\"mcp__build-dotnet__*\")' /etc/claude-code/managed-settings.json" "${dockerfile}"
     grep -qE 'for tool in .* credfeto\.build\.dotnet\.server; do' "${dockerfile}"
@@ -819,13 +821,14 @@ run_dockerfile_mcp_checks() {
     grep -qE 'for cmd in git gh ' "${dockerfile}"
 }
 
-@test "the Dockerfile copies managed-mcp.json, the headers helpers and the build-dotnet wrapper into /etc/claude-code, and sets the wrapper's root" {
+@test "the Dockerfile copies managed-mcp.json, the headers helpers and the build-dotnet wrapper into /etc/claude-code, and sets the wrapper's root and tool mode" {
     local dockerfile="${SOURCE_DIR}/Dockerfile"
     grep -qxF 'COPY --chown=root:root --chmod=0444 claude-managed-mcp.json /etc/claude-code/managed-mcp.json' "${dockerfile}"
     grep -qxF 'COPY --chown=root:root --chmod=0755 claude-mcp/cfwf-mcp-headers /etc/claude-code/mcp/cfwf-mcp-headers' "${dockerfile}"
     grep -qxF 'COPY --chown=root:root --chmod=0755 claude-mcp/kb-mcp-headers /etc/claude-code/mcp/kb-mcp-headers' "${dockerfile}"
     grep -qxF 'COPY --chown=root:root --chmod=0755 claude-mcp/build-dotnet-mcp /etc/claude-code/mcp/build-dotnet-mcp' "${dockerfile}"
     grep -qxF 'ENV BUILD_MCP_REPO_ROOT=/workspace/repo' "${dockerfile}"
+    grep -qxF 'ENV BUILD_MCP_TOOL=global' "${dockerfile}"
     [ -x "${SOURCE_CFWF_MCP_HEADERS}" ]
     [ -x "${SOURCE_KB_MCP_HEADERS}" ]
     [ -x "${SOURCE_BUILD_DOTNET_MCP}" ]
