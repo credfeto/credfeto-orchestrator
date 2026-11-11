@@ -137,7 +137,7 @@ make_git_repo() {
     make_global_tool
     run_wrapper "${WORK}"
     [ "${status}" -eq 0 ]
-    [ "${output}" = "$(printf '%s\n' global "cwd=${WORK}" "root=${WORK}" argc=0)" ]
+    [ "${output}" = "$(printf '%s\n' global "cwd=${USER_HOME}" "root=${WORK}" argc=0)" ]
     [ -z "${stderr}" ]
 }
 
@@ -146,7 +146,7 @@ make_git_repo() {
     make_global_tool
     run_wrapper "${WORK}"
     [ "${status}" -eq 0 ]
-    [ "${output}" = "$(printf '%s\n' global "cwd=${WORK}" "root=${WORK}" argc=0)" ]
+    [ "${output}" = "$(printf '%s\n' global "cwd=${USER_HOME}" "root=${WORK}" argc=0)" ]
     [ -z "${stderr}" ]
 }
 
@@ -255,7 +255,7 @@ make_git_repo() {
     rm -f "${STUB_BIN}/dotnet"
     run_wrapper "${WORK}"
     [ "${status}" -eq 0 ]
-    [ "${output}" = "$(printf '%s\n' global "cwd=${WORK}" "root=${WORK}" argc=0)" ]
+    [ "${output}" = "$(printf '%s\n' global "cwd=${USER_HOME}" "root=${WORK}" argc=0)" ]
     [ -z "${stderr}" ]
 
     rm -f "${GLOBAL_TOOL}"
@@ -391,7 +391,7 @@ make_git_repo() {
     make_global_tool
     run_wrapper "${WORK}" --flag 'two words' ''
     [ "${status}" -eq 0 ]
-    [ "${output}" = "$(printf '%s\n' global "cwd=${WORK}" "root=${WORK}" argc=3 --flag 'two words' '')" ]
+    [ "${output}" = "$(printf '%s\n' global "cwd=${USER_HOME}" "root=${WORK}" argc=3 --flag 'two words' '')" ]
 
     list_local_tool credfeto-build-dotnet
     run_wrapper "${WORK}" --flag 'two words' ''
@@ -530,7 +530,7 @@ make_recording_probes() {
     WRAPPER_ENV=(BUILD_MCP_TOOL=global BUILD_MCP_REPO_ROOT=/workspace/repo)
     run_wrapper "${WORK}" --flag
     [ "${status}" -eq 0 ]
-    [ "${output}" = "$(printf '%s\n' global "cwd=${WORK}" root=/workspace/repo argc=1 --flag)" ]
+    [ "${output}" = "$(printf '%s\n' global "cwd=${USER_HOME}" root=/workspace/repo argc=1 --flag)" ]
     [ -z "${stderr}" ]
     [ ! -e "${TEST_TMP}/probe-calls" ]
 
