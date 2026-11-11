@@ -232,6 +232,9 @@ RUN mkdir -p /home/developer/.claude/agents \
 # through the root-owned mcp/build-dotnet-mcp wrapper with no env: the wrapper
 # picks the user's tool at start time, and the BUILD_MCP_REPO_ROOT image ENV
 # below keeps its root at the repo mount wherever Claude Code is started.
+# BUILD_MCP_TOOL=global tells the wrapper to skip its git and dotnet tool list
+# probes and run the global tool directly, because in the image the tool, HOME
+# and the root are all fixed.
 # Any other server (such as the JetBrains IDEs' rider and webstorm) is allowed
 # and not checked.
 COPY --chown=root:root --chmod=0444 claude-user-settings.json /home/developer/.claude/settings.json
@@ -242,6 +245,7 @@ COPY --chown=root:root --chmod=0755 claude-mcp/cfwf-mcp-headers /etc/claude-code
 COPY --chown=root:root --chmod=0755 claude-mcp/kb-mcp-headers /etc/claude-code/mcp/kb-mcp-headers
 COPY --chown=root:root --chmod=0755 claude-mcp/build-dotnet-mcp /etc/claude-code/mcp/build-dotnet-mcp
 ENV BUILD_MCP_REPO_ROOT=/workspace/repo
+ENV BUILD_MCP_TOOL=global
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-policy /etc/claude-code/hooks/enforce-git-policy
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-identity /etc/claude-code/hooks/enforce-git-identity
 COPY --chown=root:root --chmod=0755 claude-hooks/reject-obfuscated-commands /etc/claude-code/hooks/reject-obfuscated-commands
@@ -479,6 +483,8 @@ RUN set -e; \
         || { echo "FATAL sanity: managed-mcp.json must hold the required build-dotnet server, and as the file is world-readable it must be exactly the stdio server started by /etc/claude-code/mcp/build-dotnet-mcp, with no env" >&2; exit 1; }; \
     [ "${BUILD_MCP_REPO_ROOT}" = "/workspace/repo" ] \
         || { echo "FATAL sanity: BUILD_MCP_REPO_ROOT must be /workspace/repo, the repo mount the build-dotnet MCP server works on" >&2; exit 1; }; \
+    [ "${BUILD_MCP_TOOL}" = "global" ] \
+        || { echo "FATAL sanity: BUILD_MCP_TOOL must be global, so the build-dotnet MCP wrapper runs the image's global tool without probing" >&2; exit 1; }; \
     [ -x /home/developer/.dotnet/tools/credfeto-build-dotnet ] \
         || { echo "FATAL sanity: /home/developer/.dotnet/tools/credfeto-build-dotnet, the build-dotnet MCP server, is missing or not executable" >&2; exit 1; }; \
     ! grep -qi 'authorization' /etc/claude-code/managed-mcp.json \
