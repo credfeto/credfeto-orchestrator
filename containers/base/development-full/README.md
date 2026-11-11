@@ -208,9 +208,9 @@ local tool when `dotnet tool list --local`, run from `~`, reports `credfeto-buil
 global tool `.dotnet/tools/credfeto-build-dotnet` under `DOTNET_CLI_HOME`, or `~` when that is unset or empty
 (`/home/developer/.dotnet/tools/credfeto-build-dotnet` here). In the container the image `ENV`
 `BUILD_MCP_TOOL=global` skips that choice and its `git` and `dotnet tool list` probes and runs the global tool
-directly, because the tool, `HOME` and the root are fixed there. The same file therefore works for every user
-on a host. The sanity block pins that exact entry, the wrapper's owner and mode, both `ENV` values and the
-global tool. See
+under `~` directly, ignoring `DOTNET_CLI_HOME`, because the tool, `HOME` and the root are fixed there. The
+same file therefore works for every user on a host. The sanity block pins that exact entry, the wrapper's
+owner and mode, both `ENV` values and the global tool. See
 [docs/development/claude-hooks.md](../../../docs/development/claude-hooks.md#the-build-dotnet-mcp-server).
 
 The repo-root `install-claude-hooks` script installs this same layout onto the current host, so the
