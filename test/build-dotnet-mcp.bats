@@ -299,6 +299,37 @@ make_git_repo() {
     [ "${lines[2]}" = "root=${WORK}/repo" ]
 }
 
+@test "a preset BUILD_MCP_REPO_ROOT that is relative or blank fails instead of reaching the server" {
+    make_global_tool
+    WRAPPER_ENV=(BUILD_MCP_REPO_ROOT=repo)
+    run_wrapper "${WORK}"
+    [ "${status}" -ne 0 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "build-dotnet-mcp: the repository root 'repo' from BUILD_MCP_REPO_ROOT is not an absolute path" ]
+
+    WRAPPER_ENV=("BUILD_MCP_REPO_ROOT= ")
+    run_wrapper "${WORK}"
+    [ "${status}" -ne 0 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "build-dotnet-mcp: the repository root ' ' from BUILD_MCP_REPO_ROOT is not an absolute path" ]
+}
+
+@test "a relative CLAUDE_PROJECT_DIR outside a repository fails, and inside one resolves to its absolute top level" {
+    make_global_tool
+    mkdir -p "${WORK}/plain"
+    WRAPPER_ENV=(CLAUDE_PROJECT_DIR=plain)
+    run_wrapper "${WORK}"
+    [ "${status}" -ne 0 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "build-dotnet-mcp: the repository root 'plain' from CLAUDE_PROJECT_DIR is not an absolute path" ]
+
+    make_git_repo "${WORK}/repo"
+    WRAPPER_ENV=(CLAUDE_PROJECT_DIR=repo/src)
+    run_wrapper "${WORK}"
+    [ "${status}" -eq 0 ]
+    [ "${lines[2]}" = "root=${WORK}/repo" ]
+}
+
 @test "a preset BUILD_MCP_REPO_ROOT is kept ahead of CLAUDE_PROJECT_DIR" {
     make_global_tool
     WRAPPER_ENV=(BUILD_MCP_REPO_ROOT=/workspace/repo "CLAUDE_PROJECT_DIR=${WORK}")
