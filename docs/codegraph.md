@@ -70,7 +70,9 @@ CodeGraph needs. Nothing has to be done by hand.
   watcher updates the index as files change. The entrypoint's own `codegraph init` runs before
   Claude, outside the hooks and permissions, so it is unaffected.
 - **The index.** The entrypoint builds the index just before it starts `claude`, only when it is
-  missing: with no `.codegraph/codegraph.db` it runs `codegraph init --yes -v`; otherwise it runs
+  missing: with no `.codegraph/codegraph.db` it runs `codegraph init --yes -v`, stopped after
+  `CODEGRAPH_INIT_TIMEOUT_SECS` (default 900) so a hung build cannot use up the session's time,
+  in which case the session continues without an index; otherwise it runs
   no `codegraph` command, and the MCP server catches the existing index up with the working tree
   when Claude connects, before it answers the first query. The index does not live in the host's checkout, where the `git clean -fdX`
   after every session would delete it. `oneshot` mounts a host directory per work item at

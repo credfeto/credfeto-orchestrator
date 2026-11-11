@@ -146,7 +146,11 @@ item's containers (see [The CodeGraph index](#the-codegraph-index)), and the MCP
 the existing index up with changes since the item's last session when Claude connects, before it
 answers the first query. Its watcher then keeps the index current while the session runs. This
 step is non-fatal: if `codegraph init` fails, the entrypoint prints a warning and still starts
-`claude`, because a missing index only makes code lookups slower. It is skipped when the
+`claude`, because a missing index only makes code lookups slower. The build is also time-limited,
+because it runs inside the session's `AGENT_TIMEOUT_MINUTES` and a hung build would otherwise end
+the session as an agent timeout: after `CODEGRAPH_INIT_TIMEOUT_SECS` (default 900, set in
+`lib/globals` and passed in by `oneshot`) the entrypoint stops it, prints a warning and starts
+`claude` without an index. It is skipped when the
 checkout has no `.git` directory, and in pre-check mode (below). Running it before `claude` keeps
 indexing from competing with the agent's own builds and tests for the container's memory.
 `codegraph init` writes `.codegraph/.gitignore`, which ignores everything else in that directory.
