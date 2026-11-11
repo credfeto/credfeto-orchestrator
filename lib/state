@@ -932,7 +932,7 @@ link_pivot_pr_transcripts() {
 }
 
 # Links the PR's CodeGraph index directory to the Issue's on the pivot (link_pivot_pr_item_dir),
-# so the PR's sessions keep syncing the index the Issue's sessions built instead of starting a
+# so the PR's sessions reuse the index the Issue's sessions built instead of starting a
 # full init.
 link_pivot_pr_codegraph_index() {
     local issue_id="$1" pr_number="$2"
