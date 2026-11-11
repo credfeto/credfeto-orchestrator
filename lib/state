@@ -791,7 +791,8 @@ codegraph_index_root_path() {
 # entrypoint's codegraph init and the codegraph MCP server keep the index. It lives outside
 # the checkout so the git clean -fdX after every session and pre-check cannot remove it, and it
 # follows the transcript lifecycle: one per work item, shared by an Issue and the PR it pivots to
-# (link_pivot_pr_codegraph_index), and purged once idle for TRANSCRIPT_ITEM_RETENTION_DAYS. A new
+# (link_pivot_pr_codegraph_index), and purged once no session has mounted it for
+# TRANSCRIPT_ITEM_RETENTION_DAYS (prune_codegraph_indexes in lib/podman). A new
 # item therefore starts with an empty directory and the entrypoint runs a full codegraph init.
 codegraph_index_dir_path() {
     local item_type="$1" item_id="$2"

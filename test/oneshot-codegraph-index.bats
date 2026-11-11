@@ -22,10 +22,11 @@ make_codegraph_index() {
     printf 'index\n' > "${SESSION_BASE_DIR}/codegraph/${item_name}/codegraph.db"
 }
 
-# Sets every file under an item's CodeGraph index directory to the given age.
+# Sets an item's CodeGraph index directory and everything under it to the given age; the
+# directory's own mtime counts as use in this tree (prune_codegraph_indexes).
 age_codegraph_index_files() {
     local item_name="$1" days="$2"
-    find "${SESSION_BASE_DIR}/codegraph/${item_name}" -type f -exec touch -d "${days} days ago" {} +
+    find "${SESSION_BASE_DIR}/codegraph/${item_name}" -exec touch -d "${days} days ago" {} +
 }
 
 # The CodeGraph index mounts in a podman args log, one line each.
@@ -105,6 +106,69 @@ codegraph_mounts() {
     [ ! -e "${SESSION_BASE_DIR}/codegraph/Issue_5" ]
     [ -f "${SESSION_BASE_DIR}/codegraph/Issue_6/codegraph.db" ]
     [ -d "${SESSION_BASE_DIR}/codegraph/Issue_42" ]
+}
+
+@test "prune_codegraph_indexes keeps an index used within the window whose files are all older" {
+    make_codegraph_index "Issue_5"
+    age_codegraph_index_files "Issue_5" 20
+    # A session that only queries the index writes no file, but its mount touches the directory.
+    touch -d '10 days ago' "${SESSION_BASE_DIR}/codegraph/Issue_5"
+    run prune_codegraph_indexes
+    [ "${status}" -eq 0 ]
+    [ -f "${SESSION_BASE_DIR}/codegraph/Issue_5/codegraph.db" ]
+}
+
+@test "prune_codegraph_indexes removes an index not used for longer than the window" {
+    make_codegraph_index "Issue_5"
+    age_codegraph_index_files "Issue_5" 20
+    touch -d '15 days ago' "${SESSION_BASE_DIR}/codegraph/Issue_5"
+    run prune_codegraph_indexes
+    [ "${status}" -eq 0 ]
+    [ ! -e "${SESSION_BASE_DIR}/codegraph/Issue_5" ]
+}
+
+@test "invoke_claude records the session's use of the index, so an index only queried is not purged as idle" {
+    local args_log="${TEST_TMP}/podman_args"
+    stub_podman_run_logging_args "${args_log}"
+    make_codegraph_index "Issue_42"
+    age_codegraph_index_files "Issue_42" 10
+    invoke_claude "test prompt" "Issue" "42" "# per-item instructions" 2>/dev/null
+    local index_dir="${SESSION_BASE_DIR}/codegraph/Issue_42"
+    [ -n "$(find "${index_dir}" -maxdepth 0 -mmin -5)" ]
+    # The index's own files are left as CodeGraph wrote them.
+    [ -z "$(find "${index_dir}" -type f -mmin -5)" ]
+    # Ten more days without a session would otherwise purge it, measured from its files.
+    find "${index_dir}" -type f -exec touch -d '20 days ago' {} +
+    run prune_codegraph_indexes
+    [ "${status}" -eq 0 ]
+    [ -f "${index_dir}/codegraph.db" ]
+}
+
+@test "invoke_claude records use through a pivoted PR's link on the Issue's index directory" {
+    local args_log="${TEST_TMP}/podman_args"
+    stub_podman_run_logging_args "${args_log}"
+    make_codegraph_index "Issue_42"
+    age_codegraph_index_files "Issue_42" 10
+    ln -s "Issue_42" "${SESSION_BASE_DIR}/codegraph/PullRequest_7"
+    invoke_claude "test prompt" "PullRequest" "7" "# per-item instructions" 2>/dev/null
+    [ -n "$(find "${SESSION_BASE_DIR}/codegraph/Issue_42" -maxdepth 0 -mmin -5)" ]
+    [ -L "${SESSION_BASE_DIR}/codegraph/PullRequest_7" ]
+}
+
+@test "add_codegraph_index_podman_args warns and still mounts the index when its use cannot be recorded" {
+    mkdir -p "${TEST_TMP}/failing-touch"
+    printf '#!/bin/sh\nexit 1\n' > "${TEST_TMP}/failing-touch/touch"
+    chmod +x "${TEST_TMP}/failing-touch/touch"
+    mount_with_failing_touch() {
+        PATH="${TEST_TMP}/failing-touch:${PATH}"
+        PODMAN_RUN_ARGS=()
+        add_codegraph_index_podman_args "Issue" "42"
+        printf '%s\n' "${PODMAN_RUN_ARGS[@]}"
+    }
+    run mount_with_failing_touch
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to record use of CodeGraph index directory ${SESSION_BASE_DIR}/codegraph/Issue_42, so it may be purged as idle"* ]]
+    [[ "${output}" == *"${SESSION_BASE_DIR}/codegraph/Issue_42${CODEGRAPH_MOUNT_SUFFIX}"* ]]
 }
 
 @test "prune_codegraph_indexes warns in CodeGraph terms when a purge or a link removal fails" {

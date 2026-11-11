@@ -555,11 +555,17 @@ cleanup_dangling_images() {
 # Succeeds when a work item's transcript directory has been idle for more than retention_mins: no
 # file under it was modified within that time, or, when it contains no file at all (only empty
 # subdirectories at most), the directory itself was not. The directory's own mtime is otherwise
-# ignored, because appending to a transcript does not change it. find runs without following
-# links (its default), so a link inside the directory never counts. Returns 2 when find cannot
-# read the directory, so the caller keeps it rather than reading empty output as idle.
+# ignored, because appending to a transcript does not change it, unless dir_mtime_counts is 1:
+# then a directory modified within that time is never idle, whatever its files' age. find runs
+# without following links (its default), so a link inside the directory never counts. Returns 2
+# when find cannot read the directory, so the caller keeps it rather than reading empty output as
+# idle.
 transcript_item_idle() {
-    local dir="$1" retention_mins="$2" any_file recent
+    local dir="$1" retention_mins="$2" dir_mtime_counts="$3" any_file recent
+    if [ "${dir_mtime_counts}" = "1" ]; then
+        recent=$(find "${dir}" -maxdepth 0 ! -mmin "+${retention_mins}" -print 2>/dev/null) || return 2
+        [ -z "${recent}" ] || return 1
+    fi
     any_file=$(find "${dir}" -type f -print -quit 2>/dev/null) || return 2
     if [ -z "${any_file}" ]; then
         recent=$(find "${dir}" -maxdepth 0 ! -mmin "+${retention_mins}" -print 2>/dev/null) || return 2
@@ -573,7 +579,7 @@ transcript_item_idle() {
 # (transcript_item_idle), and every link to a directory that no longer exists. Shared by the
 # transcript and CodeGraph index trees (prune_transcripts, prune_codegraph_indexes), so both
 # follow one lifecycle. noun names the contents in messages ("transcripts") and adjective the
-# link ("transcript").
+# link ("transcript"). dir_mtime_counts is passed on to transcript_item_idle.
 # Age-based rather than tied to an item closing, because oneshot never observes most closures (a
 # merged PR and the Issue it closes drop out of the priorities feed first), and nothing here
 # queries GitHub, because this runs before every container launch and must never fail or stall
@@ -582,7 +588,7 @@ transcript_item_idle() {
 # lib/state) is never followed and never removed while its target exists: the PR's sessions write
 # through it into the Issue's directory, which keeps that directory fresh while the PR is worked.
 prune_idle_item_dirs() {
-    local root="$1" noun="$2" adjective="$3"
+    local root="$1" noun="$2" adjective="$3" dir_mtime_counts="$4"
     [ -d "${root}" ] || return 0
 
     local item_retention_mins=$(( TRANSCRIPT_ITEM_RETENTION_DAYS * 1440 ))
@@ -594,7 +600,7 @@ prune_idle_item_dirs() {
         [ -L "${entry}" ] && continue
         [ -d "${entry}" ] || continue
         idle_status=0
-        transcript_item_idle "${entry}" "${item_retention_mins}" || idle_status=$?
+        transcript_item_idle "${entry}" "${item_retention_mins}" "${dir_mtime_counts}" || idle_status=$?
         if [ "${idle_status}" -eq 2 ]; then
             warn "Failed to read ${noun} at ${entry} to check their age - keeping them until the next launch"
             continue
@@ -618,13 +624,15 @@ prune_idle_item_dirs() {
 
 # Purges idle transcript directories (prune_idle_item_dirs).
 prune_transcripts() {
-    prune_idle_item_dirs "$(transcripts_root_path)" "transcripts" "transcript"
+    prune_idle_item_dirs "$(transcripts_root_path)" "transcripts" "transcript" 0
 }
 
 # Purges idle CodeGraph index directories (prune_idle_item_dirs), on the same lifecycle as the
-# transcripts.
+# transcripts except that the directory's own mtime counts as use: a session that only queries
+# the index writes no file in it, so add_codegraph_index_podman_args touches the directory each
+# time it is mounted, and CodeGraph creating or removing a file in it changes it too.
 prune_codegraph_indexes() {
-    prune_idle_item_dirs "$(codegraph_index_root_path)" "CodeGraph index files" "CodeGraph index"
+    prune_idle_item_dirs "$(codegraph_index_root_path)" "CodeGraph index files" "CodeGraph index" 1
 }
 
 # Kills the ssh-agent started by the service unit's ExecStartPre so the service
@@ -802,6 +810,9 @@ is_never_secret_file() {
 # mountpoint in the checkout, which that git clean removes afterwards. Non-fatal: when the
 # directory cannot be created the session runs without the mount, and the entrypoint builds a
 # throwaway index in the checkout, because a missing index only makes code lookups slower.
+# The directory is touched on every mount (through a pivoted PR's link, the Issue's directory), so
+# prune_codegraph_indexes measures idleness from the last session that used the index rather than
+# the last change to it; a failed touch only risks an earlier purge and a fresh init.
 add_codegraph_index_podman_args() {
     local item_type="$1" item_id="$2" index_dir
     index_dir=$(codegraph_index_dir_path "${item_type}" "${item_id}")
@@ -809,6 +820,8 @@ add_codegraph_index_podman_args() {
         warn "Failed to create CodeGraph index directory: ${index_dir} - this session's index will not be kept"
         return 0
     fi
+    touch "${index_dir}" 2>/dev/null \
+        || warn "Failed to record use of CodeGraph index directory ${index_dir}, so it may be purged as idle"
     PODMAN_RUN_ARGS+=( --volume "${index_dir}:${CONTAINER_REPO_PATH}/.codegraph:rw" )
 }
 
