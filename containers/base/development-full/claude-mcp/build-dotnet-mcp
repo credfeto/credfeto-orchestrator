@@ -51,23 +51,19 @@ case "${BUILD_MCP_TOOL:-}" in
     *) fail "BUILD_MCP_TOOL is '${BUILD_MCP_TOOL}', but it takes only global, or is left unset to choose the tool" ;;
 esac
 
-project_dir() {
-    # Claude Code documents CLAUDE_PROJECT_DIR for stdio servers but not their working
-    # directory, so the working directory is only the fallback.
-    if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ -d "${CLAUDE_PROJECT_DIR}" ]; then
-        printf '%s' "${CLAUDE_PROJECT_DIR}"
-        return 0
-    fi
-    pwd
-}
-
 root_source="BUILD_MCP_REPO_ROOT"
 if [ -z "${BUILD_MCP_REPO_ROOT:-}" ]; then
     [ "${BUILD_MCP_TOOL:-}" != global ] \
         || fail "BUILD_MCP_TOOL=global skips the git probe, so it needs BUILD_MCP_REPO_ROOT set"
-    # dash's pwd prints nothing yet succeeds when the directory has been removed; an empty path is
-    # never a directory, so the -d test catches that as well as a removed one.
-    start_dir=$(project_dir)
+    # Claude Code documents CLAUDE_PROJECT_DIR for stdio servers but not their working
+    # directory, so the working directory is only the fallback.
+    if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ -d "${CLAUDE_PROJECT_DIR}" ]; then
+        start_dir="${CLAUDE_PROJECT_DIR}"
+    else
+        # dash's pwd prints nothing yet succeeds when the directory has been removed; an empty path
+        # is never a directory, so the -d test below catches that as well as a removed one.
+        start_dir=$(pwd)
+    fi
     if [ ! -d "${start_dir}" ]; then
         fail "cannot read the directory Claude Code was started in"
     fi
