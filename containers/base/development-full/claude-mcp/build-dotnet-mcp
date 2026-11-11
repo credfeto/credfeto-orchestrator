@@ -93,7 +93,8 @@ DOTNET_NOLOGO=1
 export DOTNET_NOLOGO
 
 # The "workload updates are available" advertisement is written to stdout too, which would corrupt
-# both the dotnet tool list output read below and the MCP stream. The docs give only true for it.
+# both the dotnet tool list output read below and the MCP stream. Set to true, the only value
+# Microsoft's docs list for it; the SDK may ignore 1.
 DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE=true
 export DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE
 
