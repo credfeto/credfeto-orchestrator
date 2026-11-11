@@ -54,6 +54,19 @@ if [ -z "${BUILD_MCP_REPO_ROOT:-}" ]; then
 fi
 export BUILD_MCP_REPO_ROOT
 
+# Unset, the server logs to the shared temp directory, which the first user to start it creates
+# with mode 0700, so every other user's jobs on the host then fail. A per-user state directory
+# avoids that; the server creates it, with its parents, itself. XDG_STATE_HOME counts only when
+# absolute, as the XDG spec requires, and because the server ignores a relative path and falls back
+# to the shared directory.
+if [ -z "${BUILD_MCP_LOG_DIR:-}" ]; then
+    case "${XDG_STATE_HOME:-}" in
+        /*) BUILD_MCP_LOG_DIR="${XDG_STATE_HOME}/credfeto-build-mcp" ;;
+        *) BUILD_MCP_LOG_DIR="${HOME}/.local/state/credfeto-build-mcp" ;;
+    esac
+fi
+export BUILD_MCP_LOG_DIR
+
 # dotnet prints its first-run welcome and telemetry notice to stdout, which would corrupt the MCP
 # stream. Forced rather than kept from the caller, because no other value is safe here.
 DOTNET_NOLOGO=1
