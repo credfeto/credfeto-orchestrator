@@ -33,6 +33,14 @@ fail() {
     exit 1
 }
 
+require_absolute() {
+    # $1 names the path, $2 is its value and $3 is where the value came from.
+    case "$2" in
+        /*) ;;
+        *) fail "the $1 '$2' from $3 is not an absolute path" ;;
+    esac
+}
+
 tool_command="credfeto-build-dotnet"
 
 [ -n "${HOME:-}" ] || fail "HOME is not set"
@@ -72,10 +80,7 @@ if [ -z "${BUILD_MCP_REPO_ROOT:-}" ]; then
 fi
 # The server silently replaces a root that is not absolute with /workspace/repo, so it would work
 # on the wrong repository, or none, without saying so.
-case "${BUILD_MCP_REPO_ROOT}" in
-    /*) ;;
-    *) fail "the repository root '${BUILD_MCP_REPO_ROOT}' from ${root_source} is not an absolute path" ;;
-esac
+require_absolute "repository root" "${BUILD_MCP_REPO_ROOT}" "${root_source}"
 export BUILD_MCP_REPO_ROOT
 
 # Unset, the server logs to the shared temp directory, which the first user to start it creates
@@ -94,10 +99,7 @@ if [ -z "${BUILD_MCP_LOG_DIR:-}" ]; then
     esac
 fi
 # The server silently replaces a log directory that is not absolute with the shared one above.
-case "${BUILD_MCP_LOG_DIR}" in
-    /*) ;;
-    *) fail "the log directory '${BUILD_MCP_LOG_DIR}' from ${log_source} is not an absolute path" ;;
-esac
+require_absolute "log directory" "${BUILD_MCP_LOG_DIR}" "${log_source}"
 export BUILD_MCP_LOG_DIR
 
 # dotnet prints its first-run welcome and telemetry notice to stdout, which would corrupt the MCP
