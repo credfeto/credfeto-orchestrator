@@ -540,14 +540,46 @@ make_recording_probes() {
     [ "$(<"${TEST_TMP}/probe-calls")" = "$(printf '%s\n' 'git -C '"${WORK}"' rev-parse --show-toplevel' 'dotnet tool list --local --format json')" ]
 }
 
-@test "BUILD_MCP_TOOL=global still sets the forced variables and the log directory before the exec" {
+@test "BUILD_MCP_TOOL=global still sets the forced variables before the exec" {
     # shellcheck disable=SC2016  # expanded by the stub, not here
     make_global_tool 'printf "%s\n" "nologo=${DOTNET_NOLOGO-unset}" "workload=${DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE-unset}" "preview=${SuppressNETCoreSdkPreviewMessage-unset}" "logs=${BUILD_MCP_LOG_DIR-unset}"'
     make_recording_probes
     WRAPPER_ENV=(BUILD_MCP_TOOL=global BUILD_MCP_REPO_ROOT=/workspace/repo DOTNET_NOLOGO=0)
     run_wrapper "${WORK}"
     [ "${status}" -eq 0 ]
-    [ "${output}" = "$(printf '%s\n' nologo=1 workload=true preview=true "logs=${USER_HOME}/.local/state/credfeto-build-mcp")" ]
+    [ "${output}" = "$(printf '%s\n' nologo=1 workload=true preview=true logs=unset)" ]
+    [ ! -e "${TEST_TMP}/probe-calls" ]
+}
+
+@test "BUILD_MCP_TOOL=global leaves BUILD_MCP_LOG_DIR out of the environment unless the caller set it" {
+    # The [ -v ] test tells a variable that is set but empty from one that is not in the environment.
+    # shellcheck disable=SC2016  # expanded by the stub, not here
+    make_global_tool 'if [ -v BUILD_MCP_LOG_DIR ]; then printf "logs=%s\n" "${BUILD_MCP_LOG_DIR}"; else printf "%s\n" logs=unset; fi'
+    make_recording_probes
+
+    # Unset, or empty, the server keeps its own TMPDIR-based default, so no per-user state directory
+    # is named or created.
+    for preset in "XDG_STATE_HOME=${WORK}/state" BUILD_MCP_LOG_DIR=; do
+        WRAPPER_ENV=(BUILD_MCP_TOOL=global BUILD_MCP_REPO_ROOT=/workspace/repo "${preset}")
+        run_wrapper "${WORK}"
+        [ "${status}" -eq 0 ]
+        [ "${output}" = logs=unset ]
+        [ -z "${stderr}" ]
+    done
+    [ ! -e "${USER_HOME}/.local/state/credfeto-build-mcp" ]
+    [ ! -e "${WORK}/state" ]
+
+    # A value the caller set is still kept, and still has to be absolute.
+    WRAPPER_ENV=(BUILD_MCP_TOOL=global BUILD_MCP_REPO_ROOT=/workspace/repo BUILD_MCP_LOG_DIR=/srv/build-logs)
+    run_wrapper "${WORK}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = logs=/srv/build-logs ]
+
+    WRAPPER_ENV=(BUILD_MCP_TOOL=global BUILD_MCP_REPO_ROOT=/workspace/repo BUILD_MCP_LOG_DIR=logs)
+    run_wrapper "${WORK}"
+    [ "${status}" -ne 0 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "build-dotnet-mcp: the log directory 'logs' from BUILD_MCP_LOG_DIR is not an absolute path" ]
     [ ! -e "${TEST_TMP}/probe-calls" ]
 }
 
