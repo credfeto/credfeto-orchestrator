@@ -388,7 +388,8 @@ and `kb`, `type` `http`, at `https://memory.markridgwell.com/dev/mcp`, with `hea
 `/etc/claude-code/mcp/kb-mcp-headers`, neither with `headers` or `env`, and `build-dotnet` exactly its stdio entry
 starting `/etc/claude-code/mcp/build-dotnet-mcp` with no `env`;
 any other server is not checked, but the file must hold no `Authorization` text, both helpers and the wrapper must be
-root:root 0755, and `BUILD_MCP_REPO_ROOT` must be `/workspace/repo`; `~/.claude/settings.json` must hold no
+root:root 0755, `BUILD_MCP_REPO_ROOT` must be `/workspace/repo`, `BUILD_MCP_TOOL` must be `global` and the global tool
+`/home/developer/.dotnet/tools/credfeto-build-dotnet` must be executable; `~/.claude/settings.json` must hold no
 permissions, hooks, sandbox or MCP configuration, and every `PreToolUse` hook command must be
 under `/etc/claude-code/hooks/`; `/etc/claude-code/hooks/reject-obfuscated-commands`,
 `.../enforce-allowed-dirs`, `.../block-config-skills`, `.../enforce-git-identity`, `.../enforce-git-policy`,
