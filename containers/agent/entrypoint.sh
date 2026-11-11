@@ -397,8 +397,10 @@ build_missing_codegraph_index() {
 # a `git add -A`, and so oneshot's git clean -fdX removes the .codegraph mountpoint afterwards.
 # The repository's tracked .gitignore is never touched. It runs in both the agent and pre-check
 # containers, which share the checkout, and writes as the host user that owns .git (keep-id).
-# Idempotent: appends only when the exact line is missing, after adding a final newline to an
-# exclude file that lacks one, so the entry never joins the last line. Non-fatal on failure:
+# Idempotent: appends only when no line already names the directory as .codegraph, .codegraph/,
+# /.codegraph or /.codegraph/ (trailing spaces allowed, as git ignores them; leading spaces are
+# not, as git treats them as part of the pattern), after adding a final newline to an exclude
+# file that lacks one, so the entry never joins the last line. Non-fatal on failure:
 # the repository's own .gitignore may still ignore .codegraph/.
 # WORKSPACE_REPO_DIR overrides the repo path (used by tests).
 exclude_codegraph_from_git() {
@@ -406,7 +408,7 @@ exclude_codegraph_from_git() {
     [ -d "${repo_dir}/.git" ] || return 0
 
     local exclude_file="${repo_dir}/.git/info/exclude"
-    grep -qxF '.codegraph/' "${exclude_file}" 2>/dev/null && return 0
+    grep -qxE '/?\.codegraph/? *' "${exclude_file}" 2>/dev/null && return 0
 
     if ! mkdir -p "${repo_dir}/.git/info" 2>/dev/null; then
         warn "Failed to create ${repo_dir}/.git/info, .codegraph/ is not excluded from git"
