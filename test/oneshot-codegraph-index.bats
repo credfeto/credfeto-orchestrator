@@ -235,16 +235,35 @@ codegraph_mounts() {
 }
 
 @test "link_pivot_pr_codegraph_index links the PR's index directory to the Issue's and records pivot activity" {
+    local issue_dir="${SESSION_BASE_DIR}/codegraph/Issue_10"
     make_codegraph_index "Issue_10"
     age_codegraph_index_files "Issue_10" 15
     run link_pivot_pr_codegraph_index "10" "99"
     [ "${status}" -eq 0 ]
     [ -z "${output}" ]
     [ "$(readlink "${SESSION_BASE_DIR}/codegraph/PullRequest_99")" = "Issue_10" ]
-    [ -f "${SESSION_BASE_DIR}/codegraph/Issue_10/${TRANSCRIPT_PIVOT_ACTIVITY_FILE_NAME}" ]
+    # The activity is the directory's own mtime: nothing is written into CodeGraph's .codegraph.
+    [ -n "$(find "${issue_dir}" -maxdepth 0 -mmin -1 -print)" ]
+    [ "$(find "${issue_dir}" -mindepth 1 -printf '%P\n')" = "codegraph.db" ]
     # The pivot's activity keeps the Issue's idle index through the prune before the launch.
     run prune_codegraph_indexes
     [ -f "${SESSION_BASE_DIR}/codegraph/PullRequest_99/codegraph.db" ]
+}
+
+@test "link_pivot_pr_codegraph_index keeps a new empty Issue index directory empty" {
+    run link_pivot_pr_codegraph_index "10" "99"
+    [ "${status}" -eq 0 ]
+    [ -d "${SESSION_BASE_DIR}/codegraph/Issue_10" ]
+    [ -z "$(find "${SESSION_BASE_DIR}/codegraph/Issue_10" -mindepth 1 -print -quit)" ]
+    [ "$(readlink "${SESSION_BASE_DIR}/codegraph/PullRequest_99")" = "Issue_10" ]
+}
+
+@test "link_pivot_pr_codegraph_index warns and still links when pivot activity cannot be recorded" {
+    make_stub touch "exit 1"
+    run link_pivot_pr_codegraph_index "10" "99"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to record pivot activity in ${SESSION_BASE_DIR}/codegraph/Issue_10, so Issue #10 CodeGraph index files may be purged as idle"* ]]
+    [ "$(readlink "${SESSION_BASE_DIR}/codegraph/PullRequest_99")" = "Issue_10" ]
 }
 
 @test "link_pivot_pr_codegraph_index keeps a PR index of its own and says so in CodeGraph terms" {
