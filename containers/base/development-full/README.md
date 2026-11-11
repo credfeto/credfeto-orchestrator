@@ -31,15 +31,6 @@ READMEs for what they install and why they're split out.
 | `/opt/markdown-linter-fixer` | `github.com/s2005/markdown-linter-fixer-skill` | Shallow clone pinned to the tag in `MARKDOWN_LINTER_FIXER_REF` (default `v1.5.4`); developer:developer ownership |
 | `/opt/dotnet-skills` | `github.com/dotnet/skills` | Sparse checkout of seven plugins only: `plugins/dotnet`, `plugins/dotnet-advanced`, `plugins/dotnet-diag`, `plugins/dotnet-msbuild`, `plugins/dotnet-nuget`, `plugins/dotnet-test`, `plugins/dotnet-upgrade`; pinned to `DOTNET_SKILLS_COMMIT` (no usable tag, see pin-policy comment in the Dockerfile); root:root ownership |
 
-### codegraph CLI
-
-`codegraph` ([colbymchenry/codegraph](https://github.com/colbymchenry/codegraph)) is installed from its standalone Linux release
-archive at the pinned `CODEGRAPH_VERSION`, verified with `sha256sum -c` against the pinned `CODEGRAPH_SHA256_AMD64`/`CODEGRAPH_SHA256_ARM64`
-ARGs before extraction. The archive is a directory (a launcher, its own bundled Node runtime and the app), so it is unpacked whole into
-`/opt/codegraph` (root:root, not writable by `developer`) and `/usr/local/bin/codegraph` is a symlink to its launcher. No system Node.js
-is needed. `CODEGRAPH_TELEMETRY=0` is set in the image environment, because upstream telemetry is on by default.
-`.github/workflows/bump-pinned-tool-versions.yml` bumps the version and both checksums together when a newer release is published.
-
 ### Linking skills into `~/.claude/skills`
 
 Claude Code discovers "personal" skills as immediate subdirectories of `~/.claude/skills/`, each
@@ -200,7 +191,7 @@ The sanity block pins that exact entry, so no other literal `env` value can be a
 [docs/development/claude-hooks.md](../../../docs/development/claude-hooks.md#the-build-dotnet-mcp-server).
 
 `codegraph` is the code knowledge graph MCP server, a stdio server started as `codegraph serve --mcp` from
-`PATH` (the `codegraph` CLI above), with `alwaysLoad` set. The entry is exactly the one `codegraph install` writes
+`PATH` (the `codegraph` CLI installed by `development-tools`), with `alwaysLoad` set. The entry is exactly the one `codegraph install` writes
 for Claude Code, so a host's own entry merges as the same server in `install-claude-hooks`. It has no `env`, as
 the image already sets `CODEGRAPH_TELEMETRY=0`, and `mcp__codegraph__*` in `permissions.allow` allows all of its
 tools. Agents use only those MCP tools: `codegraph` is not on the hook `command-allowlist` and has no

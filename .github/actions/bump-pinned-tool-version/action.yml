@@ -1,4 +1,4 @@
---- # Check one curl-pinned CLI tool in a base-image Dockerfile against its latest GitHub release
+--- # Check one curl-pinned CLI tool in development-tools/Dockerfile against its latest GitHub release
 name: "Bump Pinned Tool Version"
 description: "Checks a curl-installed, SHA256-pinned CLI tool (hadolint, dotenv-linter, sqlcmd,
   actionlint, trufflehog, trivy, codegraph) against its latest GitHub release and rewrites its
@@ -14,7 +14,8 @@ inputs:
     required: true
   dockerfile-path:
     description: "Path to the Dockerfile containing the tool's ARG pins"
-    required: true
+    required: false
+    default: "containers/base/development-tools/Dockerfile"
 
 outputs:
   changed:
@@ -27,8 +28,8 @@ outputs:
     description: "Newly pinned version"
     value: "${{steps.bump.outputs.new-version}}"
   dockerfile-path:
-    description: "The Dockerfile path used (echoes the dockerfile-path input, single source of truth
-      for callers that need it, e.g. a git-auto-commit file_pattern)"
+    description: "The Dockerfile path actually used (echoes the resolved input, single source of
+      truth for callers that need it, e.g. a git-auto-commit file_pattern)"
     value: "${{steps.bump.outputs.dockerfile-path}}"
 
 runs:
@@ -46,15 +47,15 @@ runs:
           const fs = require("fs");
           const crypto = require("crypto");
 
-          // One entry per curl-pinned tool in the dockerfile-path Dockerfile. `versionHasVPrefix`
+          // One entry per curl-pinned tool in development-tools/Dockerfile. `versionHasVPrefix`
           // records whether that tool's own ARG stores the full release tag (e.g. "v2.14.0") or
           // the bare number (e.g. "1.7.12") - the two conventions already coexist in the
           // Dockerfile today (see its own "Pin CLI versions" comment block), so this mirrors
           // each ARG's existing format rather than normalising it, keeping this bump a pure
           // value substitution with no unrelated reformatting. The three ARG names
           // (<PREFIX>_VERSION / <PREFIX>_SHA256_AMD64 / <PREFIX>_SHA256_ARM64) are derived from
-          // the tool key below rather than typed out per entry, since every tool follows that
-          // convention with no exception (verified against each Dockerfile's own ARG block).
+          // the tool key below rather than typed out per entry, since all seven follow that
+          // convention with no exception (verified against the Dockerfile's own ARG block).
           // `assetName` returns just the release asset's filename for one arch - the download
           // URL itself is always `https://github.com/<repo>/releases/download/<tag>/<name>`,
           // built once below from `repo` and the release's own tag_name, so `repo` is never
@@ -138,7 +139,7 @@ runs:
 
           core.info(`ℹ️ ${toolKey}: pinned ${currentVersion}, latest release ${newVersion}`);
 
-          // Plain numeric semver compare, not just !==: every tool publishes bare X.Y[.Z] tags
+          // Plain numeric semver compare, not just !==: all seven tools publish bare X.Y[.Z] tags
           // (verified against each one's actual release history), so this never needs to handle
           // pre-release suffixes. A <= 0 comparison (not just ===) also guards the case
           // getLatestRelease ever returns something that isn't actually newer - e.g. a point

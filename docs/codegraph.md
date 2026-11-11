@@ -32,21 +32,23 @@ TypeScript/JavaScript.
 This repository's `development-full` image, and the agent image built on it, has everything
 CodeGraph needs. Nothing has to be done by hand.
 
-- **The CLI.** `containers/base/development-full/Dockerfile` downloads the standalone Linux release
+- **The CLI.** `containers/base/development-tools/Dockerfile` downloads the standalone Linux release
   archive (`codegraph-linux-x64.tar.gz` or `codegraph-linux-arm64.tar.gz`) and checks it with
   `sha256sum -c` before unpacking it. The archive is a directory holding a launcher, a bundled Node
   runtime and the app, so no system Node.js is needed. It is unpacked into `/opt/codegraph`, owned
-  by root, and `/usr/local/bin/codegraph` links to the launcher. The image's sanity stage checks
-  that `codegraph` is on `PATH` and that `codegraph --version` runs.
+  by root, and `/usr/local/bin/codegraph` links to the launcher. `development-full` inherits it
+  through its base image chain. The sanity stages of both images check that `codegraph` is on
+  `PATH` and that `codegraph --version` runs.
 - **The pin.** The version is pinned by `ARG CODEGRAPH_VERSION`, with one checksum per
   architecture in `CODEGRAPH_SHA256_AMD64` and `CODEGRAPH_SHA256_ARM64`. The Dockerfile is the only
   place these values are kept; this guide does not copy them.
   `.github/workflows/bump-pinned-tool-versions.yml` runs daily at 02:00 UTC, and can be started by
-  hand. Its `codegraph` matrix entry points the `bump-pinned-tool-version` action at the
-  `development-full` Dockerfile. When a newer release exists, the action rewrites all three ARGs,
+  hand. `codegraph` is one of its matrix tools, alongside the other pinned tools in the
+  `development-tools` Dockerfile. When a newer release exists, the action rewrites all three ARGs,
   using checksums computed from the new release's own assets, and opens a PR. The image build CI
   check then validates the new pin before it is merged.
-- **Telemetry.** Upstream telemetry is on by default. The image sets `CODEGRAPH_TELEMETRY=0`.
+- **Telemetry.** Upstream telemetry is on by default. `development-tools` sets
+  `CODEGRAPH_TELEMETRY=0`, which the images built on it inherit.
 - **The MCP server.** `containers/base/development-full/claude-managed-mcp.json` registers
   `codegraph`. The entry is exactly what `codegraph install` writes for Claude Code, and the image
   build fails if it differs:
@@ -98,12 +100,12 @@ the only platforms the pinned archives cover. Other platforms are listed on the
 [releases page](https://github.com/colbymchenry/codegraph/releases).
 
 1. **Install the pinned CLI.** The script reads the version and checksum from the `CODEGRAPH_*`
-   ARGs in `containers/base/development-full/Dockerfile`, so the workstation runs the same version
+   ARGs in `containers/base/development-tools/Dockerfile`, so the workstation runs the same version
    as the agents. Run it from the root of an up-to-date checkout of this repository. This uses the
    same layout as upstream's installer, without its install script, which verifies nothing:
 
    ```bash
-   dockerfile=containers/base/development-full/Dockerfile
+   dockerfile=containers/base/development-tools/Dockerfile
    arch=x64      # or arm64
    case "${arch}" in
        x64) sha256_arg=CODEGRAPH_SHA256_AMD64 ;;
