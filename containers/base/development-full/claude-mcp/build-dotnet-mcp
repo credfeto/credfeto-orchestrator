@@ -130,9 +130,12 @@ local_tool_is_listed() {
 }
 
 if local_tool_is_listed; then
-    # The list above ran from HOME, so the cd only fails if HOME changes in between; dotnet then
-    # never runs outside HOME. A listed tool that is not restored fails in dotnet tool run itself.
-    cd "${HOME}" && exec dotnet tool run "${tool_command}" "$@"
+    # The list above ran from HOME, so the cd only fails if HOME changes in between. That is fatal
+    # rather than a fall through to the global tool, because the user's listed local tool is never
+    # replaced, and dotnet never runs outside HOME. A listed tool that is not restored fails in
+    # dotnet tool run itself.
+    cd "${HOME}" || fail "cannot change to ${HOME} to run the local ${tool_command}"
+    exec dotnet tool run "${tool_command}" "$@"
 fi
 
 if [ -f "${global_tool}" ] && [ -x "${global_tool}" ]; then
