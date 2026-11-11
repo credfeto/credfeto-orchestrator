@@ -52,7 +52,9 @@ if [ -z "${BUILD_MCP_REPO_ROOT:-}" ]; then
     fi
     # pwd and git's top level are always absolute, so only CLAUDE_PROJECT_DIR can be relative here.
     root_source="CLAUDE_PROJECT_DIR"
-    BUILD_MCP_REPO_ROOT=$(git -C "${start_dir}" rev-parse --show-toplevel 2>/dev/null) \
+    # Every child run before the exec reads /dev/null: stdin is the MCP stream, and a child that read
+    # it would take Claude Code's initialize request before the server could.
+    BUILD_MCP_REPO_ROOT=$(git -C "${start_dir}" rev-parse --show-toplevel </dev/null 2>/dev/null) \
         || BUILD_MCP_REPO_ROOT="${start_dir}"
 fi
 # The server silently replaces a root that is not absolute with /workspace/repo, so it would work
@@ -110,7 +112,8 @@ local_tool_is_listed() {
     command -v jq >/dev/null 2>&1 || fail "jq is not on PATH to read dotnet tool list's output"
     # Only stdout is captured, so dotnet never writes to the MCP stream; its stderr passes through.
     # The subshell keeps the cd from moving the global tool's working directory.
-    list_json=$(cd "${HOME}" && dotnet tool list --local --format json) \
+    # Its stdin is /dev/null for the same reason as git's above.
+    list_json=$(cd "${HOME}" && dotnet tool list --local --format json </dev/null) \
         || fail "dotnet tool list --local --format json failed in ${HOME}"
     # jq -e exits 1 for a false result and above 1 when it cannot parse the output or the filter
     # raises an error. With no manifest dotnet reports an empty data array, so that is "not
