@@ -517,6 +517,8 @@ TRANSCRIPT_ITEM_RETENTION_DAYS=14
 # (link_pivot_pr_transcripts in lib/state), so the pivot counts as activity and the prune before
 # the launch cannot purge an Issue that has been idle. A dot-file at the root of the mounted
 # ~/.claude/projects, beside Claude Code's per-project subdirectories rather than inside one.
+# Not used in the CodeGraph index tree, whose pivot touches the Issue's directory itself
+# (link_pivot_pr_codegraph_index).
 # shellcheck disable=SC2034  # read by lib/state after sourcing
 TRANSCRIPT_PIVOT_ACTIVITY_FILE_NAME=".orchestrator-last-pivot"
 

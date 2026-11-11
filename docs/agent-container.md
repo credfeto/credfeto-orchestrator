@@ -274,6 +274,9 @@ follows the same lifecycle as the [session transcripts](#session-transcripts):
 - On the Issue-to-PR pivot, `codegraph/PullRequest_<m>` becomes a link to `Issue_<n>`, by the
   same rules as the transcript link (`link_pivot_pr_codegraph_index` in `lib/state`), so the PR's
   sessions reuse the index the Issue's sessions built, which the MCP server catches up on connect.
+  The pivot counts as activity here too, but it touches `Issue_<n>/` itself rather than writing
+  `.orchestrator-last-pivot` into it, because the directory is CodeGraph's own `.codegraph` in
+  the container and the purge below counts its modification time as use.
 - Before every launch, `prune_codegraph_indexes` (`lib/podman`) applies the transcript purge to
   this tree, with one difference: the directory's own modification time also counts as use.
   A session that only queries the index writes no file in it, so `add_codegraph_index_podman_args`
