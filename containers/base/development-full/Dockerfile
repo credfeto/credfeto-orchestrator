@@ -224,10 +224,10 @@ RUN mkdir -p /home/developer/.claude/agents \
 # managed-mcp.json pins the only MCP servers Claude Code loads and is
 # world-readable, so it holds no token. The sanity check requires the three the
 # image depends on: cfwf and kb, whose Authorization headers come at connect
-# time from their own root-owned headersHelpers (mcp/cfwf-mcp-headers, which
-# reads the GitHub token from the environment, and mcp/kb-mcp-headers, which
-# reads KB_MCP_TOKEN, a podman secret oneshot passes in when orchestrator/.env
-# sets it), and build-dotnet, the .NET
+# time from their own root-owned headersHelpers (mcp/cfwf-mcp-headers and
+# mcp/kb-mcp-headers, which ask the token broker below for the header while it
+# runs, and otherwise read the GitHub token or KB_MCP_TOKEN from the
+# environment), and build-dotnet, the .NET
 # build/test/coverage server installed by development-credfeto-tools, started
 # by its absolute path with one fixed, non-secret env value: the repo mount.
 # Any other server (such as the JetBrains IDEs' rider and webstorm) is allowed
@@ -304,6 +304,26 @@ COPY --chown=root:root --chmod=0755 scripts/pre-commit-check /usr/local/bin/pre-
 COPY --chown=root:root --chmod=0755 scripts/querydb /usr/local/bin/querydb
 COPY --chown=root:root --chmod=0755 scripts/cfwf /usr/local/bin/cfwf
 
+# ---- Token broker -------------------------------------------------------------
+# The GitHub and kb tokens reach the container as root-only files under
+# /run/secrets. The agent image's entrypoint starts token-broker as root before
+# dropping to developer, and it alone reads them: the MCP header helpers ask it
+# for their header, and gh goes through it. The real gh moves to
+# /usr/libexec/token-broker/gh, mode 0711, so the developer user can run it but
+# not read it, which keeps the gh process the broker starts non-dumpable and its
+# environment (holding the token) unreadable to the agent. /usr/bin/gh becomes a
+# wrapper that sends each call through the broker while it runs. The broker
+# gives the real gh the root-owned config below and an empty directory as PATH.
+# hadolint ignore=DL3059
+RUN mkdir -p /usr/libexec/token-broker/empty /etc/token-broker/gh \
+    && mv /usr/bin/gh /usr/libexec/token-broker/gh \
+    && chown -R root:root /usr/libexec/token-broker /etc/token-broker \
+    && chmod 0755 /usr/libexec/token-broker /usr/libexec/token-broker/empty /etc/token-broker /etc/token-broker/gh \
+    && chmod 0711 /usr/libexec/token-broker/gh
+COPY --chown=root:root --chmod=0755 token-broker/token-broker /usr/local/sbin/token-broker
+COPY --chown=root:root --chmod=0755 token-broker/gh /usr/bin/gh
+COPY --chown=root:root --chmod=0444 token-broker/gh-config.yml /etc/token-broker/gh/config.yml
+
 # ---- System-wide gitconfig (tamper-resistant) --------------------------------
 # Baked in at /etc/gitconfig as root:root mode 0444. The unprivileged
 # `developer` user the agent runs as has no way to modify it.
@@ -342,6 +362,7 @@ RUN { \
       echo "pre-commit-check: present-only, no --version support"; \
       echo "querydb: present-only, no --version support"; \
       echo "cfwf: present-only, no --version support"; \
+      echo "token-broker: present-only, no --version support"; \
     } > /opt/installed-versions.txt \
     && chown root:root /opt/installed-versions.txt \
     && chmod 0444 /opt/installed-versions.txt
@@ -472,6 +493,23 @@ RUN set -e; \
         || { echo "FATAL sanity: the hooks must block raw gh: it belongs on command-blocklist (#1805)" >&2; exit 1; }; \
     ! grep -qE '^[[:space:]]*gh[[:space:]]' /etc/claude-code/hooks/command-allowlist \
         || { echo "FATAL sanity: the hooks must block raw gh: it must not be on command-allowlist (#1805)" >&2; exit 1; }; \
+    echo "== token broker wiring =="; \
+    for f in /usr/local/sbin/token-broker /usr/bin/gh /usr/libexec/token-broker /usr/libexec/token-broker/empty /etc/token-broker /etc/token-broker/gh; do \
+        [ "$(stat -c '%U:%G %a' "$f")" = "root:root 755" ] \
+            || { echo "FATAL sanity: $f missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
+    done; \
+    [ "$(stat -c '%U:%G %a' /usr/libexec/token-broker/gh)" = "root:root 711" ] \
+        || { echo "FATAL sanity: the real gh at /usr/libexec/token-broker/gh is missing or not root:root 711, so the agent could read the token-holding gh process's environment" >&2; exit 1; }; \
+    [ "$(stat -c '%U:%G %a' /etc/token-broker/gh/config.yml)" = "root:root 444" ] \
+        || { echo "FATAL sanity: /etc/token-broker/gh/config.yml missing or wrong owner/perms (want root:root 444)" >&2; exit 1; }; \
+    [ -z "$(find /usr/libexec/token-broker/empty -mindepth 1 -print -quit)" ] \
+        || { echo "FATAL sanity: /usr/libexec/token-broker/empty, the broker's PATH for the real gh, must be empty" >&2; exit 1; }; \
+    [ "$(command -v gh)" = /usr/bin/gh ] \
+        || { echo "FATAL sanity: gh on PATH is $(command -v gh), not the token broker wrapper /usr/bin/gh" >&2; exit 1; }; \
+    { /usr/local/sbin/token-broker 2>&1 || true; } | grep -q '^usage: token-broker' \
+        || { echo "FATAL sanity: token-broker does not run (no usage message)" >&2; exit 1; }; \
+    command -v setpriv >/dev/null 2>&1 \
+        || { echo "FATAL sanity: setpriv is missing; the agent entrypoint needs it to drop from root to developer" >&2; exit 1; }; \
     [ ! -e /etc/claude-code/hooks/allowed-dirs.local ] \
         || { echo "FATAL sanity: an allowed-dirs.local override must never be baked into the image" >&2; exit 1; }; \
     [ ! -e /etc/claude-code/hooks/secret-files.local ] \

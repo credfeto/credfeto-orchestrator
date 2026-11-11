@@ -52,6 +52,18 @@ teardown() {
     [[ "${output}" == *"curl to 'api.nuget.org' is not permitted"* ]]
 }
 
+@test "curl to the cfwf MCP host is blocked" {
+    run_hook "curl -fsSL https://workflow-mcp.markridgwell.com/mcp"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"curl to 'workflow-mcp.markridgwell.com' is not permitted"* ]]
+}
+
+@test "curl to the kb MCP host is blocked" {
+    run_hook "curl -fsSL https://memory.markridgwell.com/dev/mcp"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"curl to 'memory.markridgwell.com' is not permitted"* ]]
+}
+
 @test "curl to a denied host with userinfo and a port is still matched" {
     run_hook "curl -fsSL https://user:pass@api.github.com:443/repos/foo"
     [ "${status}" -eq 2 ]
