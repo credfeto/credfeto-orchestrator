@@ -25,10 +25,10 @@ READMEs for what they install and why they're split out.
 
 | Destination | Source | Notes |
 | --- | --- | --- |
-| `/opt/dotnet-claude-kit` | `github.com/codewithmukesh/dotnet-claude-kit` | Full shallow clone; developer:developer ownership |
-| `/opt/wshobson-agents` | `github.com/wshobson/agents` | Sparse checkout of three plugins only: `plugins/javascript-typescript`, `plugins/python-development`, `plugins/shell-scripting`; developer:developer ownership |
-| `/opt/cc-devops-skills` | `github.com/akin-ozer/cc-devops-skills` | Full shallow clone; developer:developer ownership |
-| `/opt/markdown-linter-fixer` | `github.com/s2005/markdown-linter-fixer-skill` | Shallow clone pinned to the tag in `MARKDOWN_LINTER_FIXER_REF` (default `v1.5.4`); developer:developer ownership |
+| `/opt/dotnet-claude-kit` | `github.com/codewithmukesh/dotnet-claude-kit` | Full shallow clone; root:root ownership |
+| `/opt/wshobson-agents` | `github.com/wshobson/agents` | Sparse checkout of three plugins only: `plugins/javascript-typescript`, `plugins/python-development`, `plugins/shell-scripting`; root:root ownership |
+| `/opt/cc-devops-skills` | `github.com/akin-ozer/cc-devops-skills` | Full shallow clone; root:root ownership |
+| `/opt/markdown-linter-fixer` | `github.com/s2005/markdown-linter-fixer-skill` | Shallow clone pinned to the tag in `MARKDOWN_LINTER_FIXER_REF` (default `v1.5.4`); root:root ownership |
 | `/opt/dotnet-skills` | `github.com/dotnet/skills` | Sparse checkout of seven plugins only: `plugins/dotnet`, `plugins/dotnet-advanced`, `plugins/dotnet-diag`, `plugins/dotnet-msbuild`, `plugins/dotnet-nuget`, `plugins/dotnet-test`, `plugins/dotnet-upgrade`; pinned to `DOTNET_SKILLS_COMMIT` (no usable tag, see pin-policy comment in the Dockerfile); root:root ownership |
 
 ### Linking skills into `~/.claude/skills`
