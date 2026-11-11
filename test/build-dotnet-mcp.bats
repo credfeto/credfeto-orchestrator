@@ -357,6 +357,56 @@ assert_forced_for_both_tools() {
     assert_forced_for_both_tools SuppressNETCoreSdkPreviewMessage true false ''
 }
 
+@test "BUILD_MCP_LOG_DIR defaults to a per-user state directory for either tool" {
+    # shellcheck disable=SC2016  # expanded by the stub, not here
+    local report='printf "%s\n" "${0##*/}" "logs=${BUILD_MCP_LOG_DIR-unset}"'
+    make_dotnet_stub "${report}"
+    make_global_tool "${report}"
+
+    WRAPPER_ENV=()
+    run_wrapper "${WORK}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(printf '%s\n' credfeto-build-dotnet "logs=${USER_HOME}/.local/state/credfeto-build-mcp")" ]
+    [ -z "${stderr}" ]
+
+    # An empty value is resolved like an unset one, and an absolute XDG_STATE_HOME is used.
+    WRAPPER_ENV=(BUILD_MCP_LOG_DIR= "XDG_STATE_HOME=${WORK}/state")
+    run_wrapper "${WORK}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(printf '%s\n' credfeto-build-dotnet "logs=${WORK}/state/credfeto-build-mcp")" ]
+
+    # A relative XDG_STATE_HOME is invalid under the XDG spec, so HOME's default is used.
+    WRAPPER_ENV=(XDG_STATE_HOME=relative/state)
+    run_wrapper "${WORK}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(printf '%s\n' credfeto-build-dotnet "logs=${USER_HOME}/.local/state/credfeto-build-mcp")" ]
+
+    list_local_tool credfeto-build-dotnet
+    WRAPPER_ENV=()
+    run_wrapper "${WORK}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(printf '%s\n' dotnet "logs=${USER_HOME}/.local/state/credfeto-build-mcp")" ]
+    # The wrapper leaves creating it to the server.
+    [ ! -e "${USER_HOME}/.local/state/credfeto-build-mcp" ]
+}
+
+@test "a preset BUILD_MCP_LOG_DIR is kept for either tool" {
+    # shellcheck disable=SC2016  # expanded by the stub, not here
+    local report='printf "%s\n" "${0##*/}" "logs=${BUILD_MCP_LOG_DIR-unset}"'
+    make_dotnet_stub "${report}"
+    make_global_tool "${report}"
+
+    WRAPPER_ENV=(BUILD_MCP_LOG_DIR=/srv/build-logs "XDG_STATE_HOME=${WORK}/state")
+    run_wrapper "${WORK}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(printf '%s\n' credfeto-build-dotnet logs=/srv/build-logs)" ]
+
+    list_local_tool credfeto-build-dotnet
+    run_wrapper "${WORK}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(printf '%s\n' dotnet logs=/srv/build-logs)" ]
+}
+
 @test "with neither tool found it fails with a message on stderr and nothing on stdout" {
     run_wrapper "${WORK}"
     [ "${status}" -ne 0 ]
