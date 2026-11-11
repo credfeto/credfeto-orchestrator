@@ -205,7 +205,8 @@ banner nor the workload update notice reaches the MCP stream on stdout, and
 `SuppressNETCoreSdkPreviewMessage=true` so a preview SDK's NETSDK1057 warning stays out of build output and
 job logs. It then runs the
 local tool when `dotnet tool list --local`, run from `~`, reports `credfeto-build-dotnet`, or else the
-global tool `/home/developer/.dotnet/tools/credfeto-build-dotnet`. In the container the image `ENV`
+global tool `.dotnet/tools/credfeto-build-dotnet` under `DOTNET_CLI_HOME`, or `~` when that is unset or empty
+(`/home/developer/.dotnet/tools/credfeto-build-dotnet` here). In the container the image `ENV`
 `BUILD_MCP_TOOL=global` skips that choice and its `git` and `dotnet tool list` probes and runs the global tool
 directly, because the tool, `HOME` and the root are fixed there. The same file therefore works for every user
 on a host. The sanity block pins that exact entry, the wrapper's owner and mode, both `ENV` values and the
