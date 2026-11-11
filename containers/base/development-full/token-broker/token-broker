@@ -1,0 +1,540 @@
+#!/usr/bin/python3 -I
+# The file is installed as a command, so its name follows command naming
+# rather than Python module naming.
+# pylint: disable=invalid-name
+"""Root-owned broker that keeps the GitHub and kb tokens away from the agent.
+
+The container starts as root. The entrypoint runs `token-broker serve` before
+it drops to the developer user, so the tokens (root-only files under
+/run/secrets) are only ever held by this root process. The developer user
+reaches them through the Unix socket in two ways:
+
+  token-broker header <server>   prints {"Authorization":"Bearer <token>"}
+                                 for an MCP headersHelper (cfwf or kb)
+  token-broker gh [args...]      runs the real gh with the token, as the
+                                 calling user, on the caller's stdio and cwd
+
+A header request is answered only when the caller's parent process is that
+server's headersHelper and the caller is in the same session as Claude Code,
+so a Bash tool command (which runs in a session of its own) cannot ask for a
+token. Claude Code is PID 1, so every process descends from it: the session
+and the helper parent are what tell the MCP client's helper apart. Neither is
+proof against a process that can rewrite its own command line inside Claude
+Code's session; the helpers being direct children of Claude Code in its
+session and Yama's ptrace protection are what this relies on.
+
+A gh request is accepted from any process of the developer user. The real gh
+runs with a clean environment holding the token, an empty PATH (so it never
+starts git, a pager or an editor that could read its environment) and a
+root-owned configuration, and requests that could send the token to another
+host or print it are refused: see refusal_reason. As gh cannot start git,
+commands that need a local repository (gh pr checkout, gh repo clone, or any
+command run without --repo or GH_REPO) fail.
+"""
+
+import json
+import os
+import re
+import select
+import signal
+import socket
+import socketserver
+import struct
+import sys
+from typing import NamedTuple
+
+DEFAULT_SOCKET = "/run/token-broker/socket"
+SO_PEERPIDFD = 77
+LENGTH = struct.Struct("!Q")
+MAX_PAYLOAD = 4 * 1024 * 1024
+MAX_ANCESTORS = 64
+REQUEST_TIMEOUT_SECONDS = 10
+GH_STDIO_FDS = 3
+GH_REQUEST_FDS = GH_STDIO_FDS + 1
+
+TOKEN68 = re.compile(r"[A-Za-z0-9._~+/=-]+")
+PLAIN_REPO = re.compile(r"[A-Za-z0-9-]+/[A-Za-z0-9_.-]+")
+HOST_PATH = re.compile(
+    r"(?P<host>[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)(?::[0-9]+)?/[^/]+/.+")
+JQ_ENV = re.compile(r"\$ENV\b|(?<![\w.$])env\b")
+URL_PREFIXES = ("http://", "https://", "ssh://", "git://", "git@")
+
+REFUSED_COMMANDS = frozenset(
+    ("auth", "alias", "extension", "ext", "config", "codespace", "cs",
+     "browse"))
+PASSTHROUGH_ENV = ("NO_COLOR", "TERM", "LANG", "LC_ALL", "TZ", "COLUMNS")
+
+# Each MCP server the broker serves, and the secret its token comes from.
+SERVER_SECRETS = {"cfwf": "gh", "kb": "kb"}
+
+
+class BrokerError(Exception):
+    """A request the broker refuses, with the reason given to the caller."""
+
+
+class Config(NamedTuple):
+    """Server settings, read once from the environment at startup."""
+
+    socket_path: str
+    secrets_dir: str
+    claude_pid: int
+    peer_uid: int
+    peer_gid: int
+    helper_dir: str
+    gh_bin: str
+    gh_config_dir: str
+    gh_empty_dir: str
+    gh_host: str
+
+
+def config_from_env(env):
+    """Read the server settings from the environment."""
+    claude_pid = env.get("TOKEN_BROKER_CLAUDE_PID", "")
+    if not claude_pid.isdigit():
+        raise BrokerError("TOKEN_BROKER_CLAUDE_PID must be a process id")
+    return Config(
+        socket_path=env.get("TOKEN_BROKER_SOCKET", DEFAULT_SOCKET),
+        secrets_dir=env.get("TOKEN_BROKER_SECRETS_DIR", "/run/secrets"),
+        claude_pid=int(claude_pid),
+        peer_uid=int(env.get("TOKEN_BROKER_PEER_UID", "1000")),
+        peer_gid=int(env.get("TOKEN_BROKER_PEER_GID", "1000")),
+        helper_dir=env.get("TOKEN_BROKER_HELPER_DIR", "/etc/claude-code/mcp"),
+        gh_bin=env.get("TOKEN_BROKER_GH_BIN", "/usr/libexec/token-broker/gh"),
+        gh_config_dir=env.get(
+            "TOKEN_BROKER_GH_CONFIG_DIR", "/etc/token-broker/gh"),
+        gh_empty_dir=env.get(
+            "TOKEN_BROKER_GH_PATH", "/usr/libexec/token-broker/empty"),
+        gh_host=env.get("GH_HOST", ""),
+    )
+
+
+def gh_token_variable(gh_host):
+    """Name of the variable gh reads its token from for gh_host."""
+    if gh_host in ("", "github.com"):
+        return "GH_TOKEN"
+    return "GH_ENTERPRISE_TOKEN"
+
+
+def read_secret(path):
+    """The secret file's content without surrounding whitespace, or ''."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return handle.read().strip()
+    except FileNotFoundError:
+        return ""
+
+
+def load_tokens(config, env):
+    """The token for each secret, from its file or the inherited variable."""
+    gh_fallback = (env.get(gh_token_variable(config.gh_host), "")
+                   or env.get("GH_ENTERPRISE_TOKEN", "")
+                   or env.get("GH_TOKEN", ""))
+    sources = {
+        "gh": ("gh-token", gh_fallback),
+        "kb": ("kb-mcp-token", env.get("KB_MCP_TOKEN", "")),
+    }
+    return {
+        name: read_secret(os.path.join(config.secrets_dir, file)) or fallback
+        for name, (file, fallback) in sources.items()
+    }
+
+
+def checked_token(tokens, secret):
+    """The token, refused unless it is a non-empty RFC 6750 token68."""
+    token = tokens.get(secret, "")
+    if not token:
+        raise BrokerError(f"no {secret} token is available")
+    if not TOKEN68.fullmatch(token):
+        raise BrokerError(
+            f"the {secret} token holds characters a bearer token cannot hold")
+    return token
+
+
+def parent_pid(pid):
+    """The parent of pid, from /proc/<pid>/stat."""
+    with open(f"/proc/{pid}/stat", "rb") as handle:
+        stat = handle.read()
+    # The command name in brackets may itself hold ")" or spaces.
+    return int(stat.rsplit(b")", 1)[1].split()[1])
+
+
+def command_line(pid):
+    """The argv of pid, from /proc/<pid>/cmdline."""
+    with open(f"/proc/{pid}/cmdline", "rb") as handle:
+        return handle.read().split(b"\0")
+
+
+def descends_from(pid, ancestor):
+    """True when ancestor is pid or one of pid's ancestors."""
+    current = pid
+    for _ in range(MAX_ANCESTORS):
+        if current == ancestor:
+            return True
+        if current <= 1:
+            return False
+        current = parent_pid(current)
+    return False
+
+
+def peer_credentials(conn):
+    """The (pid, uid, gid) of the process at the other end of conn."""
+    creds = conn.getsockopt(
+        socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+    return struct.unpack("3i", creds)
+
+
+def check_header_caller(conn, config, server):
+    """Refuse a header request unless it comes from server's helper."""
+    pid, uid, _gid = peer_credentials(conn)
+    if uid != config.peer_uid:
+        raise BrokerError("header requests are only answered for the agent")
+    try:
+        pidfd = conn.getsockopt(socket.SOL_SOCKET, SO_PEERPIDFD)
+    except OSError as error:
+        raise BrokerError("the kernel cannot pin the calling process") \
+            from error
+    try:
+        if os.getsid(pid) != os.getsid(config.claude_pid):
+            raise BrokerError("the caller is not in Claude Code's session")
+        helper = os.path.join(config.helper_dir, f"{server}-mcp-headers")
+        helper_argv = command_line(parent_pid(pid))[:2]
+        if os.fsencode(helper) not in helper_argv:
+            raise BrokerError(f"the caller is not the {server} headersHelper")
+        if not descends_from(pid, config.claude_pid):
+            raise BrokerError("the caller does not descend from Claude Code")
+        # The checks above read /proc by pid, so make sure that pid still
+        # names the process that connected rather than a reused one.
+        signal.pidfd_send_signal(pidfd, 0)
+    except (OSError, ValueError, IndexError) as error:
+        raise BrokerError("the calling process could not be checked") \
+            from error
+    finally:
+        os.close(pidfd)
+
+
+def option_values(argv, long_name, short_name):
+    """Every value argv gives the option, in each spelling gh accepts."""
+    values = []
+    remaining = iter(argv)
+    for arg in remaining:
+        if arg == "--":
+            break
+        if arg.startswith(long_name + "="):
+            values.append(arg[len(long_name) + 1:])
+        elif arg == long_name:
+            values.append(next(remaining, ""))
+        elif (arg.startswith("-") and not arg.startswith("--")
+              and short_name in arg[1:]):
+            # A short option may be clustered (-xR value) or joined to its
+            # value (-Rvalue); either way the value follows the letter.
+            joined = arg[arg.index(short_name, 1) + 1:]
+            values.append(joined or next(remaining, ""))
+    return values
+
+
+def refuses_host(arg, gh_host):
+    """True when arg names a repository on a host other than gh_host."""
+    if arg.startswith("-") or "=" in arg or "@" in arg:
+        return False
+    match = HOST_PATH.fullmatch(arg)
+    return bool(match) and match.group("host").lower() != gh_host.lower()
+
+
+def refusal_reason(argv, gh_host):
+    """Why the gh request is refused, or None when it may run."""
+    reasons = (
+        (argv and argv[0] in REFUSED_COMMANDS,
+         f"gh {argv[0] if argv else ''} is not available through the broker"),
+        (any(arg == "--hostname" or arg.startswith("--hostname=")
+             for arg in argv), "--hostname is not allowed"),
+        (any(arg == "--verbose" for arg in argv),
+         "--verbose is not allowed"),
+        (any(not PLAIN_REPO.fullmatch(value)
+             for value in option_values(argv, "--repo", "R")),
+         "--repo must be OWNER/REPO"),
+        (any(arg.lower().startswith(URL_PREFIXES) for arg in argv),
+         "URLs are not allowed; use OWNER/REPO or a number"),
+        (any(refuses_host(arg, gh_host) for arg in argv),
+         "only repositories on GH_HOST are allowed"),
+        (any(JQ_ENV.search(value)
+             for value in option_values(argv, "--jq", "q")),
+         "--jq may not read the environment"),
+    )
+    return next((reason for refused, reason in reasons if refused), None)
+
+
+def gh_environment(config, token, request_env):
+    """The clean environment the real gh runs with."""
+    state_root = os.path.dirname(config.socket_path)
+    env = {
+        gh_token_variable(config.gh_host): token,
+        "GH_CONFIG_DIR": config.gh_config_dir,
+        "HOME": config.gh_empty_dir,
+        "XDG_DATA_HOME": config.gh_empty_dir,
+        "XDG_STATE_HOME": os.path.join(state_root, "gh-state"),
+        "XDG_CACHE_HOME": os.path.join(state_root, "gh-cache"),
+        "PATH": config.gh_empty_dir,
+        "GH_NO_UPDATE_NOTIFIER": "1",
+        "GH_NO_EXTENSION_UPDATE_NOTIFIER": "1",
+        "GH_PROMPT_DISABLED": "1",
+        "GH_PAGER": "cat",
+        "GH_SPINNER_DISABLED": "1",
+    }
+    if config.gh_host:
+        env["GH_HOST"] = config.gh_host
+    for name in PASSTHROUGH_ENV:
+        if isinstance(request_env.get(name), str):
+            env[name] = request_env[name]
+    repo = request_env.get("GH_REPO")
+    if isinstance(repo, str) and PLAIN_REPO.fullmatch(repo):
+        env["GH_REPO"] = repo
+    return env
+
+
+def exec_gh(config, argv, env, fds):
+    """In the forked child: become the caller and replace this with gh."""
+    try:
+        if os.geteuid() == 0:
+            os.setgroups([])
+            os.setresgid(config.peer_gid, config.peer_gid, config.peer_gid)
+            os.setresuid(config.peer_uid, config.peer_uid, config.peer_uid)
+        try:
+            os.fchdir(fds[GH_STDIO_FDS])
+        except OSError:
+            os.chdir("/")
+        for target, fd in enumerate(fds[:GH_STDIO_FDS]):
+            os.dup2(fd, target)
+        for fd in set(fds) - set(range(GH_STDIO_FDS)):
+            os.close(fd)
+        os.execve(config.gh_bin, [config.gh_bin, *argv], env)
+    except OSError as error:
+        os.write(2, f"token-broker: cannot run gh: {error}\n".encode())
+    os._exit(127)
+
+
+def wait_for_gh(conn, pid):
+    """Wait for gh, stopping it if the caller goes away first."""
+    pidfd = os.pidfd_open(pid)
+    try:
+        readable, _, _ = select.select([conn, pidfd], [], [])
+        if conn in readable and pidfd not in readable:
+            os.kill(pid, signal.SIGTERM)
+    finally:
+        os.close(pidfd)
+    _, status = os.waitpid(pid, 0)
+    code = os.waitstatus_to_exitcode(status)
+    return 128 - code if code < 0 else code
+
+
+def run_gh(conn, config, tokens, request, fds):
+    """Run gh for a gh request, returning its exit status."""
+    _pid, uid, _gid = peer_credentials(conn)
+    if uid != config.peer_uid:
+        raise BrokerError("gh requests are only answered for the agent")
+    argv = request.get("argv")
+    request_env = request.get("env")
+    if (not isinstance(argv, list)
+            or not all(isinstance(arg, str) for arg in argv)
+            or not isinstance(request_env, dict)):
+        raise BrokerError("malformed gh request")
+    if len(fds) != GH_REQUEST_FDS:
+        raise BrokerError("a gh request must pass stdin, stdout, stderr and "
+                          "the working directory")
+    reason = refusal_reason(argv, config.gh_host)
+    if reason:
+        raise BrokerError(reason)
+    env = gh_environment(config, checked_token(tokens, "gh"), request_env)
+    pid = os.fork()
+    if pid == 0:
+        exec_gh(config, argv, env, fds)
+    return wait_for_gh(conn, pid)
+
+
+def receive_exactly(conn, size):
+    """Read exactly size bytes from conn."""
+    data = bytearray()
+    while len(data) < size:
+        chunk = conn.recv(min(size - len(data), 65536))
+        if not chunk:
+            raise BrokerError("the request ended early")
+        data.extend(chunk)
+    return bytes(data)
+
+
+def receive_request(conn):
+    """The request object and the descriptors sent with it."""
+    head, fds, flags, _ = socket.recv_fds(
+        conn, LENGTH.size, GH_REQUEST_FDS)
+    try:
+        if flags & socket.MSG_CTRUNC:
+            raise BrokerError("too many descriptors in the request")
+        head += receive_exactly(conn, LENGTH.size - len(head))
+        (size,) = LENGTH.unpack(head)
+        if size > MAX_PAYLOAD:
+            raise BrokerError("the request is too large")
+        request = json.loads(receive_exactly(conn, size))
+        if not isinstance(request, dict):
+            raise BrokerError("malformed request")
+    except (BrokerError, ValueError):
+        for fd in fds:
+            os.close(fd)
+        raise
+    return request, fds
+
+
+def answer(conn, config, tokens):
+    """Handle one connection: read the request, act, send the reply."""
+    conn.settimeout(REQUEST_TIMEOUT_SECONDS)
+    request, fds = receive_request(conn)
+    conn.settimeout(None)
+    try:
+        if request.get("op") == "gh":
+            return {"exit": run_gh(conn, config, tokens, request, fds)}
+        if request.get("op") == "header":
+            server = request.get("server")
+            if server not in SERVER_SECRETS:
+                raise BrokerError("unknown MCP server")
+            check_header_caller(conn, config, server)
+            token = checked_token(tokens, SERVER_SECRETS[server])
+            return {"ok": True,
+                    "headers": {"Authorization": f"Bearer {token}"}}
+        raise BrokerError("unknown request")
+    finally:
+        for fd in fds:
+            os.close(fd)
+
+
+class Handler(socketserver.BaseRequestHandler):
+    """Answers one request, in a child forked for it."""
+
+    def handle(self):
+        try:
+            reply = answer(self.request, self.server.config,
+                           self.server.tokens)
+        except (BrokerError, OSError) as error:
+            print(f"token-broker: refused: {error}", file=sys.stderr)
+            reply = {"error": str(error)}
+        try:
+            self.request.sendall(json.dumps(reply).encode())
+        except OSError:
+            pass
+
+
+class BrokerServer(socketserver.ForkingMixIn,
+                   socketserver.UnixStreamServer):
+    """A Unix socket server forking one child per request."""
+
+    block_on_close = False
+
+    def __init__(self, config, tokens):
+        self.config = config
+        self.tokens = tokens
+        super().__init__(config.socket_path, Handler)
+
+
+def prepare_directories(config):
+    """Create the socket directory and gh's writable state directories."""
+    socket_dir = os.path.dirname(config.socket_path)
+    os.makedirs(socket_dir, mode=0o755, exist_ok=True)
+    os.chmod(socket_dir, 0o755)
+    for name in ("gh-state", "gh-cache"):
+        path = os.path.join(socket_dir, name)
+        os.makedirs(path, mode=0o700, exist_ok=True)
+        if os.geteuid() == 0:
+            os.chown(path, config.peer_uid, config.peer_gid)
+    if os.path.lexists(config.socket_path):
+        os.unlink(config.socket_path)
+
+
+def serve(env):
+    """Run the broker until it is killed."""
+    config = config_from_env(env)
+    tokens = load_tokens(config, env)
+    prepare_directories(config)
+    with BrokerServer(config, tokens) as server:
+        os.chmod(config.socket_path, 0o666)
+        server.serve_forever()
+    return 0
+
+
+def stdio_fds():
+    """Descriptors 0-2, with /dev/null standing in for a closed one."""
+    fds = []
+    for fd in range(GH_STDIO_FDS):
+        try:
+            os.fstat(fd)
+            fds.append(fd)
+        except OSError:
+            fds.append(os.open(os.devnull, os.O_RDWR))
+    return fds
+
+
+def working_directory_fd():
+    """A descriptor for the current directory, or / when it is gone."""
+    try:
+        return os.open(".", os.O_RDONLY | os.O_DIRECTORY)
+    except OSError:
+        return os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+
+
+def request_reply(request, fds):
+    """Send request with fds to the broker and return its reply."""
+    path = os.environ.get("TOKEN_BROKER_SOCKET", DEFAULT_SOCKET)
+    payload = json.dumps(request).encode()
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+        conn.connect(path)
+        socket.send_fds(conn, [LENGTH.pack(len(payload))], fds)
+        conn.sendall(payload)
+        reply = bytearray()
+        while chunk := conn.recv(65536):
+            reply.extend(chunk)
+    return json.loads(reply)
+
+
+def client(request, fds):
+    """Run one client request and return the exit status."""
+    try:
+        reply = request_reply(request, fds)
+    except (OSError, ValueError) as error:
+        print(f"token-broker: cannot reach the broker: {error}",
+              file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 128 + signal.SIGINT
+    if not isinstance(reply, dict):
+        print("token-broker: malformed reply", file=sys.stderr)
+        return 1
+    if "error" in reply:
+        print(f"token-broker: {reply['error']}", file=sys.stderr)
+        return 1
+    if "headers" in reply:
+        print(json.dumps(reply["headers"], separators=(",", ":")))
+        return 0
+    code = reply.get("exit")
+    return code if isinstance(code, int) else 1
+
+
+def main(argv):
+    """Dispatch the subcommand."""
+    command = argv[1] if len(argv) > 1 else ""
+    if command == "serve" and len(argv) == 2:
+        try:
+            return serve(os.environ)
+        except BrokerError as error:
+            print(f"token-broker: {error}", file=sys.stderr)
+            return 1
+    if command == "header" and len(argv) == 3:
+        return client({"op": "header", "server": argv[2]}, [])
+    if command == "gh":
+        env = {name: os.environ[name]
+               for name in (*PASSTHROUGH_ENV, "GH_REPO")
+               if name in os.environ}
+        fds = [*stdio_fds(), working_directory_fd()]
+        return client({"op": "gh", "argv": argv[2:], "env": env}, fds)
+    print("usage: token-broker serve | header <server> | gh [args...]",
+          file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

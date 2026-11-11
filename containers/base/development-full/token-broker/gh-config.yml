@@ -1,0 +1,5 @@
+---
+# gh's configuration while it runs through the token broker. It is root-owned,
+# so nothing the agent runs can change it.
+git_protocol: ssh
+prompt: disabled

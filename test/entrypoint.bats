@@ -7,10 +7,16 @@ ENTRYPOINT="${REPO_ROOT}/containers/agent/entrypoint.sh"
 
 setup() {
     setup_isolated_env
+    # Pin the non-root path so the suite behaves the same when bats itself runs as root;
+    # the root-stage tests override this stub.
+    make_stub id 'printf "1000\n"'
 }
 
 teardown() {
     cleanup_stubs
+    if [ -n "${BROKER_DIR:-}" ]; then
+        rm -rf "${BROKER_DIR}"
+    fi
 }
 
 # Writes a git stub that records config calls and a claude stub that exits 0,
@@ -73,23 +79,11 @@ STUBEOF
     # gpg stub: always succeeds (simulates key present + test sign succeeds).
     make_stub gpg 'exit 0'
 
-    # gh stub: reports git_protocol=ssh for all hosts (the expected baked-in value), and a
-    # fake login for `gh api user --jq '.login'` (seed_orchestrator_cache's own call) so the
-    # default case is a successfully-populated cache; tests of the cache-miss/failure paths
-    # override this stub themselves after calling this function.
+    # gh stub: a fake login for `gh api user --jq '.login'` (seed_orchestrator_cache's own
+    # call) so the default case is a successfully-populated cache; tests of the
+    # cache-miss/failure paths override this stub themselves after calling this function.
     cat > "${STUB_BIN}/gh" << 'STUBEOF'
 #!/usr/bin/env bash
-if [ "$1" = "config" ] && [ "$2" = "list" ]; then
-    printf 'hosts.github.com.git_protocol=ssh\n'
-    exit 0
-fi
-if [ "$1" = "config" ] && [ "$2" = "get" ] && [ "$3" = "git_protocol" ]; then
-    printf 'ssh\n'
-    exit 0
-fi
-if [ "$1" = "config" ] && [ "$2" = "set" ]; then
-    exit 0
-fi
 if [ "$1" = "api" ] && [ "$2" = "user" ]; then
     printf 'testuser\n'
     exit 0
@@ -627,10 +621,7 @@ STUBEOF
 
 @test "entrypoint does not die and still invokes claude when gh api user fails" {
     setup_entrypoint_stubs
-    # Minimal override (just the api user branch) rather than re-declaring every branch of
-    # the shared gh stub: enforce_gh_git_protocol_ssh short-circuits via its own
-    # `[ -n "${hosts}" ] || return 0` when `gh config list` produces no output, so the
-    # config-related branches aren't needed here - same minimal shape as the
+    # Minimal override (just the api user branch) - same shape as the
     # "already-populated global/user.json" test above.
     cat > "${STUB_BIN}/gh" << 'STUBEOF'
 #!/usr/bin/env bash
@@ -1371,70 +1362,95 @@ GITEOF
     [[ "${output}" == *"Install the SDK requested by"* ]]
 }
 
-# --- enforce_gh_git_protocol_ssh -------------------------------------------------
+# --- root stage: token broker and privilege drop ---------------------------------
 
-@test "entrypoint passes without warning when gh git_protocol is already ssh" {
-    setup_entrypoint_stubs
-    # Default gh stub already returns ssh — no warn should appear.
-    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
-        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
-        bash "${ENTRYPOINT}"
-    [ "${status}" -eq 0 ]
-    [[ "${output}" != *"resetting to ssh"* ]]
+# Makes the entrypoint believe it runs as root, with a token-broker stub that records its
+# arguments and environment and then runs the body given as "$1", and a setpriv stub that
+# records its arguments and the environment it was handed instead of re-running the script.
+setup_root_stage_stubs() {
+    # A Unix socket path is limited to 108 bytes, so the socket sits directly in the temporary
+    # directory rather than under the much longer bats test directory.
+    BROKER_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ep.XXXXXX")"
+    export BROKER_DIR
+    export TOKEN_BROKER_SOCKET="${BROKER_DIR}/socket"
+    make_stub id 'printf "0\n"'
+    make_stub claude "touch '${TEST_TMP}/claude_ran'"
+    make_stub_multiline token-broker \
+        "printf '%s\n' \"\$*\" > '${TEST_TMP}/broker_args'" \
+        "printf '%s\n' \"\${TOKEN_BROKER_CLAUDE_PID:-}\" > '${TEST_TMP}/broker_claude_pid'" \
+        "$1"
+    make_stub_multiline setpriv \
+        "printf '%s\n' \"\$@\" > '${TEST_TMP}/setpriv_args'" \
+        "printf 'GH_TOKEN=%s GH_ENTERPRISE_TOKEN=%s KB_MCP_TOKEN=%s HOME=%s USER=%s\n' \"\${GH_TOKEN-unset}\" \"\${GH_ENTERPRISE_TOKEN-unset}\" \"\${KB_MCP_TOKEN-unset}\" \"\${HOME}\" \"\${USER}\" > '${TEST_TMP}/setpriv_env'"
 }
 
-@test "entrypoint warns and resets gh git_protocol when it is not ssh" {
+# Binds a Unix socket at TOKEN_BROKER_SOCKET, as the real broker does once it is ready.
+BIND_SOCKET='python3 -I -c "import os, socket; socket.socket(socket.AF_UNIX).bind(os.environ[\"TOKEN_BROKER_SOCKET\"])"'
+
+@test "entrypoint as root starts the token broker with its own PID as the claude PID" {
     setup_entrypoint_stubs
-    # Override gh stub: config get returns 'https', config set records args on one line.
-    cat > "${STUB_BIN}/gh" << GHEOF
-#!/usr/bin/env bash
-printf '%s\n' "\$*" >> "${TEST_TMP}/gh_args"
-if [ "\$1" = "config" ] && [ "\$2" = "list" ]; then
-    printf 'hosts.github.com.git_protocol=https\n'
-    exit 0
-fi
-if [ "\$1" = "config" ] && [ "\$2" = "get" ] && [ "\$3" = "git_protocol" ]; then
-    printf 'https\n'
-    exit 0
-fi
-exit 0
-GHEOF
-    chmod +x "${STUB_BIN}/gh"
-    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
-        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
-        bash "${ENTRYPOINT}"
+    setup_root_stage_stubs "${BIND_SOCKET}"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token bash "${ENTRYPOINT}"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"resetting to ssh"* ]]
-    grep -q "config set git_protocol ssh" "${TEST_TMP}/gh_args"
+    [ "$(cat "${TEST_TMP}/broker_args")" = 'serve' ]
+    [[ "$(cat "${TEST_TMP}/broker_claude_pid")" =~ ^[0-9]+$ ]]
 }
 
-@test "entrypoint checks GH_HOST when set and resets it if not ssh" {
+@test "entrypoint as root re-runs itself as developer through setpriv with no way back to root" {
     setup_entrypoint_stubs
-    cat > "${STUB_BIN}/gh" << GHEOF
-#!/usr/bin/env bash
-printf '%s\n' "\$*" >> "${TEST_TMP}/gh_args"
-if [ "\$1" = "config" ] && [ "\$2" = "list" ]; then
-    printf 'hosts.github.com.git_protocol=ssh\n'
-    exit 0
-fi
-if [ "\$1" = "config" ] && [ "\$2" = "get" ] && [ "\$3" = "git_protocol" ]; then
-    # Return https when queried for the proxy host, ssh otherwise.
-    for i in "\$@"; do
-        [ "\${i}" = "github-api.markridgwell.com" ] && { printf 'https\n'; exit 0; }
-    done
-    printf 'ssh\n'
-    exit 0
-fi
-exit 0
-GHEOF
-    chmod +x "${STUB_BIN}/gh"
+    setup_root_stage_stubs "${BIND_SOCKET}"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token bash "${ENTRYPOINT}" --resume abc
+    [ "${status}" -eq 0 ]
+    local args="${TEST_TMP}/setpriv_args"
+    grep -qx -- '--reuid=developer' "${args}"
+    grep -qx -- '--regid=developer' "${args}"
+    grep -qx -- '--init-groups' "${args}"
+    grep -qx -- '--no-new-privs' "${args}"
+    grep -qx -- '--bounding-set=-all' "${args}"
+    grep -qx -- '--inh-caps=-all' "${args}"
+    [ "$(grep -A3 -x -- '--' "${args}" | tail -n 3 | tr '\n' ' ')" = "${ENTRYPOINT} --resume abc " ]
+    # The setpriv stub does not re-run the script, so nothing after the exec ran as root.
+    [ ! -e "${TEST_TMP}/claude_ran" ]
+}
+
+@test "entrypoint as root hands developer an environment without the GitHub and kb tokens" {
+    setup_entrypoint_stubs
+    setup_root_stage_stubs "${BIND_SOCKET}"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GH_TOKEN=gh_secret GH_ENTERPRISE_TOKEN=ghe_secret \
+        KB_MCP_TOKEN=kb_secret HOME=/root USER=root bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${TEST_TMP}/setpriv_env")" = 'GH_TOKEN=unset GH_ENTERPRISE_TOKEN=unset KB_MCP_TOKEN=unset HOME=/home/developer USER=developer' ]
+}
+
+@test "entrypoint as root dies when the token broker exits before creating its socket" {
+    setup_entrypoint_stubs
+    setup_root_stage_stubs 'exit 1'
+    run env CLAUDE_CODE_OAUTH_TOKEN=token bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"The token broker exited before creating ${TOKEN_BROKER_SOCKET}"* ]]
+    [ ! -e "${TEST_TMP}/setpriv_args" ]
+}
+
+@test "entrypoint as root dies when the token broker never creates its socket" {
+    setup_entrypoint_stubs
+    setup_root_stage_stubs 'exec sleep 8 </dev/null >/dev/null 2>&1'
+    run env CLAUDE_CODE_OAUTH_TOKEN=token bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"The token broker did not create ${TOKEN_BROKER_SOCKET} within 5 seconds"* ]]
+    [ ! -e "${TEST_TMP}/setpriv_args" ]
+}
+
+@test "entrypoint as developer neither starts the token broker nor calls setpriv" {
+    setup_entrypoint_stubs
+    setup_root_stage_stubs "${BIND_SOCKET}"
+    make_stub id 'printf "1000\n"'
     run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
         GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
-        GH_HOST=github-api.markridgwell.com \
         bash "${ENTRYPOINT}"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"github-api.markridgwell.com"*"resetting to ssh"* ]]
-    grep -q "config set git_protocol ssh --host github-api.markridgwell.com" "${TEST_TMP}/gh_args"
+    [ ! -e "${TEST_TMP}/broker_args" ]
+    [ ! -e "${TEST_TMP}/setpriv_args" ]
+    [ -e "${TEST_TMP}/claude_ran" ]
 }
 
 # --- image provenance logging ----------------------------------------------------

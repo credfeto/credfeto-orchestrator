@@ -110,8 +110,13 @@ GH_TOKEN=ghp_<your-proxy-token>
 If either key is absent, `gh` on the host falls back to its own `~/.config/gh/hosts.yml`.
 Inside the agent container there is no `hosts.yml`: the image bakes the proxy `GH_HOST` with a
 placeholder token, so without both keys `gh` in the container is unauthenticated. For direct,
-unproxied access set `GH_HOST=github.com` with a real token; it then reaches the container as
+unproxied access set `GH_HOST=github.com` with a real token; the container's `gh` then gets it as
 `GH_TOKEN` rather than `GH_ENTERPRISE_TOKEN`, which `gh` ignores for github.com.
+
+Inside the agent container the token is never in the agent's environment: it is mounted as a
+root-only file that only a root-owned token broker reads, and `gh` there is a wrapper that asks the
+broker to run the real `gh` with it (see
+[docs/development/claude-hooks.md](docs/development/claude-hooks.md#the-token-broker)).
 
 ### Knowledge-base MCP token (`KB_MCP_TOKEN`, optional)
 
@@ -122,8 +127,8 @@ token. Set it in `.env`:
 KB_MCP_TOKEN=<your-kb-token>
 ```
 
-`oneshot` passes it to each container as a per-container Podman secret, mapped to the
-`KB_MCP_TOKEN` environment variable that the server's root-owned `headersHelper` reads, and removes
+`oneshot` passes it to each container as a per-container Podman secret, mounted as a root-only
+file that the token broker reads to answer the server's root-owned `headersHelper`, and removes
 the secret when the container exits. It is never written to the image or to `managed-mcp.json`.
 Without it, sessions still start, and `kb` shows as failed to connect. A value holding a character
 a bearer token cannot contain (a space, a trailing `# comment`, a stray quote) is ignored with a
