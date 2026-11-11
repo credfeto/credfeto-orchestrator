@@ -59,7 +59,9 @@ run_wrapper() {
 # set_dotnet_list wrote, recording where it ran and its arguments; anything else runs the given
 # report line, or by default one that prints where it ran, the root it was given and its arguments,
 # one a line, so the tests can tell which server the wrapper started and how. Only bash builtins
-# are used, because the wrapper's PATH holds the stub directory alone.
+# are used, because the wrapper's PATH holds the stub directory alone, except that with a
+# lock-home-after-list file in the state directory "tool list" makes HOME unenterable once it has
+# answered (a test that wants that links chmod in).
 make_dotnet_stub() {
     # shellcheck disable=SC2016  # expanded by the stub, not here
     local report='printf "%s\n" "dotnet" "cwd=$(pwd -P)" "root=${BUILD_MCP_REPO_ROOT}" "argc=$#" "$@"'
@@ -74,6 +76,7 @@ make_dotnet_stub() {
         '    printf "%s\n" "$*" > "${state}/list-args"' \
         '    [ ! -s "${state}/list-stderr" ] || printf "%s\n" "$(<"${state}/list-stderr")" >&2' \
         '    printf "%s" "$(<"${state}/list-stdout")"' \
+        '    [ ! -e "${state}/lock-home-after-list" ] || chmod 000 "$(pwd -P)"' \
         '    exit "$(<"${state}/list-status")"' \
         'fi' \
         "${report}"
@@ -188,6 +191,23 @@ make_git_repo() {
     [ "${status}" -eq 0 ]
     [ "${lines[0]}" = "dotnet" ]
     [ -z "${stderr}" ]
+}
+
+@test "a listed local tool fails without falling back to the global tool when HOME cannot be entered to run it" {
+    [ "$(id -u)" -ne 0 ] || skip "root can enter a directory with mode 000"
+    list_local_tool credfeto-build-dotnet
+    make_global_tool
+    ln -s "$(which chmod)" "${STUB_BIN}/chmod"
+    # HOME changes between the list and the run: the list answers, then HOME becomes unenterable.
+    touch "${DOTNET_STUB_STATE}/lock-home-after-list"
+    local home_mode
+    home_mode="$(stat -c '%a' "${USER_HOME}")"
+    run_wrapper "${WORK}"
+    # Restored before any assertion, so teardown can always remove HOME.
+    chmod "${home_mode}" "${USER_HOME}"
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == *"build-dotnet-mcp: cannot change to ${USER_HOME} to run the local credfeto-build-dotnet" ]]
 }
 
 @test "a listed local tool that dotnet tool run cannot start fails without falling back to the global tool" {
