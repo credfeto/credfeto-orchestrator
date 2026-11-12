@@ -107,13 +107,14 @@ the check `claude-managed-settings.json`'s own rule syntax cannot express (it ha
 there, the source of Claude Code's "has a wildcard before the rest of the command" startup warning); with
 the hook in place the per-subcommand wildcard entries are gone from `permissions.allow` and the same flags
 are also listed in `permissions.deny` as belt-and-braces. See `claude-hooks.instructions.md` for the path
-resolution rules and the host-side `allowed-dirs.local` override. `block-secret-file-reads` runs third,
-and is also registered for `Edit|Write|NotebookEdit` and `Read`: it blocks any tool call that reads or
-writes a file whose basename matches a pattern in `claude-hooks/secret-files` (`.env`, `.env.*`, `*.env`
-and `.database` by default; `.env.example` is always exempt), and fails closed if jq, shfmt or realpath
-is missing or the payload or command does not parse. `enforce-git-policy` uses the
+resolution rules and the host-side `allowed-dirs.local` override. `enforce-git-policy` uses the
 same shfmt-parsed AST and blocks git commands that don't use `git -C <dir>` (plus `eval`/`source`, whose
 arguments it cannot verify); both hooks fail closed if shfmt is missing or the command does not parse.
+`block-secret-file-reads` runs after `enforce-allowed-dirs`, and is also registered for
+`Edit|Write|NotebookEdit` and `Read`: it blocks any tool call that reads or writes a file whose basename
+matches a pattern in `claude-hooks/secret-files` (`.env`, `.env.*`, `*.env` and `.database` by default;
+`.env.example` is always exempt), and fails closed if jq, shfmt or realpath is missing or the payload or
+command does not parse.
 `enforce-git-identity` blocks `git commit`/`fetch`/`pull`/`rebase`/`merge`/`cherry-pick`/`revert`/`am` unless
 git identity and GPG signing are correctly configured, and runs before `enforce-git-policy` in the chain.
 `block-git-worktree` runs after `enforce-git-policy`, and uses the same shfmt-parsed AST to block
