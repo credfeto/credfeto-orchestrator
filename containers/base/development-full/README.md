@@ -201,7 +201,7 @@ started by the root-owned wrapper `/etc/claude-code/mcp/build-dotnet-mcp`, with 
 `mcp__build-dotnet__*` in `permissions.allow` allows all of its tools. It is registered for every session,
 whatever the repository's language. The wrapper keeps `BUILD_MCP_REPO_ROOT`, which the image sets to
 `/workspace/repo` as an `ENV`, or otherwise resolves it from the directory Claude Code was started in, and
-fails rather than pass the server a root that is not an absolute path. It
+fails rather than pass the server a root that is not an absolute path, or run with a `HOME` that is not one. It
 keeps a preset `BUILD_MCP_LOG_DIR`; in this image (`BUILD_MCP_TOOL=global`) it otherwise leaves it unset, so
 the server logs under `TMPDIR`, the `/workspace/tmp` scratch mount, while on a host it points it at the
 per-user `~/.local/state/credfeto-build-mcp` (or under an absolute `XDG_STATE_HOME`), so one user's logs

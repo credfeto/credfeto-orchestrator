@@ -46,6 +46,10 @@ require_absolute() {
 tool_command="credfeto-build-dotnet"
 
 [ -n "${HOME:-}" ] || fail "HOME is not set"
+# Every tool path below is built from HOME and every exec runs after a cd to it. A relative HOME
+# would make the global tool check resolve from the start directory but the exec from HOME itself,
+# and a relative cd consults CDPATH, which can print the directory to stdout, the MCP stream.
+require_absolute "home directory" "${HOME}" "HOME"
 
 case "${BUILD_MCP_TOOL:-}" in
     "" | global) ;;
