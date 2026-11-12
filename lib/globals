@@ -493,6 +493,17 @@ MAX_PR_ENV_AUTO_UNBLOCKS="${MAX_PR_ENV_AUTO_UNBLOCKS:-3}"
 PREFLIGHT_FAILURES_BEFORE_SKIP="${PREFLIGHT_FAILURES_BEFORE_SKIP:-2}"
 [[ "${PREFLIGHT_FAILURES_BEFORE_SKIP}" =~ ^[1-9][0-9]*$ ]] || PREFLIGHT_FAILURES_BEFORE_SKIP=2
 
+# The message prefix of every stash oneshot makes of a dirty checkout on a branch no queued item
+# owns, or on a detached HEAD (autostash_dirty_checkout, lib/git). Only stashes whose message
+# starts with it are ever pruned; any other stash in the clone is left alone.
+# shellcheck disable=SC2034  # read by lib/git after sourcing
+AUTOSTASH_MESSAGE_PREFIX="orchestrator-autostash"
+# How many of those autostashes a clone keeps: after each new one, the oldest beyond this number
+# are dropped, with one log line each, so the stash list cannot grow without limit. Override with
+# AUTOSTASH_KEEP.
+AUTOSTASH_KEEP="${AUTOSTASH_KEEP:-20}"
+[[ "${AUTOSTASH_KEEP}" =~ ^[1-9][0-9]*$ ]] || AUTOSTASH_KEEP=20
+
 # How many CONSECUTIVE agent-container failures before Claude ever starts (invoke_claude
 # returning 2 — see run_claude_fresh, #1133) caused by the host (PREFLIGHT_FAILURE_KIND
 # github-ssh-auth or name-conflict) an item tolerates before being marked Blocked for a human.

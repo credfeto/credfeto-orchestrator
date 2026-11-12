@@ -219,6 +219,66 @@ dirty_branch_belongs_to_item() {
     [[ "${dirty_branch}" =~ ${branch_regex} ]]
 }
 
+# Stashes a dirty checkout that no item in this run's queue owns (its branch, given as the first
+# argument, or a detached HEAD when that is empty), untracked files included, so the item about to
+# be launched can have its normal branch switch instead of every item in the repository being
+# skipped on every tick. Nothing is dropped: the stash stays in the clone for a human or a later
+# session to recover, under a message naming the branch, the UTC time and the reason. Logs one
+# warning with the stash ref and the number of files, then prunes old autostashes
+# (prune_autostashes). Returns 1, with a warning, when the stash fails or saves nothing; the
+# caller then skips the item as before.
+autostash_dirty_checkout() {
+    local dirty_branch="$1"
+    local label="${dirty_branch:-detached}" shown="${dirty_branch:-a detached HEAD}"
+    local file_count stamp message before after
+    local -a ident=()
+    file_count=$(git -C "${REPO_WORK_DIR}" status --porcelain --untracked-files=all 2> /dev/null | wc -l)
+    stamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    message="${AUTOSTASH_MESSAGE_PREFIX} ${label} ${stamp}: dirty tree on unowned branch"
+    # A stash is a commit: give it an identity when the host has none configured, rather than
+    # failing on "Please tell me who you are".
+    if ! git -C "${REPO_WORK_DIR}" config user.email > /dev/null 2>&1; then
+        ident=(-c user.name=orchestrator -c user.email=orchestrator@localhost)
+    fi
+    before=$(git -C "${REPO_WORK_DIR}" rev-parse --verify -q refs/stash 2> /dev/null)
+    if ! git -C "${REPO_WORK_DIR}" "${ident[@]+"${ident[@]}"}" stash push --include-untracked -m "${message}" > /dev/null; then
+        warn "Failed to stash the uncommitted changes on '${shown}' for ${REPO_FULL}"
+        return 1
+    fi
+    after=$(git -C "${REPO_WORK_DIR}" rev-parse --verify -q refs/stash 2> /dev/null)
+    if [ -z "${after}" ] || [ "${after}" = "${before}" ]; then
+        warn "Stashing the uncommitted changes on '${shown}' for ${REPO_FULL} saved nothing"
+        return 1
+    fi
+    warn "Stashed ${file_count} uncommitted file(s) on '${shown}', which no queued item owns, for ${REPO_FULL} as stash@{0} (${after}): ${message}"
+    prune_autostashes
+    return 0
+}
+
+# Drops the oldest autostashes (stashes whose message starts with AUTOSTASH_MESSAGE_PREFIX) beyond
+# the newest AUTOSTASH_KEEP, with one warning each naming the stash. Stashes without the prefix are
+# never touched and do not count towards the limit. Drops the highest index first, so the indices
+# of the ones still to drop stay valid.
+prune_autostashes() {
+    local pattern="^On [^:]*: ${AUTOSTASH_MESSAGE_PREFIX} "
+    local ref subject seen=0 i
+    local -a excess=()
+    while IFS=$'\t' read -r ref subject; do
+        [[ "${subject}" =~ ${pattern} ]] || continue
+        seen=$((seen + 1))
+        [ "${seen}" -gt "${AUTOSTASH_KEEP}" ] && excess+=("${ref}"$'\t'"${subject}")
+    done < <(git -C "${REPO_WORK_DIR}" stash list --format='%gd%x09%gs' 2> /dev/null)
+    for ((i = ${#excess[@]} - 1; i >= 0; i--)); do
+        ref="${excess[i]%%$'\t'*}"
+        subject="${excess[i]#*$'\t'}"
+        if git -C "${REPO_WORK_DIR}" stash drop -q "${ref}" > /dev/null 2>&1; then
+            warn "Dropped old autostash ${ref} for ${REPO_FULL} (keeping the newest ${AUTOSTASH_KEEP}): ${subject#On *: }"
+        else
+            warn "Failed to drop old autostash ${ref} for ${REPO_FULL}: ${subject#On *: }"
+        fi
+    done
+}
+
 # Returns 0 if the repo was on a branch that no longer exists on origin AND has been
 # reset to main; returns 1 in all other cases (repo absent, already on main, branch still
 # live on remote, or any git failure).  Performs its own fetch --prune because it is

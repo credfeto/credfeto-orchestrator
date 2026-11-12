@@ -209,9 +209,18 @@ Local checkout state never gets an item marked `Blocked`. The item is skipped fo
 one log line saying why, no agent and no invocation or idle budget charged, when:
 
 - the checkout cannot be put on that branch (a checkout or rebase failure), or
-- it holds uncommitted changes on another item's branch. A dirty checkout goes to the agent to
-  recover only for the item whose branch it is on (for an issue, `main` or a branch named for
-  the issue).
+- it holds uncommitted changes on the branch of another item in the same run's queue (a PR's
+  head branch, or for an issue `main` or a branch named for the issue). That item is the one
+  that recovers them: a dirty checkout goes to the agent only for the item whose branch it is on.
+
+When the uncommitted changes are on a branch that no queued item owns, or on a detached HEAD,
+nothing would ever recover them, so `oneshot` stashes them (`git stash push --include-untracked`)
+with the message `orchestrator-autostash <branch, or detached> <UTC time>: dirty tree on unowned
+branch`, logs one warning with the stash ref and the number of files, and carries on with the
+item's normal branch switch. Nothing is dropped: the stash stays in the clone for a person or a
+later session to recover. Only the newest `AUTOSTASH_KEEP` (default 20) autostashes are kept; each
+older one is dropped with a log line, and stashes without that message prefix are never touched.
+If the stash fails, the item is skipped as before.
 
 When the agent container's pre-flight refuses the item's own checkout (for example, its
 `global.json` asks for an SDK the image does not have yet), `oneshot` logs it and records the
