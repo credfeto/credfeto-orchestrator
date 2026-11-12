@@ -106,9 +106,13 @@ clean_local_git_url_rewrites() {
 }
 
 # Returns 0 on success. Returns 1 for a dirty working tree — the existing "hand off to agent to
-# recover" signal. Returns 2 for a transient git-fetch failure specifically: unlike a dirty tree,
-# there is nothing for the agent to recover from a network blip, so the caller must skip the item
-# entirely rather than burning an agent invocation on stale local state (#1090).
+# recover" signal (oneshot hands it over only to the item whose branch the checkout is on, see
+# dirty_branch_belongs_to_item). Returns 2 for a transient git-fetch failure specifically: unlike
+# a dirty tree, there is nothing for the agent to recover from a network blip, so the caller must
+# skip the item entirely rather than burning an agent invocation on stale local state (#1090).
+# Returns 3 when a clean checkout cannot be put back on main or rebased onto origin/main (an
+# interrupted rebase is aborted first): the caller skips the item for this tick, and the next
+# tick tries again, rather than ending the whole run.
 # A clean checkout on any branch other than main (a previous session's branch, still live on
 # origin or deleted, or a detached HEAD) is switched back to main and rebased on origin/main
 # before every item (#1909). The agent checks out the item's own branch inside its session, but
@@ -147,16 +151,72 @@ ensure_repo_current() {
             else
                 warn "Branch '${left_on}' no longer exists on origin for ${REPO_FULL} — returning to main"
             fi
-            git -C "${REPO_WORK_DIR}" checkout main \
-                || die "Failed to switch to main from '${left_on}' for ${REPO_FULL}"
+            if ! git -C "${REPO_WORK_DIR}" checkout main; then
+                warn "Failed to switch to main from '${left_on}' for ${REPO_FULL}"
+                return 3
+            fi
         fi
         info "Rebasing main with origin/main..."
-        git -C "${REPO_WORK_DIR}" rebase origin/main || die "Failed to rebase main with origin/main"
+        if ! git -C "${REPO_WORK_DIR}" rebase origin/main; then
+            git -C "${REPO_WORK_DIR}" rebase --abort 2> /dev/null || true
+            warn "Failed to rebase main with origin/main for ${REPO_FULL}"
+            return 3
+        fi
     else
         info "Cloning ${REPO_FULL} to ${REPO_WORK_DIR}..."
         mkdir -p "$(dirname "${REPO_WORK_DIR}")" || die "Failed to create parent directory for ${REPO_WORK_DIR}"
         git clone "git@github.com:${OWNER}/${REPO}.git" "${REPO_WORK_DIR}" || die "Failed to clone ${REPO_FULL} to ${REPO_WORK_DIR}"
     fi
+}
+
+# Puts a clean checkout (ensure_repo_current has just returned 0, so it is on main and rebased)
+# on the branch the item about to be launched needs, so the container's pre-flight judges that
+# branch's files: main for an Issue or a pull request from a fork, and the PR's own head branch
+# otherwise. The local branch is created, or reset, to track origin/<branch>: the agent pushes
+# its work, so a local copy is never ahead of what the session needs. Returns 1 when the head
+# branch is not on origin or the checkout fails; the checkout is then returned to main (best
+# effort) and the caller skips the item for this tick.
+checkout_item_branch() {
+    local target_branch="$1"
+    [ -n "${target_branch}" ] || return 1
+    if [ "${target_branch}" = "main" ]; then
+        [ "$(git -C "${REPO_WORK_DIR}" branch --show-current 2> /dev/null)" = "main" ] && return 0
+        git -C "${REPO_WORK_DIR}" checkout main
+        return
+    fi
+    if ! git -C "${REPO_WORK_DIR}" rev-parse --verify -q "refs/remotes/origin/${target_branch}" > /dev/null 2>&1; then
+        warn "Branch '${target_branch}' does not exist on origin for ${REPO_FULL}"
+        return 1
+    fi
+    info "Checking out '${target_branch}' (tracking origin/${target_branch}) for ${REPO_FULL}..."
+    if ! git -C "${REPO_WORK_DIR}" checkout -B "${target_branch}" --track "origin/${target_branch}"; then
+        git -C "${REPO_WORK_DIR}" checkout -f main 2> /dev/null || true
+        return 1
+    fi
+}
+
+# Outputs the commit the checkout is on, for the pre-flight failure record (lib/state). Returns 1
+# with no output when it cannot be read.
+checkout_head_sha() {
+    git -C "${REPO_WORK_DIR}" rev-parse --verify -q HEAD 2> /dev/null
+}
+
+# Returns 0 when a dirty checkout's branch (DIRTY_BRANCH from ensure_repo_current) is the item's
+# own, so the item's agent is the one to recover it: the PR's head branch for a PR, and main or a
+# branch named for the issue (issue_branch_regex) for an Issue, whose session starts from main.
+# Returns 1 for any other branch or a detached HEAD: that work belongs to another item, which is
+# the one that gets the checkout handed to it, and this item is skipped meanwhile.
+dirty_branch_belongs_to_item() {
+    local item_type="$1" item_id="$2" dirty_branch="$3" pr_head_branch="$4"
+    [ -n "${dirty_branch}" ] || return 1
+    if [ "${item_type}" = "PullRequest" ]; then
+        [ -n "${pr_head_branch}" ] && [ "${dirty_branch}" = "${pr_head_branch}" ]
+        return
+    fi
+    [ "${dirty_branch}" = "main" ] && return 0
+    local branch_regex
+    branch_regex=$(issue_branch_regex "${item_id}")
+    [[ "${dirty_branch}" =~ ${branch_regex} ]]
 }
 
 # Returns 0 if the repo was on a branch that no longer exists on origin AND has been

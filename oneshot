@@ -83,12 +83,15 @@ source "${ONESHOT_DIR}/lib/podman" \
 # pr_has_dependency_update_branch, pr_should_use_dependency_prompt, and
 # pr_is_human_driven are declared in lib/github. ensure_rules_current,
 # clean_local_git_url_rewrites, ensure_repo_current,
+# checkout_item_branch, checkout_head_sha, dirty_branch_belongs_to_item,
 # recover_orphaned_branch, find_stale_issue_branch, and try_nonagentic_rebase are declared in
 # lib/git.
 # check_required_tools and hash_sha256 are declared in lib/core.
 
 # invocation_guard_file_path, infra_failure_guard_file_path, load_infra_failure_count,
-# save_infra_failure_count, clear_infra_failure_count, pr_invocation_guard_file_path,
+# save_infra_failure_count, clear_infra_failure_count, preflight_failure_file_path,
+# record_preflight_failure, clear_preflight_failure, preflight_failure_still_applies,
+# pr_invocation_guard_file_path,
 # load_pr_invocation_counts, save_pr_invocation_counts, runaway_blocked_marker_file_path,
 # mark_capped_block_for_forgiveness, reset_pr_invocation_counts_if_capped,
 # env_unblock_attempts_file_path, env_unblock_cap_notice_marker_file_path,
@@ -136,11 +139,13 @@ source "${ONESHOT_DIR}/lib/podman" \
 # run_claude_fresh, handle_claude_is_error, handle_claude_permission_denials,
 # setup_cgroup_leaf, cleanup_dangling_images, stop_ssh_agent, preload_ssh_keys,
 # verify_gpg_signing_ready, add_gpg_podman_args, validate_bind_mounts, ensure_agent_container_ready,
+# pull_agent_image_once,
 # prepare_claude_container_args, cleanup_claude_invocation_tmpfiles, invoke_claude,
 # summarise_precheck_log, precheck_log_tail, run_precommit_precheck, ensure_precheck_result,
 # prepare_precheck_section, and current_agent_image_sha (plus the invocation-scoped globals
 # CLAUDE_MD_TMPFILE, CLAUDE_PROMPT, GPG_PUBKEY_TMPDIR, PODMAN_SECRET_NAME,
-# GH_ENTERPRISE_SECRET_NAME, KB_MCP_SECRET_NAME, PRECHECK_SECTION, PRECHECK_SESSION_LOG) are declared in lib/podman.
+# GH_ENTERPRISE_SECRET_NAME, KB_MCP_SECRET_NAME, PRECHECK_SECTION, PRECHECK_SESSION_LOG,
+# PREFLIGHT_FAILURE_KIND) are declared in lib/podman.
 
 # sync_pr_labels_from_linked_issues is declared in lib/github.
 
@@ -351,7 +356,7 @@ main() {
     local post_pr_fp_ok post_issue_fp_ok post_issue_fp
     local pr_has_unaddressed_comment review_pipeline_finished settled_note
     local pr_required_checks pr_base_requires_checks pr_required_checks_lookup_failed pr_next_phase pr_unaddressed_comments_text
-    local ensure_repo_current_status trusted_logins
+    local ensure_repo_current_status trusted_logins item_branch item_head_sha preflight_image_sha preflight_failures
     local standoff_pr standoff_rc human_driven_rc closed_takeover_marker closed_pr_tagged_marker
     local stale_issue_branch resumable_branch
     local background_stall
@@ -1308,7 +1313,23 @@ main() {
             count_error=$((count_error + 1))
             item_status_log+=("$(record_item_status "${item_type}" "${item_id}" "${item_repo}" "failed to bring the repo up to date - skipping this item for now")")
             continue
+        elif [ "${ensure_repo_current_status}" -eq 3 ]; then
+            # The checkout could not be put back on main or rebased: local state, not the item,
+            # so skip it this tick (no agent, no Blocked, no budget) and try again next tick.
+            warn "Skipping ${item_type} #${item_id} in ${item_repo}: the checkout could not be returned to main and rebased — retrying next tick"
+            count_error=$((count_error + 1))
+            item_status_log+=("$(record_item_status "${item_type}" "${item_id}" "${item_repo}" "checkout could not be returned to main - skipping this item for now")")
+            continue
         elif [ "${ensure_repo_current_status}" -ne 0 ]; then
+            # A dirty checkout goes to the agent to recover only when it is on this item's own
+            # branch: another item's uncommitted work is that item's to recover, and handing it to
+            # this one would have the pre-flight and the session judge the wrong branch.
+            if ! dirty_branch_belongs_to_item "${item_type}" "${item_id}" "${DIRTY_BRANCH}" "${branch_name}"; then
+                warn "Skipping ${item_type} #${item_id} in ${item_repo}: the checkout has uncommitted changes on '${DIRTY_BRANCH:-a detached HEAD}', which is not this item's branch — leaving it for the item that owns it"
+                count_error=$((count_error + 1))
+                item_status_log+=("$(record_item_status "${item_type}" "${item_id}" "${item_repo}" "checkout has uncommitted changes from another item - skipping this item for now")")
+                continue
+            fi
             info "Repo not clean for ${item_repo} — handing off to agent to recover"
         elif [ "${item_type}" = "PullRequest" ]; then
             # pr_has_unaddressed_comment guards this: a trusted comment an agent has not yet
@@ -1351,6 +1372,32 @@ main() {
                 fi
                 info "Non-agentic rebase of PR #${item_id} in ${item_repo} had conflicts — handing off to agent"
             fi
+        fi
+
+        # Put a clean checkout on the branch the item needs before anything launches a container
+        # on it, so the pre-flight (and the pre-check) judge the item's own files: the PR's head
+        # branch, tracking origin, or main for an Issue or a PR from a fork. A checkout that
+        # cannot get there is skipped for this tick, never Blocked and never charged.
+        item_branch="main"
+        if [ "${item_type}" = "PullRequest" ] && [ -n "${branch_name}" ] \
+            && ! printf '%s' "${pr_json}" | jq -e '.isCrossRepository == true' > /dev/null 2>&1; then
+            item_branch="${branch_name}"
+        fi
+        if [ "${ensure_repo_current_status}" -eq 0 ] && ! checkout_item_branch "${item_branch}"; then
+            warn "Skipping ${item_type} #${item_id} in ${item_repo}: could not check out its branch '${item_branch}' — retrying next tick"
+            count_error=$((count_error + 1))
+            item_status_log+=("$(record_item_status "${item_type}" "${item_id}" "${item_repo}" "could not check out the item's branch - skipping this item for now")")
+            continue
+        fi
+
+        # An item whose own checkout failed the container's pre-flight is parked until the agent
+        # image or the checkout's head changes (preflight_failure_still_applies, lib/state); the
+        # failure was logged once when it happened.
+        item_head_sha=$(checkout_head_sha) || item_head_sha=""
+        if preflight_failure_still_applies "${item_type}" "${item_id}" "${item_head_sha}"; then
+            count_unchanged=$((count_unchanged + 1))
+            item_status_log+=("$(record_item_status "${item_type}" "${item_id}" "${item_repo}" "pre-flight failed on this image and branch head - waiting for a new image or commit")")
+            continue
         fi
 
         if is_owner_rate_limited; then
@@ -1574,14 +1621,40 @@ main() {
         if [ "${invoke_claude_exit}" -eq 2 ]; then
             # Container failed before Claude ever ran (e.g. an entrypoint.sh pre-flight check —
             # #1133). Nothing agentic happened, so this attempt must not count against the
-            # item's normal invocation budget — but it must still escalate on repeated
-            # occurrence, tracked via a SEPARATE consecutive-failure counter, or a persistently
-            # broken container would retry silently forever with no human ever notified (#1133
-            # review) — the die()-kills-the-whole-run behaviour this replaced was accidentally
-            # the only thing providing that signal.
+            # item's normal invocation budget. A fault of the host (a GitHub SSH-auth refusal or
+            # a container-name conflict) must still escalate on repeated occurrence, tracked via
+            # a SEPARATE consecutive-failure counter, or it would retry silently forever with no
+            # human ever notified (#1133 review). The entrypoint refusing the item's own checkout
+            # is not escalated: it is recorded against the image and skipped below. Either way
+            # count_infra_failure makes the tick exit non-zero, so the unit's failure alert fires.
             count_infra_failure=$((count_infra_failure + 1))
             load_infra_failure_count "${item_type}" "${item_id}"
             local new_infra_failures=$(( INFRA_FAILURE_COUNT + 1 ))
+            if [ "${PREFLIGHT_GITHUB_SSH_AUTH_FAILED:-0}" != "1" ] && [ "${PREFLIGHT_FAILURE_KIND:-}" != "name-conflict" ]; then
+                # The entrypoint's own pre-flight refused this item's checkout (for one, a
+                # global.json asking for an SDK the image does not have yet). Nothing about the
+                # item needs a human, so it is never Blocked: record the image and head it failed
+                # on, and once it has failed PREFLIGHT_FAILURES_BEFORE_SKIP times in a row on
+                # them, skip it until either changes. The infra counter is not advanced (it
+                # escalates host faults only), but its file is kept so the board's first-touch
+                # reset does not repeat on every retry.
+                [ "${INFRA_FAILURE_COUNT}" -ge 1 ] || save_infra_failure_count "${item_type}" "${item_id}" 1
+                preflight_image_sha=""
+                preflight_failures=0
+                read -r preflight_image_sha preflight_failures \
+                    <<< "$(record_preflight_failure "${item_type}" "${item_id}" "${item_head_sha}")" || true
+                local preflight_on="'${DIRTY_BRANCH:-${item_branch}}' (${item_head_sha:-unknown head})"
+                if [ -z "${preflight_image_sha}" ]; then
+                    warn "${item_type} #${item_id} in ${item_repo}: agent container failed its pre-flight on ${preflight_on} and the image SHA could not be read — retrying next tick; not Blocked and not counted against the invocation budget"
+                elif [ "${preflight_failures:-0}" -ge "${PREFLIGHT_FAILURES_BEFORE_SKIP}" ]; then
+                    warn "${item_type} #${item_id} in ${item_repo}: agent container failed its pre-flight on ${preflight_on} with image ${preflight_image_sha} — skipping it until the image or the branch changes; not Blocked and not counted against the invocation budget"
+                else
+                    warn "${item_type} #${item_id} in ${item_repo}: agent container failed its pre-flight on ${preflight_on} with image ${preflight_image_sha} (${preflight_failures}/${PREFLIGHT_FAILURES_BEFORE_SKIP}) — retrying next tick; not Blocked and not counted against the invocation budget"
+                fi
+                count_error=$((count_error + 1))
+                item_status_log+=("$(record_item_status "${item_type}" "${item_id}" "${item_repo}" "agent container failed its pre-flight on the item's branch - skipped until the image or branch changes, not counted against the invocation budget")")
+                continue
+            fi
             save_infra_failure_count "${item_type}" "${item_id}" "${new_infra_failures}"
             if [ "${new_infra_failures}" -ge "${MAX_CONSECUTIVE_INFRA_FAILURES}" ]; then
                 local infra_block_reason="This item's agent container has failed ${new_infra_failures} times in a row before Claude could even start (a pre-flight/infra failure, not a Claude-level one — e.g. a workspace-trust or environment check in entrypoint.sh). Blocking for a human to investigate the container/image rather than retrying forever."
@@ -1629,6 +1702,7 @@ main() {
         # progress). A real session running — regardless of how it ends — also clears the
         # consecutive-infra-failure streak: the container is demonstrably working again.
         clear_infra_failure_count "${item_type}" "${item_id}"
+        clear_preflight_failure "${item_type}" "${item_id}"
         # Set only where the PR no-progress branch below runs; with any denial in the session,
         # that makes the session stalled (session_outcome_is_stalled, lib/state).
         local pr_session_no_progress=0

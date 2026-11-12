@@ -54,6 +54,78 @@ clear_infra_failure_count() {
     rm -f "$(infra_failure_guard_file_path "${item_type}" "${item_id}")" 2>/dev/null || true
 }
 
+# Record of an item's own agent-container pre-flight failure (PREFLIGHT_FAILURE_KIND container,
+# lib/podman): the entrypoint refused what the item's checkout holds, such as a global.json asking
+# for an SDK the image does not have yet. One line, "<image sha> <checkout head sha> <failures>",
+# the failures counting those in a row on that image and head. Once they reach
+# PREFLIGHT_FAILURES_BEFORE_SKIP, the item is skipped without a launch while both still match:
+# nothing about it needs a human, so it is never Blocked, and no invocation or idle budget is
+# charged. A new image or a new commit on the item's branch (or on main, for an Issue) retries
+# it. Cleared when a real session runs.
+preflight_failure_file_path() {
+    local item_type="$1" item_id="$2"
+    printf '%s/%s_%s.preflight-failure' "${SESSION_BASE_DIR}" "${item_type}" "${item_id}"
+}
+
+# Records the pre-flight failure of the item's checkout at head_sha against the agent image now
+# in use (current_agent_image_sha, lib/podman), adding one to the failures already recorded for
+# that same image and head (a different image or head starts again at 1), and outputs
+# "<image sha> <failures>". Returns 1, recording nothing, when the image SHA cannot be read: the
+# item is then simply tried again next tick.
+record_preflight_failure() {
+    local item_type="$1" item_id="$2" head_sha="$3"
+    local image_sha record_file recorded_image="" recorded_head="" recorded_failures="" failures=1
+    image_sha=$(current_agent_image_sha) || return 1
+    head_sha="${head_sha:--}"
+    record_file=$(preflight_failure_file_path "${item_type}" "${item_id}")
+    if [ -f "${record_file}" ]; then
+        read -r recorded_image recorded_head recorded_failures < "${record_file}" 2> /dev/null || true
+        if [ "${recorded_image}" = "${image_sha}" ] && [ "${recorded_head}" = "${head_sha}" ] \
+            && [[ "${recorded_failures}" =~ ^[0-9]+$ ]]; then
+            failures=$((recorded_failures + 1))
+        fi
+    fi
+    mkdir -p "${SESSION_BASE_DIR}" || return 1
+    printf '%s %s %s\n' "${image_sha}" "${head_sha}" "${failures}" > "${record_file}" || return 1
+    printf '%s %s' "${image_sha}" "${failures}"
+}
+
+# Removes the item's pre-flight failure record.
+clear_preflight_failure() {
+    local item_type="$1" item_id="$2"
+    rm -f "$(preflight_failure_file_path "${item_type}" "${item_id}")" 2> /dev/null || true
+}
+
+# Returns 0 when the item's pre-flight failure record has reached PREFLIGHT_FAILURES_BEFORE_SKIP
+# and both the agent image (pulled first, once per run, so a newly built image is seen) and the
+# checkout's head_sha are still the ones it failed on: the caller skips the item without
+# launching it. Logs nothing in that case, as the failure itself was logged when it happened.
+# Returns 1 when there is no record, when the image SHA cannot be read, or when the failure has
+# not repeated often enough yet (the record is kept, so the next failure adds to it); and returns 1
+# after removing the record, with one line saying what changed, when the image or the head has
+# moved on, so the item is launched again.
+preflight_failure_still_applies() {
+    local item_type="$1" item_id="$2" head_sha="$3"
+    local record_file recorded_image="" recorded_head="" recorded_failures="" current_image
+    record_file=$(preflight_failure_file_path "${item_type}" "${item_id}")
+    [ -f "${record_file}" ] || return 1
+    read -r recorded_image recorded_head recorded_failures < "${record_file}" 2> /dev/null || true
+    pull_agent_image_once "${item_type}" "${item_id}"
+    current_image=$(current_agent_image_sha) || return 1
+    if [ "${current_image}" = "${recorded_image}" ] && [ "${head_sha:--}" = "${recorded_head}" ]; then
+        [[ "${recorded_failures}" =~ ^[0-9]+$ ]] || return 1
+        [ "${recorded_failures}" -ge "${PREFLIGHT_FAILURES_BEFORE_SKIP}" ]
+        return
+    fi
+    if [ "${current_image}" != "${recorded_image}" ]; then
+        info "${item_type} #${item_id} in ${REPO_FULL}: agent image is now ${current_image} (pre-flight failed on ${recorded_image:-an unknown image}) — trying again"
+    else
+        info "${item_type} #${item_id} in ${REPO_FULL}: checkout head is now ${head_sha:-unknown} (pre-flight failed on ${recorded_head:-an unknown head}) — trying again"
+    fi
+    clear_preflight_failure "${item_type}" "${item_id}"
+    return 1
+}
+
 # Per-PR invocation guard.  Because every run is a fresh session that advances the workflow by
 # one phase, a PR is re-invoked repeatedly across ticks until it reaches a terminal state.  The
 # guard file holds two space-separated counters, "<total> <idle>":

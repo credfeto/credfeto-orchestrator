@@ -34,6 +34,14 @@ setup_main_mocks() {
     recover_orphaned_branch()   { return 1; }
     resolve_resumable_issue_branch() { return 1; }
     try_nonagentic_rebase()     { return 1; }
+    # The item-branch checkout and the pre-flight failure record (#1914) are tested with real git
+    # in test/oneshot-main-branches.bats and in test/oneshot-blocked.bats; main() tests stay on
+    # the mocked checkout, with no head, and never reach the host's podman: the stub reads no
+    # agent image SHA, and a test that needs one stubs podman or current_agent_image_sha itself.
+    checkout_item_branch() { return 0; }
+    checkout_head_sha() { return 1; }
+    pull_agent_image_once() { return 0; }
+    make_stub podman 'exit 1'
     # Default: no human-driven PRs anywhere (#1131) — tests that exercise the
     # stand-off paths override these individually.
     find_human_taken_over_pr_for_issue() { return 1; }
