@@ -605,12 +605,16 @@ CLAUDE_CODE_AUTO_COMPACT_WINDOW="${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-160000}"
 # slow build would use up the session's whole budget and end it as an agent timeout. On reaching
 # it the entrypoint warns and starts claude without an index. Passed into the container as
 # CODEGRAPH_INIT_TIMEOUT_SECS; the entrypoint applies the same default and fallback itself.
-# Override with CODEGRAPH_INIT_TIMEOUT_SECS in the environment. A value that is not below
-# AGENT_TIMEOUT_SECS would let a hung build still end the session as an agent timeout, so it is
-# silently clamped to half of AGENT_TIMEOUT_SECS (warn does not exist yet when this file runs).
+# Override with CODEGRAPH_INIT_TIMEOUT_SECS in the environment. The entrypoint's timeout waits a
+# further 10 seconds (its --kill-after) before killing a build that ignores the stop, so a value
+# just below AGENT_TIMEOUT_SECS (599 against 600) would still let a hung build end the session as
+# an agent timeout. A value above half of AGENT_TIMEOUT_SECS is therefore silently clamped to
+# half of it (warn does not exist yet when this file runs), which guarantees the agent at least
+# half its budget and keeps the build's worst case, plus the grace, below AGENT_TIMEOUT_SECS
+# (at least 60, so half plus 10 always fits).
 CODEGRAPH_INIT_TIMEOUT_SECS="${CODEGRAPH_INIT_TIMEOUT_SECS:-900}"
 [[ "${CODEGRAPH_INIT_TIMEOUT_SECS}" =~ ^[1-9][0-9]*$ ]] || CODEGRAPH_INIT_TIMEOUT_SECS=900
-(( CODEGRAPH_INIT_TIMEOUT_SECS < AGENT_TIMEOUT_SECS )) || CODEGRAPH_INIT_TIMEOUT_SECS=$(( AGENT_TIMEOUT_SECS / 2 ))
+(( CODEGRAPH_INIT_TIMEOUT_SECS <= AGENT_TIMEOUT_SECS / 2 )) || CODEGRAPH_INIT_TIMEOUT_SECS=$(( AGENT_TIMEOUT_SECS / 2 ))
 
 # Login of the PR create bot: the account that opens the PRs for the AI's work, deliberately a
 # different account from the AI agent (the one _GH_ME resolves to) so each can tell what the other

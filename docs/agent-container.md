@@ -149,7 +149,8 @@ step is non-fatal: if `codegraph init` fails, the entrypoint prints a warning an
 `claude`, because a missing index only makes code lookups slower. The build is also time-limited,
 because it runs inside the session's `AGENT_TIMEOUT_MINUTES` and a hung build would otherwise end
 the session as an agent timeout: after `CODEGRAPH_INIT_TIMEOUT_SECS` (default 900, set in
-`lib/globals`, which clamps a value not below the session's limit to half of it, and passed in
+`lib/globals`, which clamps a value above half of the session's limit to half of it, so the build
+and the 10-second kill grace below always end well inside that limit, and passed in
 by `oneshot`) the entrypoint stops it, killing it 10 seconds later
 if it ignores the stop (exit 137, reported as killed rather than timed out, because the kernel
 OOM killer's SIGKILL gives the same status), prints a warning and starts
