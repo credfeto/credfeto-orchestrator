@@ -365,7 +365,8 @@ seed_orchestrator_cache() {
 # one, is not a usable index, and `init` rebuilds it. `--yes` is required: without it `init` can
 # wait on a stdin select prompt even with no TTY. Non-fatal on failure: a missing index only
 # makes code lookups slower. Its output goes to stderr like every other step here, because
-# oneshot parses the container's stdout as Claude's JSON result.
+# oneshot parses the container's stdout as Claude's JSON result. There is no `-v`: it only adds
+# progress and worker lines that flood the journal, and errors and the summary print without it.
 # The build is bounded by CODEGRAPH_INIT_TIMEOUT_SECS (oneshot passes lib/globals' value; the
 # same default and fallback apply here for manual runs), because it runs inside the session's
 # AGENT_TIMEOUT and a hung build would otherwise end the session as an agent timeout. A build
@@ -395,7 +396,7 @@ build_missing_codegraph_index() {
 
     info "Running codegraph init in ${repo_dir} (time limit ${timeout_secs}s)"
     local init_status=0
-    (cd "${repo_dir}" && timeout --kill-after=10 "${timeout_secs}" codegraph init --yes -v < /dev/null) >&2 \
+    (cd "${repo_dir}" && timeout --kill-after=10 "${timeout_secs}" codegraph init --yes < /dev/null) >&2 \
         || init_status=$?
     [ "${init_status}" -eq 0 ] && return 0
 
