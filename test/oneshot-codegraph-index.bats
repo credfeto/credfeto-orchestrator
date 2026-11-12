@@ -291,37 +291,13 @@ codegraph_mounts() {
     [ ! -L "${SESSION_BASE_DIR}/codegraph/PullRequest_99" ]
 }
 
-@test "link_pivot_pr_codegraph_index creates and links nothing when the checkout tracks files under .codegraph" {
+@test "link_pivot_pr_codegraph_index links even when the checkout tracks files under .codegraph" {
+    # The pivot has no tracked check: it sees whatever branch the previous session left, and the
+    # mount's own check, on the item's branch, is what keeps such an index unused.
     track_codegraph_in_checkout
     run link_pivot_pr_codegraph_index "10" "99"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"The checkout tracks files under .codegraph, so PR #99 CodeGraph index is not linked to Issue #10"* ]]
-    [ ! -e "${SESSION_BASE_DIR}/codegraph/Issue_10" ]
-    [ ! -e "${SESSION_BASE_DIR}/codegraph/PullRequest_99" ]
-    [ ! -L "${SESSION_BASE_DIR}/codegraph/PullRequest_99" ]
-}
-
-@test "link_pivot_pr_codegraph_index leaves an existing idle Issue index untouched when the checkout tracks files under .codegraph" {
-    local issue_dir="${SESSION_BASE_DIR}/codegraph/Issue_10"
-    track_codegraph_in_checkout
-    make_codegraph_index "Issue_10"
-    age_codegraph_index_files "Issue_10" 15
-    run link_pivot_pr_codegraph_index "10" "99"
-    [ "${status}" -eq 0 ]
-    [ -z "$(find "${issue_dir}" -maxdepth 0 -mmin -1 -print)" ]
-    [ -z "$(find "${issue_dir}" -newermt '14 days ago' -print)" ]
-    [ ! -L "${SESSION_BASE_DIR}/codegraph/PullRequest_99" ]
-    [ ! -e "${SESSION_BASE_DIR}/codegraph/PullRequest_99" ]
-    # Not kept alive by the pivot, so the idle index is purged as usual.
-    run prune_codegraph_indexes
-    [ ! -e "${issue_dir}" ]
-}
-
-@test "link_pivot_pr_codegraph_index links as usual when the checkout cannot be read by git" {
-    # REPO_WORK_DIR is not a git checkout here, as before the first clone.
-    run link_pivot_pr_codegraph_index "10" "99"
-    [ "${status}" -eq 0 ]
-    [[ "${output}" != *"The checkout tracks files under .codegraph"* ]]
+    [ -d "${SESSION_BASE_DIR}/codegraph/Issue_10" ]
     [ "$(readlink "${SESSION_BASE_DIR}/codegraph/PullRequest_99")" = "Issue_10" ]
 }
 
@@ -346,18 +322,4 @@ codegraph_mounts() {
     [ "${status}" -eq 0 ]
     [ "$(readlink "${SESSION_BASE_DIR}/codegraph/PullRequest_99")" = "Issue_10" ]
     [ -d "${SESSION_BASE_DIR}/codegraph/Issue_10" ]
-}
-
-@test "main links the PR's transcripts but no CodeGraph index on the pivot when the checkout tracks files under .codegraph" {
-    setup_main_pivot_mocks
-    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"closingIssuesReferences":[{"number":10}]}\n'; }
-    pr_json_has_blocked_label() { return 0; }
-    try_auto_unblock_env_diagnosed_pr() { return 1; }
-    track_codegraph_in_checkout
-
-    run main
-    [ "${status}" -eq 0 ]
-    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_10" ]
-    [ ! -e "${SESSION_BASE_DIR}/codegraph/Issue_10" ]
-    [ ! -L "${SESSION_BASE_DIR}/codegraph/PullRequest_99" ]
 }

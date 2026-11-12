@@ -869,8 +869,8 @@ codegraph_index_root_path() {
 # TRANSCRIPT_ITEM_RETENTION_DAYS (prune_codegraph_indexes, through the shared prune_idle_item_dirs
 # in lib/podman). A new
 # item therefore starts with an empty directory and the entrypoint runs a full codegraph init.
-# A checkout that tracks files under .codegraph gets no mount (add_codegraph_index_podman_args)
-# and no pivot link (link_pivot_pr_codegraph_index), through checkout_tracks_codegraph.
+# A checkout that tracks files under .codegraph gets no mount (add_codegraph_index_podman_args,
+# through checkout_tracks_codegraph).
 codegraph_index_dir_path() {
     local item_type="$1" item_id="$2"
     printf '%s/%s_%s' "$(codegraph_index_root_path)" "${item_type}" "${item_id}"
@@ -878,12 +878,11 @@ codegraph_index_dir_path() {
 
 # True when the host checkout at REPO_WORK_DIR tracks anything under .codegraph, the host's copy
 # of the entrypoint's own check (checkout_tracks_codegraph in containers/agent/entrypoint.sh).
-# Such a checkout gets no CodeGraph index, so neither the mount (add_codegraph_index_podman_args)
-# nor the pivot (link_pivot_pr_codegraph_index) creates or touches an index directory for it;
-# a touch would keep a directory no session mounts from ever going idle.
-# A git failure, such as a checkout not cloned yet, counts as not tracked: the agent's git cannot
-# commit from such a checkout either. The check sees the branch checked out on the host when it
-# runs, not one the agent switches to inside the container.
+# Such a checkout gets no CodeGraph index, so the mount (add_codegraph_index_podman_args) neither
+# creates nor touches an index directory for it. A git failure counts as not tracked: the agent's
+# git cannot commit from such a checkout either. The check sees the branch checked out on the
+# host when it runs (the item's own, after checkout_item_branch in lib/git), not one the agent
+# switches to inside the container.
 checkout_tracks_codegraph() {
     [ -n "$(git -C "${REPO_WORK_DIR}" ls-files -- .codegraph 2>/dev/null)" ]
 }
@@ -960,16 +959,14 @@ link_pivot_pr_transcripts() {
 # full init. The pivot touches the Issue's directory rather than writing a file into it, because
 # the directory is CodeGraph's own .codegraph in the container and prune_codegraph_indexes counts
 # its mtime as use.
-# Skipped, creating and touching nothing, when the checkout tracks files under .codegraph
-# (checkout_tracks_codegraph), because no session mounts the index then. The pivot runs before
-# the item's ensure_repo_current, so the check sees the checkout an earlier session left
-# (normally main) and, before the first clone, counts as not tracked.
+# Links even when the checkout tracks files under .codegraph: the pivot runs before the item's
+# ensure_repo_current and checkout_item_branch (lib/git), so a check here would judge whatever
+# branch the previous session left checked out, and a wrong skip would leave the PR with an
+# index of its own that is then never linked. The mount's check (add_codegraph_index_podman_args)
+# runs on the item's own branch and keeps any session from using such an index; the unused
+# directory is purged once the pivot stops touching it.
 link_pivot_pr_codegraph_index() {
     local issue_id="$1" pr_number="$2"
-    if checkout_tracks_codegraph; then
-        info "The checkout tracks files under .codegraph, so PR #${pr_number} CodeGraph index is not linked to Issue #${issue_id}"
-        return 0
-    fi
     link_pivot_pr_item_dir "$(codegraph_index_dir_path "Issue" "${issue_id}")" \
         "$(codegraph_index_dir_path "PullRequest" "${pr_number}")" "${issue_id}" "${pr_number}" \
         "CodeGraph index files" "CodeGraph index" 1
