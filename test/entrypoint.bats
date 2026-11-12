@@ -1707,6 +1707,25 @@ run_entrypoint_in_repo() {
     [ ! -s "${TEST_TMP}/codegraph_stdin" ]
 }
 
+@test "entrypoint keeps codegraph init output off stdout, which oneshot parses as Claude's JSON result" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git"
+    make_stub claude "printf '{\"type\":\"result\"}\\n'"
+
+    make_stub_multiline codegraph 'printf '\''Indexing files...\n'\''' 'exit 0'
+    env WORKSPACE_REPO_DIR="${repo_dir}" "${IDENTITY_ENV[@]}" bash "${ENTRYPOINT}" \
+        < /dev/null > "${TEST_TMP}/stdout" 2> "${TEST_TMP}/stderr"
+    [ "$(cat "${TEST_TMP}/stdout")" = '{"type":"result"}' ]
+    grep -qF 'Indexing files...' "${TEST_TMP}/stderr"
+
+    make_stub_multiline codegraph 'printf '\''Indexing files...\n'\''' 'exit 3'
+    env WORKSPACE_REPO_DIR="${repo_dir}" "${IDENTITY_ENV[@]}" bash "${ENTRYPOINT}" \
+        < /dev/null > "${TEST_TMP}/stdout" 2> "${TEST_TMP}/stderr"
+    [ "$(cat "${TEST_TMP}/stdout")" = '{"type":"result"}' ]
+    grep -qF "codegraph init failed in ${repo_dir}" "${TEST_TMP}/stderr"
+}
+
 @test "entrypoint skips codegraph when the repo directory is not a git checkout" {
     setup_entrypoint_stubs
     local repo_dir="${TEST_TMP}/codegraph-repo"
