@@ -12,6 +12,11 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # image installs, so the layers below only re-run when one of them actually
 # ships a new release (not on a blind daily schedule).
 ARG STABLE_TOOLS_CACHE_BUST
+# PowerShell: pinned to an exact release instead of floating to the latest.
+# 7.7.0 is published as a per-RID tool whose platform package
+# (powershell.linux-x64) is not on nuget.org, so an unpinned install fails on
+# Linux. Bump deliberately, only to a release whose linux-x64 package exists.
+ARG POWERSHELL_VERSION=7.6.10
 
 # ---- NuGet package sources (FunFair private feeds) ---------------------------
 # NuGet.Config is baked in root:root mode 0444 so the agent (running as the
@@ -104,7 +109,7 @@ RUN su developer -c ": ${STABLE_TOOLS_CACHE_BUST}; dotnet tool install -g ilspyc
 # hadolint ignore=DL3059
 RUN su developer -c ": ${STABLE_TOOLS_CACHE_BUST}; dotnet tool install -g Microsoft.SqlPackage"
 # hadolint ignore=DL3059
-RUN su developer -c ": ${STABLE_TOOLS_CACHE_BUST}; dotnet tool install -g PowerShell"
+RUN su developer -c ": ${STABLE_TOOLS_CACHE_BUST}; dotnet tool install -g PowerShell --version ${POWERSHELL_VERSION}"
 # hadolint ignore=DL3059
 RUN su developer -c ": ${STABLE_TOOLS_CACHE_BUST}; dotnet tool install -g dotnet-script"
 # hadolint ignore=DL3059
@@ -177,6 +182,11 @@ RUN set -e; \
             echo "FATAL sanity: dotnet tool '$tool' is missing" >&2; exit 1; \
         fi; \
     done; \
+    echo "== PowerShell pinned version =="; \
+    pwsh_version="$(su developer -c 'pwsh --version' | tr -d '\r')"; \
+    if [ "$pwsh_version" != "PowerShell ${POWERSHELL_VERSION}" ]; then \
+        echo "FATAL sanity: pwsh reports '$pwsh_version', expected PowerShell ${POWERSHELL_VERSION}" >&2; exit 1; \
+    fi; \
     echo "== cwm-roslyn-navigator functional probe =="; \
     su developer -c "cwm-roslyn-navigator --help >/dev/null 2>&1" \
         || { echo "FATAL sanity: cwm-roslyn-navigator --help did not exit 0" >&2; exit 1; }; \
