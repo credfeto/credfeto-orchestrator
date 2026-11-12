@@ -39,7 +39,7 @@ blob sizes manageable and to avoid cascading cache invalidation.
 | `FunFair.BuildCheck` | `buildcheck`, `dotnet-buildcheck` |
 | `FunFair.BuildVersion` | `buildversion`, `dotnet-buildversion` |
 | `Credfeto.DotNet.Repo.Formatter` | `cscleanup`, `dotnet-cscleanup` |
-| `Credfeto.Build.Dotnet.Server` | `credfeto-build-dotnet` (the `build-dotnet` MCP server, which `development-full` starts by its absolute path, `/home/developer/.dotnet/tools/credfeto-build-dotnet`) |
+| `Credfeto.Build.Dotnet.Server` | `credfeto-build-dotnet` (the `build-dotnet` MCP server, which `development-full`'s `build-dotnet-mcp` wrapper starts from its global tool path, `/home/developer/.dotnet/tools/credfeto-build-dotnet`) |
 
 `dotnet <name>` subcommand aliases (e.g. `dotnet-buildcheck`) are created via `ln -sf` so the
 dotnet CLI can locate tools invoked through subcommand syntax.

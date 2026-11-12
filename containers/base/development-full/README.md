@@ -72,10 +72,10 @@ agent definitions but cannot add, remove, or retarget entries directly. See
 
 `containers/base/development-full/claude-user-settings.json`, `claude-policy-limits.json`,
 `claude-managed-settings.json`, and
-`claude-hooks/{reject-obfuscated-commands,enforce-allowed-dirs,block-config-skills,enforce-git-identity,enforce-git-policy,block-git-worktree,block-dotnet-tool-install,block-github-mcp-write-tools,enforce-ssh-host-and-key,enforce-curl-host,enforce-background-for-long-running-commands,cache-gh-lookups,command-allowlist,command-blocklist,env-var-blocklist,allowed-dirs}` are version-controlled,
+`claude-hooks/{reject-obfuscated-commands,enforce-allowed-dirs,block-config-skills,enforce-git-identity,enforce-git-policy,block-git-worktree,block-dotnet-tool-install,block-github-mcp-write-tools,enforce-ssh-host-and-key,enforce-curl-host,enforce-background-for-long-running-commands,cache-gh-lookups,block-secret-file-reads,command-allowlist,command-blocklist,env-var-blocklist,allowed-dirs,secret-files}` are version-controlled,
 copied into the image at `/home/developer/.claude/{settings.json,policy-limits.json}` (the preferences
 half only) and
-`/etc/claude-code/{managed-settings.json,hooks/{reject-obfuscated-commands,enforce-allowed-dirs,block-config-skills,enforce-git-identity,enforce-git-policy,block-git-worktree,block-dotnet-tool-install,block-github-mcp-write-tools,enforce-ssh-host-and-key,enforce-curl-host,enforce-background-for-long-running-commands,cache-gh-lookups,command-allowlist,command-blocklist,env-var-blocklist,allowed-dirs}}` as root:root
+`/etc/claude-code/{managed-settings.json,hooks/{reject-obfuscated-commands,enforce-allowed-dirs,block-config-skills,enforce-git-identity,enforce-git-policy,block-git-worktree,block-dotnet-tool-install,block-github-mcp-write-tools,enforce-ssh-host-and-key,enforce-curl-host,enforce-background-for-long-running-commands,cache-gh-lookups,block-secret-file-reads,command-allowlist,command-blocklist,env-var-blocklist,allowed-dirs,secret-files}}` as root:root
 0444 (files) / 0755 (hook scripts and directories), read-only for `developer`. Claude Code reads
 `/etc/claude-code/managed-settings.json` ahead of every user and project settings file, and its
 `allowManagedPermissionRulesOnly`/`allowManagedHooksOnly`/`allowManagedMcpServersOnly` locks stop a repo's
@@ -110,6 +110,11 @@ are also listed in `permissions.deny` as belt-and-braces. See `claude-hooks.inst
 resolution rules and the host-side `allowed-dirs.local` override. `enforce-git-policy` uses the
 same shfmt-parsed AST and blocks git commands that don't use `git -C <dir>` (plus `eval`/`source`, whose
 arguments it cannot verify); both hooks fail closed if shfmt is missing or the command does not parse.
+`block-secret-file-reads` runs after `enforce-allowed-dirs`, and is also registered for
+`Edit|Write|NotebookEdit` and `Read`: it blocks any tool call that reads or writes a file whose basename
+matches a pattern in `claude-hooks/secret-files` (`.env`, `.env.*`, `*.env` and `.database` by default;
+`.env.example` is always exempt), and fails closed if jq, shfmt or realpath is missing or the payload or
+command does not parse.
 `enforce-git-identity` blocks `git commit`/`fetch`/`pull`/`rebase`/`merge`/`cherry-pick`/`revert`/`am` unless
 git identity and GPG signing are correctly configured, and runs before `enforce-git-policy` in the chain.
 `block-git-worktree` runs after `enforce-git-policy`, and uses the same shfmt-parsed AST to block
@@ -141,8 +146,9 @@ whole-command `gh api user --jq '.login'` call into a read of a small persistent
 non-matching command) just passes through to the normal permission check.
 Every hook command in `managed-settings.json`'s `PreToolUse` block is an absolute
 `/etc/claude-code/hooks/<name>` path (`/etc/claude-code/hooks/reject-obfuscated-commands`,
-`/etc/claude-code/hooks/enforce-allowed-dirs`, `/etc/claude-code/hooks/block-config-skills`,
-`/etc/claude-code/hooks/enforce-git-identity`, `/etc/claude-code/hooks/enforce-git-policy`,
+`/etc/claude-code/hooks/enforce-allowed-dirs`, `/etc/claude-code/hooks/block-secret-file-reads`,
+`/etc/claude-code/hooks/block-config-skills`, `/etc/claude-code/hooks/enforce-git-identity`,
+`/etc/claude-code/hooks/enforce-git-policy`,
 `/etc/claude-code/hooks/block-git-worktree`, `/etc/claude-code/hooks/block-dotnet-tool-install`,
 `/etc/claude-code/hooks/block-github-mcp-write-tools`, `/etc/claude-code/hooks/enforce-ssh-host-and-key`,
 `/etc/claude-code/hooks/enforce-curl-host`,
@@ -156,7 +162,7 @@ the persistent state subdirectories (`sessions/`, `session-env/`, `plans/`, `cac
 per-work-item transcript directory (`projects/`) are mounted per invocation.
 
 `claude-managed-mcp.json` is copied to `/etc/claude-code/managed-mcp.json` (root:root 0444), and
-`claude-mcp/cfwf-mcp-headers` and `claude-mcp/kb-mcp-headers` to `/etc/claude-code/mcp/` (root:root 0755). The file defines
+`claude-mcp/cfwf-mcp-headers`, `claude-mcp/kb-mcp-headers` and `claude-mcp/build-dotnet-mcp` to `/etc/claude-code/mcp/` (root:root 0755). The file defines
 the only MCP servers Claude Code loads in the container: `cfwf`, an HTTP server at
 `https://workflow-mcp.markridgwell.com/mcp`, `kb`, an HTTP server at `https://memory.markridgwell.com/dev/mcp`
 (described below), and `build-dotnet` (also described below). Those three are required. The file
@@ -191,10 +197,26 @@ send the token elsewhere or print it. See
 
 `build-dotnet` is the .NET build, test and coverage MCP server (#1818), `credfeto-build-dotnet` from the
 `Credfeto.Build.Dotnet.Server` package that `development-credfeto-tools` installs. It is a stdio server
-started by its absolute path, `/home/developer/.dotnet/tools/credfeto-build-dotnet`, with
-`BUILD_MCP_REPO_ROOT=/workspace/repo` as its only `env` value, and `mcp__build-dotnet__*` in
-`permissions.allow` allows all of its tools. It is registered for every session, whatever the repository's language.
-The sanity block pins that exact entry, so no other literal `env` value can be added. See
+started by the root-owned wrapper `/etc/claude-code/mcp/build-dotnet-mcp`, with no `env`, and
+`mcp__build-dotnet__*` in `permissions.allow` allows all of its tools. It is registered for every session,
+whatever the repository's language. The wrapper keeps `BUILD_MCP_REPO_ROOT`, which the image sets to
+`/workspace/repo` as an `ENV`, or otherwise resolves it from the directory Claude Code was started in, and
+fails rather than pass the server a root that is not an absolute path, or run with a `HOME` that is not one. It
+keeps a preset `BUILD_MCP_LOG_DIR`; in this image (`BUILD_MCP_TOOL=global`) it otherwise leaves it unset, so
+the server logs under `TMPDIR`, the `/workspace/tmp` scratch mount, while on a host it points it at the
+per-user `~/.local/state/credfeto-build-mcp` (or under an absolute `XDG_STATE_HOME`), so one user's logs
+never lock others out of a shared `/tmp`. It
+forces `DOTNET_NOLOGO=1` and `DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE=true` so neither the .NET welcome
+banner nor the workload update notice reaches the MCP stream on stdout, and
+`SuppressNETCoreSdkPreviewMessage=true` so a preview SDK's NETSDK1057 warning stays out of build output and
+job logs. It then runs the
+local tool when `dotnet tool list --local`, run from `~`, reports `credfeto-build-dotnet`, or else the
+global tool `.dotnet/tools/credfeto-build-dotnet` under `DOTNET_CLI_HOME`, or `~` when that is unset or empty
+(`/home/developer/.dotnet/tools/credfeto-build-dotnet` here). In the container the image `ENV`
+`BUILD_MCP_TOOL=global` skips that choice and its `git` and `dotnet tool list` probes and runs the global tool
+under `~` directly, ignoring `DOTNET_CLI_HOME`, because the tool, `HOME` and the root are fixed there. The
+same file therefore works for every user on a host. The sanity block pins that exact entry, the wrapper's
+owner and mode, both `ENV` values and the global tool. See
 [docs/development/claude-hooks.md](../../../docs/development/claude-hooks.md#the-build-dotnet-mcp-server).
 
 The repo-root `install-claude-hooks` script installs this same layout onto the current host, so the
@@ -205,7 +227,7 @@ changes; `CLAUDE_MANAGED_DIR` overrides the directory for tests only), the prefe
 `settings.json.bak`), and any `~/.claude/hooks` symlinks left pointing into this checkout are removed. Any
 arguments are ignored; the host directory roots in the root-owned
 `/etc/claude-code/hooks/allowed-dirs.local` are maintained by hand. It installs `cfwf-mcp-headers`, `kb-mcp-headers` and a `managed-mcp.json` that
-merges the shipped servers with the host's own MCP servers from `~/.claude.json` (user scope and every project scope).
+merges the shipped servers with the host's own MCP servers from `~/.claude.json` (user scope and every project scope), and the `build-dotnet-mcp` wrapper.
 A server at a shipped `http` server's URL, such as `cfwf`'s or `kb`'s, is left out as a duplicate, whatever its name, with a suggestion to remove it. A server with a
 literal `headers` or `env` value, a `url` carrying userinfo or a query string, or a credential-like `command` or
 `args` word is refused with a warning naming it, because the file is world-readable.
@@ -280,9 +302,10 @@ Paths locked down by this image. NuGet.Config and the .NET tool paths are locked
 | `/etc/claude-code/` | root:root | 0755 | Claude Code managed settings directory; agent can read but not modify |
 | `/etc/claude-code/managed-settings.json` | root:root | 0444 | Baked-in Claude Code managed settings: permissions, hooks, sandbox (from `claude-managed-settings.json`); read-only for all users |
 | `/etc/claude-code/managed-mcp.json` | root:root | 0444 | Baked-in MCP server list, the required `cfwf`, `kb` and `build-dotnet` servers and any others, with no token (from `claude-managed-mcp.json`); read-only for all users |
-| `/etc/claude-code/mcp/` | root:root | 0755 | MCP headers helper directory; agent can read/execute but not modify |
+| `/etc/claude-code/mcp/` | root:root | 0755 | MCP headers helper and wrapper directory; agent can read/execute but not modify |
 | `/etc/claude-code/mcp/cfwf-mcp-headers` | root:root | 0755 | `headersHelper` printing the `cfwf` server's `Authorization` header from the token broker while its socket exists, otherwise from the GitHub token in the environment (from `claude-mcp/cfwf-mcp-headers`); read/execute only |
 | `/etc/claude-code/mcp/kb-mcp-headers` | root:root | 0755 | `headersHelper` printing the `kb` server's `Authorization` header from the token broker while its socket exists, otherwise from `KB_MCP_TOKEN` or the user's 0600 token file (from `claude-mcp/kb-mcp-headers`); read/execute only |
+| `/etc/claude-code/mcp/build-dotnet-mcp` | root:root | 0755 | Wrapper starting the `build-dotnet` server for whichever user runs Claude Code (from `claude-mcp/build-dotnet-mcp`); read/execute only |
 | `/usr/local/sbin/token-broker` | root:root | 0755 | Token broker (from `token-broker/token-broker`), started as root by the agent entrypoint; serves MCP headers to the helpers and runs `gh` with the GitHub token |
 | `/usr/bin/gh` | root:root | 0755 | Wrapper (from `token-broker/gh`) running `token-broker gh` while the broker's socket exists, otherwise the real `gh` |
 | `/usr/libexec/token-broker/gh` | root:root | 0711 | The real `gh`; execute-only, so its process is not dumpable |
@@ -301,10 +324,12 @@ Paths locked down by this image. NuGet.Config and the .NET tool paths are locked
 | `/etc/claude-code/hooks/enforce-curl-host` | root:root | 0755 | Baked-in hook script (from `claude-hooks/enforce-curl-host`); read/execute only |
 | `/etc/claude-code/hooks/enforce-background-for-long-running-commands` | root:root | 0755 | Baked-in hook script (from `claude-hooks/enforce-background-for-long-running-commands`); read/execute only |
 | `/etc/claude-code/hooks/cache-gh-lookups` | root:root | 0755 | Baked-in hook script (from `claude-hooks/cache-gh-lookups`); read/execute only |
+| `/etc/claude-code/hooks/block-secret-file-reads` | root:root | 0755 | Baked-in hook script (from `claude-hooks/block-secret-file-reads`); read/execute only |
 | `/etc/claude-code/hooks/command-allowlist` | root:root | 0444 | Known-good command names for `reject-obfuscated-commands` (from `claude-hooks/command-allowlist`); read-only |
 | `/etc/claude-code/hooks/command-blocklist` | root:root | 0444 | Known-bad command names for `reject-obfuscated-commands` (from `claude-hooks/command-blocklist`); read-only |
 | `/etc/claude-code/hooks/env-var-blocklist` | root:root | 0444 | Banned environment-variable assignments for `reject-obfuscated-commands` (from `claude-hooks/env-var-blocklist`); read-only |
 | `/etc/claude-code/hooks/allowed-dirs` | root:root | 0444 | Allowed directory roots for `enforce-allowed-dirs` (from `claude-hooks/allowed-dirs`); read-only |
+| `/etc/claude-code/hooks/secret-files` | root:root | 0444 | Secret file-name patterns for `block-secret-file-reads` (from `claude-hooks/secret-files`); read-only |
 | `/opt/composite-action-lint` | root:root | (installed by upstream) | Composite action linter binary from upstream image |
 | `/usr/local/bin/pre-commit-check` | root:root | 0755 | Repo-local wrapper script (from `scripts/pre-commit-check`); read/execute only |
 | `/usr/local/bin/querydb` | root:root | 0755 | Repo-local wrapper script (from `scripts/querydb`); read/execute only |
@@ -368,18 +393,20 @@ the `allowManaged*Only` locks, disable bypass-permissions mode and allow `mcp__c
 `managed-mcp.json` must hold the required servers: `cfwf`, `type` `http`, at
 `https://workflow-mcp.markridgwell.com/mcp`, with `headersHelper` `/etc/claude-code/mcp/cfwf-mcp-headers`,
 and `kb`, `type` `http`, at `https://memory.markridgwell.com/dev/mcp`, with `headersHelper`
-`/etc/claude-code/mcp/kb-mcp-headers`, neither with `headers` or `env`, and `build-dotnet` exactly its stdio entry;
-any other server is not checked, but the file must hold no `Authorization` text, and both helpers must be
-root:root 0755; `~/.claude/settings.json` must hold no
+`/etc/claude-code/mcp/kb-mcp-headers`, neither with `headers` or `env`, and `build-dotnet` exactly its stdio entry
+starting `/etc/claude-code/mcp/build-dotnet-mcp` with no `env`;
+any other server is not checked, but the file must hold no `Authorization` text, both helpers and the wrapper must be
+root:root 0755, `BUILD_MCP_REPO_ROOT` must be `/workspace/repo`, `BUILD_MCP_TOOL` must be `global` and the global tool
+`/home/developer/.dotnet/tools/credfeto-build-dotnet` must be executable; `~/.claude/settings.json` must hold no
 permissions, hooks, sandbox or MCP configuration, and every `PreToolUse` hook command must be
 under `/etc/claude-code/hooks/`; `/etc/claude-code/hooks/reject-obfuscated-commands`,
 `.../enforce-allowed-dirs`, `.../block-config-skills`, `.../enforce-git-identity`, `.../enforce-git-policy`,
 `.../block-git-worktree`, `.../block-dotnet-tool-install`, `.../block-github-mcp-write-tools`,
 `.../enforce-ssh-host-and-key`, `.../enforce-curl-host`, `.../enforce-background-for-long-running-commands`,
-and `.../cache-gh-lookups` must each be root:root 0755; the
-`/etc/claude-code/hooks/{command-allowlist,command-blocklist,env-var-blocklist,allowed-dirs}` policy data
+`.../cache-gh-lookups` and `.../block-secret-file-reads` must each be root:root 0755; the
+`/etc/claude-code/hooks/{command-allowlist,command-blocklist,env-var-blocklist,allowed-dirs,secret-files}` policy data
 files must each be root:root 0444, `allowed-dirs` must list the three agent mounts, and no
-`allowed-dirs.local` may be baked in.
+`allowed-dirs.local` or `secret-files.local` may be baked in.
 
 **Claude Code skills wiring**: the number of symlinks recorded at build time in
 `/opt/.claude-skill-count` must exist directly under `/home/developer/.claude/skills/`; a spot-check of

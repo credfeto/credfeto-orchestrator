@@ -1,0 +1,188 @@
+#!/bin/sh
+
+# Starts the build-dotnet MCP server (managed-mcp.json) for whichever user runs
+# Claude Code, so one root-owned file serves every user on a host and the
+# container alike.
+#
+# BUILD_MCP_REPO_ROOT, the repository the server works on, is kept when it is
+# already set (the container image sets it to its mount). Otherwise it is the
+# root of the git repository holding the project directory (CLAUDE_PROJECT_DIR,
+# or the directory Claude Code started this in when that is unset), or that
+# directory itself outside a repository. It is resolved before the cd below,
+# which would otherwise lose the start directory.
+#
+# The server is the credfeto-build-dotnet local tool when dotnet tool list
+# --local, run from $HOME, reports it, and it is then run from $HOME too:
+# dotnet looks for a manifest from the current directory upwards, so a
+# repository's own root manifest would otherwise hide the user's, and asking
+# dotnet means the check finds exactly the manifest dotnet tool run will use.
+# Otherwise it is the global tool in .dotnet/tools under DOTNET_CLI_HOME, or under
+# $HOME when that is unset or empty, where dotnet tool install -g puts it. Either
+# tool is started from $HOME, so the server's working directory is the same
+# whichever one runs.
+#
+# BUILD_MCP_TOOL=global, which only the container image sets, skips both the git
+# and the dotnet tool list probes and runs the global tool under $HOME directly,
+# ignoring DOTNET_CLI_HOME: in the image the tool, HOME and the repository root
+# are all fixed, so there is nothing to choose. It then needs BUILD_MCP_REPO_ROOT
+# set, as the image does.
+#
+# stdout is the MCP stream, so only the server writes to it: every message here
+# goes to stderr.
+
+fail() {
+    printf 'build-dotnet-mcp: %s\n' "$*" >&2
+    exit 1
+}
+
+require_absolute() {
+    # $1 names the path, $2 is its value and $3 is where the value came from.
+    case "$2" in
+        /*) ;;
+        *) fail "the $1 '$2' from $3 is not an absolute path" ;;
+    esac
+}
+
+tool_command="credfeto-build-dotnet"
+
+[ -n "${HOME:-}" ] || fail "HOME is not set"
+# Every tool path below is built from HOME and every exec runs after a cd to it. A relative HOME
+# would make the global tool check resolve from the start directory but the exec from HOME itself,
+# and a relative cd consults CDPATH, which can print the directory to stdout, the MCP stream.
+require_absolute "home directory" "${HOME}" "HOME"
+
+case "${BUILD_MCP_TOOL:-}" in
+    "" | global) ;;
+    *) fail "BUILD_MCP_TOOL is '${BUILD_MCP_TOOL}', but it takes only global, or is left unset to choose the tool" ;;
+esac
+
+# dotnet tool install -g puts the tool under DOTNET_CLI_HOME when that is set and not empty, as
+# the SDK reads it, and under HOME otherwise. A relative one would depend on the directory dotnet
+# ran in, so the tool could be anywhere. The image (BUILD_MCP_TOOL=global) bakes the tool in under
+# its fixed HOME, the path its sanity block checks, so there DOTNET_CLI_HOME is ignored: a runtime
+# value must not point the wrapper at a tool the image never checked.
+dotnet_cli_home="${HOME}"
+if [ "${BUILD_MCP_TOOL:-}" != global ] && [ -n "${DOTNET_CLI_HOME:-}" ]; then
+    require_absolute "dotnet CLI home" "${DOTNET_CLI_HOME}" "DOTNET_CLI_HOME"
+    dotnet_cli_home="${DOTNET_CLI_HOME}"
+fi
+global_tool="${dotnet_cli_home}/.dotnet/tools/${tool_command}"
+
+root_source="BUILD_MCP_REPO_ROOT"
+if [ -z "${BUILD_MCP_REPO_ROOT:-}" ]; then
+    [ "${BUILD_MCP_TOOL:-}" != global ] \
+        || fail "BUILD_MCP_TOOL=global skips the git probe, so it needs BUILD_MCP_REPO_ROOT set"
+    # Claude Code documents CLAUDE_PROJECT_DIR for stdio servers but not their working
+    # directory, so the working directory is only the fallback.
+    if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ -d "${CLAUDE_PROJECT_DIR}" ]; then
+        start_dir="${CLAUDE_PROJECT_DIR}"
+    else
+        # dash's pwd prints nothing yet succeeds when the directory has been removed; an empty path
+        # is never a directory, so the -d test catches that as well as a removed one.
+        start_dir=$(pwd)
+        [ -d "${start_dir}" ] || fail "cannot read the directory Claude Code was started in"
+    fi
+    # pwd and git's top level are always absolute, so only CLAUDE_PROJECT_DIR can be relative here.
+    root_source="CLAUDE_PROJECT_DIR"
+    # Every child run before the exec reads /dev/null: stdin is the MCP stream, and a child that read
+    # it would take Claude Code's initialize request before the server could.
+    BUILD_MCP_REPO_ROOT=$(git -C "${start_dir}" rev-parse --show-toplevel </dev/null 2>/dev/null) \
+        || BUILD_MCP_REPO_ROOT="${start_dir}"
+fi
+# The server silently replaces a root that is not absolute with /workspace/repo, so it would work
+# on the wrong repository, or none, without saying so.
+require_absolute "repository root" "${BUILD_MCP_REPO_ROOT}" "${root_source}"
+export BUILD_MCP_REPO_ROOT
+
+# Unset, the server logs to the shared temp directory, which the first user to start it creates
+# with mode 0700, so every other user's jobs on a host then fail. A per-user state directory
+# avoids that; the server creates it, with its parents, itself. XDG_STATE_HOME counts only when
+# absolute, as the XDG spec requires, and because the server ignores a relative path and falls back
+# to the shared directory. The container (BUILD_MCP_TOOL=global) has one user, so that lock-out
+# cannot happen there, and its TMPDIR is a scratch mount the agent can read: it keeps the server's
+# own default, so the job logs stay where the agent can open them.
+if [ -z "${BUILD_MCP_LOG_DIR:-}" ] && [ "${BUILD_MCP_TOOL:-}" = global ]; then
+    unset BUILD_MCP_LOG_DIR
+else
+    log_source="BUILD_MCP_LOG_DIR"
+    if [ -z "${BUILD_MCP_LOG_DIR:-}" ]; then
+        case "${XDG_STATE_HOME:-}" in
+            /*) BUILD_MCP_LOG_DIR="${XDG_STATE_HOME}/credfeto-build-mcp" ;;
+            *)
+                log_source="HOME"
+                BUILD_MCP_LOG_DIR="${HOME}/.local/state/credfeto-build-mcp"
+                ;;
+        esac
+    fi
+    # The server silently replaces a log directory that is not absolute with the shared one above.
+    require_absolute "log directory" "${BUILD_MCP_LOG_DIR}" "${log_source}"
+    export BUILD_MCP_LOG_DIR
+fi
+
+# dotnet prints its first-run welcome and telemetry notice to stdout, which would corrupt the MCP
+# stream. Forced rather than kept from the caller, because no other value is safe here.
+DOTNET_NOLOGO=1
+export DOTNET_NOLOGO
+
+# The "workload updates are available" advertisement is written to stdout too, which would corrupt
+# both the dotnet tool list output read below and the MCP stream. Set to true, the only value
+# Microsoft's docs list for it; the SDK may ignore 1.
+DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE=true
+export DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE
+
+# Suppresses NETSDK1057 ("You are using a preview version of .NET"): the server's child dotnet
+# build, restore and test runs inherit this environment, and under a preview SDK MSBuild would
+# otherwise print the warning into their build output and the server's job logs.
+# The server captures its children's stdout, so the warning never reaches the MCP stream. Forced,
+# like DOTNET_NOLOGO, so a caller's value cannot turn it back on.
+SuppressNETCoreSdkPreviewMessage=true
+export SuppressNETCoreSdkPreviewMessage
+
+local_tool_is_listed() {
+    # A local tool cannot run without dotnet, so with no dotnet there is no local tool to choose
+    # and the global tool, a native executable, is tried instead.
+    command -v dotnet >/dev/null 2>&1 || return 1
+    # Without jq the list cannot be read, and guessing "not listed" would start the global tool, or
+    # report it missing, when the user's own local one is there.
+    command -v jq >/dev/null 2>&1 || fail "jq is not on PATH to read dotnet tool list's output"
+    # Only stdout is captured, so dotnet never writes to the MCP stream; its stderr passes through.
+    # The subshell keeps this cd to itself; each exec below changes to HOME on its own.
+    # Its stdin is /dev/null for the same reason as git's above.
+    list_json=$(cd "${HOME}" && dotnet tool list --local --format json </dev/null) \
+        || fail "dotnet tool list --local --format json failed in ${HOME}"
+    # jq -e exits 1 for a false result and above 1 when it cannot parse the output or the filter
+    # raises an error. With no manifest dotnet reports an empty data array, so that is "not
+    # listed"; anything but exactly one object whose data is an array (including no output) is
+    # fatal, and a tool whose commands is not an array never matches.
+    printf '%s' "${list_json}" | jq -e -n --arg command "${tool_command}" '
+        [inputs]
+        | if length == 1 and (.[0] | type) == "object" and (.[0].data | type) == "array"
+          then any(.[0].data[]; type == "object" and (.commands | type) == "array" and any(.commands[]; . == $command))
+          else error("not dotnet tool list output")
+          end' >/dev/null
+    case $? in
+        0) return 0 ;;
+        1) return 1 ;;
+        *) fail "cannot read the output of dotnet tool list --local --format json in ${HOME}" ;;
+    esac
+}
+
+# BUILD_MCP_TOOL=global skips the probe and goes straight to the global tool below.
+if [ "${BUILD_MCP_TOOL:-}" != global ] && local_tool_is_listed; then
+    # The list above ran from HOME, so the cd only fails if HOME changes in between. That is fatal
+    # rather than a fall through to the global tool, because the user's listed local tool is never
+    # replaced, and dotnet never runs outside HOME. A listed tool that is not restored fails in
+    # dotnet tool run itself.
+    cd "${HOME}" || fail "cannot change to ${HOME} to run the local ${tool_command}"
+    exec dotnet tool run "${tool_command}" "$@"
+fi
+
+if [ -f "${global_tool}" ] && [ -x "${global_tool}" ]; then
+    # From HOME, like the local tool, so the server starts in the same directory either way.
+    cd "${HOME}" || fail "cannot change to ${HOME} to run the global ${tool_command}"
+    exec "${global_tool}" "$@"
+fi
+
+[ "${BUILD_MCP_TOOL:-}" != global ] \
+    || fail "BUILD_MCP_TOOL=global, but ${global_tool} is missing or not executable"
+fail "${tool_command} not found: install it as a local tool from ${HOME} with dotnet tool install --local, or as a global tool in ${global_tool%/*}"

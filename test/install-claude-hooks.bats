@@ -202,7 +202,7 @@ expected_mcp_names() {
         | sed '/^$/d' | LC_ALL=C sort -u | paste -sd ' ' -
 }
 
-@test "the headers helpers and managed-mcp.json are installed via sudo, 0755 and 0444" {
+@test "the headers helpers, the build-dotnet wrapper and managed-mcp.json are installed via sudo, 0755 and 0444" {
     allow_sudo
     main
 
@@ -211,6 +211,9 @@ expected_mcp_names() {
     diff "${SOURCE_KB_MCP_HEADERS}" "${CLAUDE_MANAGED_DIR}/mcp/kb-mcp-headers"
     [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/mcp/kb-mcp-headers")" = "755" ]
     grep -qxF "install -o root -g root -m 0755 ${SOURCE_KB_MCP_HEADERS} ${CLAUDE_MANAGED_DIR}/mcp/kb-mcp-headers" "${SUDO_LOG}"
+    diff "${SOURCE_BUILD_DOTNET_MCP}" "${CLAUDE_MANAGED_DIR}/mcp/build-dotnet-mcp"
+    [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/mcp/build-dotnet-mcp")" = "755" ]
+    grep -qxF "install -o root -g root -m 0755 ${SOURCE_BUILD_DOTNET_MCP} ${CLAUDE_MANAGED_DIR}/mcp/build-dotnet-mcp" "${SUDO_LOG}"
     [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "444" ]
     [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/mcp")" = "755" ]
     grep -qxF "install -o root -g root -m 0755 ${SOURCE_CFWF_MCP_HEADERS} ${CLAUDE_MANAGED_DIR}/mcp/cfwf-mcp-headers" "${SUDO_LOG}"
@@ -440,15 +443,16 @@ expected_mcp_names() {
     [ ! -e "${CLAUDE_MANAGED_DIR}" ]
 }
 
-# The shipped build-dotnet server's fixed env value is trusted because it is reviewed in this
-# repository, not because of its key or value: the same literal on a host server is still refused.
-@test "a host server with build-dotnet's literal env value is still refused, so the shipped exception does not loosen the merge (#1818)" {
+# A literal env value is refused for what it is, not for looking like a secret: a plain path, with
+# no secret-shaped key or value, is still left out, because managed-mcp.json is world-readable.
+@test "a host server with a literal env value that does not look like a secret is still refused" {
     allow_sudo
-    write_host_claude_json '{"mcpServers": {"host-build": {"type": "stdio", "command": "/usr/bin/host-build", "env": {"BUILD_MCP_REPO_ROOT": "/workspace/repo"}}}}'
+    write_host_claude_json '{"mcpServers": {"host-build": {"type": "stdio", "command": "/usr/bin/host-build", "env": {"SOME_SETTING": "/srv/some/path"}}}}'
     run main
     [ "${status}" -eq 0 ]
     [ "$(installed_mcp_names)" = "$(expected_mcp_names)" ]
     [[ "${output}" == *"WARNING: did not copy host-build from ${HOME}/.claude.json"* ]]
+    [ "$(grep -c -e host-build -e /srv/some/path "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" -eq 0 ]
 }
 
 @test "an invalid ~/.claude.json is fatal before anything is installed" {
@@ -491,6 +495,15 @@ expected_mcp_names() {
     run main
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"Source MCP headers helper not found: ${TEST_TMP}/kb-does-not-exist"* ]]
+    [ ! -e "${CLAUDE_MANAGED_DIR}" ]
+}
+
+@test "dies when the build-dotnet MCP wrapper is missing, before anything is installed" {
+    allow_sudo
+    SOURCE_BUILD_DOTNET_MCP="${TEST_TMP}/build-dotnet-does-not-exist"
+    run main
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"Source build-dotnet MCP wrapper not found: ${TEST_TMP}/build-dotnet-does-not-exist"* ]]
     [ ! -e "${CLAUDE_MANAGED_DIR}" ]
 }
 
@@ -682,10 +695,10 @@ kb_token_privacy_predicates() {
     [ "${output}" = "{\"type\":\"http\",\"url\":\"${KB_URL}\",\"headersHelper\":\"/etc/claude-code/mcp/kb-mcp-headers\"}" ]
 }
 
-@test "the shipped build-dotnet server is the stdio credfeto-build-dotnet tool by absolute path, with only the repo mount as env (#1818)" {
+@test "the shipped build-dotnet server is the stdio server started by the root-owned wrapper, with no env" {
     run jq -c '.mcpServers["build-dotnet"]' "${SOURCE_MANAGED_MCP}"
     [ "${status}" -eq 0 ]
-    [ "${output}" = '{"type":"stdio","command":"/home/developer/.dotnet/tools/credfeto-build-dotnet","env":{"BUILD_MCP_REPO_ROOT":"/workspace/repo"}}' ]
+    [ "${output}" = '{"type":"stdio","command":"/etc/claude-code/mcp/build-dotnet-mcp"}' ]
 }
 
 @test "no server in the shipped managed-mcp.json carries literal headers (#1818)" {
@@ -712,11 +725,16 @@ kb_token_privacy_predicates() {
     jq -r '.permissions.allow[]' "${SOURCE_MANAGED_SETTINGS}" | grep -qxF 'mcp__build-dotnet__*'
 }
 
-@test "the Dockerfile sanity block pins the build-dotnet server, its env, executable and allow rule, forbids Authorization text, and pins no server set (#1818, #1850)" {
+@test "the Dockerfile sanity block pins the build-dotnet server, its wrapper's owner and mode, its root, its tool mode, the global tool and allow rule, forbids Authorization text, and pins no server set (#1818, #1850)" {
     local dockerfile="${SOURCE_DIR}/Dockerfile"
     [ "$(grep -cF '.mcpServers | keys' "${dockerfile}")" -eq 0 ]
     grep -qF "! grep -qi 'authorization' /etc/claude-code/managed-mcp.json" "${dockerfile}"
-    grep -qF "jq -e '.mcpServers[\"build-dotnet\"] == {\"type\": \"stdio\", \"command\": \"/home/developer/.dotnet/tools/credfeto-build-dotnet\", \"env\": {\"BUILD_MCP_REPO_ROOT\": \"/workspace/repo\"}}' /etc/claude-code/managed-mcp.json" "${dockerfile}"
+    grep -qF "jq -e '.mcpServers[\"build-dotnet\"] == {\"type\": \"stdio\", \"command\": \"/etc/claude-code/mcp/build-dotnet-mcp\"}' /etc/claude-code/managed-mcp.json" "${dockerfile}"
+    grep -qF "[ \"\$(stat -c '%U:%G %a' /etc/claude-code/mcp/build-dotnet-mcp)\" = \"root:root 755\" ]" "${dockerfile}"
+    # shellcheck disable=SC2016  # the literal ${...} the sanity block's shell expands
+    grep -qF '[ "${BUILD_MCP_REPO_ROOT}" = "/workspace/repo" ]' "${dockerfile}"
+    # shellcheck disable=SC2016  # the literal ${...} the sanity block's shell expands
+    grep -qF '[ "${BUILD_MCP_TOOL}" = "global" ]' "${dockerfile}"
     grep -qF '[ -x /home/developer/.dotnet/tools/credfeto-build-dotnet ]' "${dockerfile}"
     grep -qF "jq -e '.permissions.allow | index(\"mcp__build-dotnet__*\")' /etc/claude-code/managed-settings.json" "${dockerfile}"
     grep -qE 'for tool in .* credfeto\.build\.dotnet\.server; do' "${dockerfile}"
@@ -757,7 +775,8 @@ run_dockerfile_mcp_checks() {
         '.mcpServers.kb.headers = {"X-Key": "literal"}' \
         '.mcpServers.kb = {"type": "stdio", "command": "/usr/bin/kb"}' \
         'del(.mcpServers["build-dotnet"])' \
-        '.mcpServers["build-dotnet"].env.EXTRA = "x"'; do
+        '.mcpServers["build-dotnet"].env.EXTRA = "x"' \
+        '.mcpServers["build-dotnet"].command = "/home/developer/.dotnet/tools/credfeto-build-dotnet"'; do
         jq "${filter}" "${SOURCE_MANAGED_MCP}" > "${TEST_TMP}/broken.json"
         if run_dockerfile_mcp_checks "${TEST_TMP}/broken.json"; then
             echo "the Dockerfile checks accepted: ${filter}" >&2
@@ -802,13 +821,17 @@ run_dockerfile_mcp_checks() {
     grep -qE 'for cmd in git gh ' "${dockerfile}"
 }
 
-@test "the Dockerfile copies managed-mcp.json and the headers helper into /etc/claude-code" {
+@test "the Dockerfile copies managed-mcp.json, the headers helpers and the build-dotnet wrapper into /etc/claude-code, and sets the wrapper's root and tool mode" {
     local dockerfile="${SOURCE_DIR}/Dockerfile"
     grep -qxF 'COPY --chown=root:root --chmod=0444 claude-managed-mcp.json /etc/claude-code/managed-mcp.json' "${dockerfile}"
     grep -qxF 'COPY --chown=root:root --chmod=0755 claude-mcp/cfwf-mcp-headers /etc/claude-code/mcp/cfwf-mcp-headers' "${dockerfile}"
     grep -qxF 'COPY --chown=root:root --chmod=0755 claude-mcp/kb-mcp-headers /etc/claude-code/mcp/kb-mcp-headers' "${dockerfile}"
+    grep -qxF 'COPY --chown=root:root --chmod=0755 claude-mcp/build-dotnet-mcp /etc/claude-code/mcp/build-dotnet-mcp' "${dockerfile}"
+    grep -qxF 'ENV BUILD_MCP_REPO_ROOT=/workspace/repo' "${dockerfile}"
+    grep -qxF 'ENV BUILD_MCP_TOOL=global' "${dockerfile}"
     [ -x "${SOURCE_CFWF_MCP_HEADERS}" ]
     [ -x "${SOURCE_KB_MCP_HEADERS}" ]
+    [ -x "${SOURCE_BUILD_DOTNET_MCP}" ]
 }
 
 # --- legacy ~/.claude/hooks symlinks -------------------------------------------
