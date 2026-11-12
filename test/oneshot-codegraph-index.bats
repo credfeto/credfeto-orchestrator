@@ -156,6 +156,15 @@ codegraph_mounts() {
     [ ! -e "${SESSION_BASE_DIR}/codegraph/Issue_5" ]
 }
 
+@test "prune_codegraph_indexes keeps an index with a file written within the window, however old the directory" {
+    make_codegraph_index "Issue_5"
+    age_codegraph_index_files "Issue_5" 20
+    touch -d '8 days ago' "${SESSION_BASE_DIR}/codegraph/Issue_5/codegraph.db"
+    run prune_codegraph_indexes
+    [ "${status}" -eq 0 ]
+    [ -f "${SESSION_BASE_DIR}/codegraph/Issue_5/codegraph.db" ]
+}
+
 @test "prune_codegraph_indexes judges an index directory with no file by the directory's own age" {
     mkdir -p "${SESSION_BASE_DIR}/codegraph/Issue_5" "${SESSION_BASE_DIR}/codegraph/Issue_6"
     touch -d '15 days ago' "${SESSION_BASE_DIR}/codegraph/Issue_5"
