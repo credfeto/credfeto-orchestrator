@@ -1609,13 +1609,93 @@ setup_main_feed_issue() {
     [ ! -f "$(invocation_guard_file_path Issue 10)" ]
 }
 
-@test "main skips a PR item while the checkout holds another item's uncommitted changes (#1914)" {
+@test "main skips a PR item while the checkout holds uncommitted changes on another queued item's branch (#1914, #1917)" {
     setup_main_feed_pr feature/sdk-bump
-    local claude_log="${TEST_TMP}/claude_log"
+    local log="${TEST_TMP}/calls"
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":6,"itemType":"PullRequest","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() {
+        local head="${PR_HEAD}"
+        [ "$1" = "6" ] && head="feature/other-item"
+        printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"%s","comments":[],"reviews":[],"statusCheckRollup":[],"files":[],"isCrossRepository":false}\n' "${head}"
+    }
+    make_stub gh 'case "$*" in *"--head feature/other-item"*) printf "6\n" ;; esac'
     ensure_repo_current() {
         DIRTY_BRANCH="feature/other-item"
         return 1
     }
+    autostash_dirty_checkout() { printf 'stash %s\n' "$1" >> "${log}"; }
+    invoke_claude() { printf 'invoke %s\n' "$3" >> "${log}"; }
+    apply_blocked_label() {
+        printf 'BLOCKED %s #%s\n' "$1" "$2"
+        return 0
+    }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Skipping PullRequest #5 in org/repo: the checkout has uncommitted changes on 'feature/other-item', which is not this item's branch (PullRequest #6 in the queue owns it)"* ]]
+    [[ "${output}" != *"BLOCKED"* ]]
+    # Nothing is stashed, and the item that owns the branch gets the checkout.
+    [ "$(cat "${log}")" = "invoke 6" ]
+    [ ! -f "$(pr_invocation_guard_file_path 5)" ]
+}
+
+@test "main stashes a dirty checkout on a branch no queued item owns and runs the item on its own branch (#1917)" {
+    setup_main_feed_pr feature/sdk-bump
+    local log="${TEST_TMP}/calls"
+    ensure_repo_current() {
+        printf 'ensure\n' >> "${log}"
+        if [ -z "${_dirty_reported:-}" ]; then
+            _dirty_reported=1
+            DIRTY_BRANCH="feature/abandoned"
+            return 1
+        fi
+        return 0
+    }
+    autostash_dirty_checkout() { printf 'stash %s\n' "$1" >> "${log}"; }
+    checkout_item_branch() { printf 'checkout %s\n' "$1" >> "${log}"; }
+    invoke_claude() { printf 'invoke %s\n' "$3" >> "${log}"; }
+    apply_blocked_label() {
+        printf 'BLOCKED %s #%s\n' "$1" "$2"
+        return 0
+    }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"uncommitted changes on"* ]]
+    [[ "${output}" != *"BLOCKED"* ]]
+    [ "$(cat "${log}")" = "$(printf 'ensure\nstash feature/abandoned\nensure\ncheckout feature/sdk-bump\ninvoke 5')" ]
+}
+
+@test "main stashes a dirty detached HEAD and runs the item (#1917)" {
+    setup_main_feed_issue
+    local log="${TEST_TMP}/calls"
+    ensure_repo_current() {
+        if [ -z "${_dirty_reported:-}" ]; then
+            _dirty_reported=1
+            DIRTY_BRANCH=""
+            return 1
+        fi
+        return 0
+    }
+    autostash_dirty_checkout() { printf 'stash [%s]\n' "$1" >> "${log}"; }
+    checkout_item_branch() { printf 'checkout %s\n' "$1" >> "${log}"; }
+    invoke_claude() { printf 'invoke %s\n' "$3" >> "${log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${log}")" = "$(printf 'stash []\ncheckout main\ninvoke 10')" ]
+}
+
+@test "main still skips the item, without Blocking or charging it, when stashing an unowned dirty checkout fails (#1917)" {
+    setup_main_feed_pr feature/sdk-bump
+    local claude_log="${TEST_TMP}/claude_log"
+    ensure_repo_current() {
+        DIRTY_BRANCH="feature/abandoned"
+        return 1
+    }
+    autostash_dirty_checkout() { return 1; }
     invoke_claude() { printf '%s\n' "$3" >> "${claude_log}"; }
     apply_blocked_label() {
         printf 'BLOCKED %s #%s\n' "$1" "$2"
@@ -1624,7 +1704,7 @@ setup_main_feed_issue() {
 
     run main
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"uncommitted changes on 'feature/other-item', which is not this item's branch"* ]]
+    [[ "${output}" == *"uncommitted changes on 'feature/abandoned', which is not this item's branch (no queued item owns it, but stashing it failed)"* ]]
     [[ "${output}" != *"BLOCKED"* ]]
     [ ! -f "${claude_log}" ]
     [ ! -f "$(pr_invocation_guard_file_path 5)" ]
@@ -1638,6 +1718,7 @@ setup_main_feed_issue() {
         return 1
     }
     checkout_item_branch() { printf 'checkout %s\n' "$1" >> "${log}"; }
+    autostash_dirty_checkout() { printf 'stash %s\n' "$1" >> "${log}"; }
     invoke_claude() { printf 'invoke %s\n' "$3" >> "${log}"; }
 
     run main
