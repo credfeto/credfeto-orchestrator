@@ -501,12 +501,6 @@ assert_forced_for_both_tools() {
     [ "${status}" -ne 0 ]
     [ -z "${output}" ]
     [ "${stderr}" = "build-dotnet-mcp: the log directory ' ' from BUILD_MCP_LOG_DIR is not an absolute path" ]
-
-    cd "${WORK}" || return 1
-    run --separate-stderr env -i "PATH=${STUB_BIN}" HOME=relative-home "${GIT_ISOLATION_ENV[@]}" "${WRAPPER}"
-    [ "${status}" -ne 0 ]
-    [ -z "${output}" ]
-    [ "${stderr}" = "build-dotnet-mcp: the log directory 'relative-home/.local/state/credfeto-build-mcp' from HOME is not an absolute path" ]
 }
 
 # Replaces git and dotnet with stubs that only record that they ran, for the tests that prove the
@@ -712,6 +706,26 @@ make_recording_probes() {
     [ "${status}" -ne 0 ]
     [ -z "${output}" ]
     [ "${stderr}" = "build-dotnet-mcp: HOME is not set" ]
+}
+
+@test "a relative HOME fails before anything runs, on a host and with BUILD_MCP_TOOL=global" {
+    make_recording_probes
+    # A global tool where the relative HOME resolves from the start directory, which the wrapper's
+    # global tool check would find before its cd to HOME ran the exec from somewhere else.
+    mkdir -p "${WORK}/relative-home/.dotnet/tools"
+    STUB_BIN="${WORK}/relative-home/.dotnet/tools" make_stub credfeto-build-dotnet 'printf "%s\n" global'
+    local preset
+    for preset in BUILD_MCP_TOOL= "BUILD_MCP_TOOL=global"; do
+        cd "${WORK}" || return 1
+        # CDPATH is set because a relative cd consults it and prints the directory it found to
+        # stdout, the MCP stream.
+        run --separate-stderr env -i "PATH=${STUB_BIN}" HOME=relative-home "CDPATH=${WORK}" \
+            BUILD_MCP_REPO_ROOT=/workspace/repo "${preset}" "${GIT_ISOLATION_ENV[@]}" "${WRAPPER}"
+        [ "${status}" -ne 0 ]
+        [ -z "${output}" ]
+        [ "${stderr}" = "build-dotnet-mcp: the home directory 'relative-home' from HOME is not an absolute path" ]
+    done
+    [ ! -e "${TEST_TMP}/probe-calls" ]
 }
 
 @test "a start directory that no longer exists fails with a message on stderr and nothing on stdout" {
