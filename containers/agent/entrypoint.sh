@@ -377,14 +377,17 @@ seed_orchestrator_cache() {
 # the directory persists on the host and `init` treats a database that already has its schema as
 # initialized, so a half-built index would otherwise be kept by every later session. Only the
 # contents go: the directory itself is a bind mountpoint.
-# Skipped, silently, when the checkout tracks anything under .codegraph (exclude_codegraph_from_git
-# has already warned): init would rewrite the tracked files and the clean-up after a failed init
-# would delete them, and the agent's git add -A would commit either change.
+# Skipped, silently, when the checkout tracks anything under .codegraph, or git cannot tell
+# whether it does (exclude_codegraph_from_git has already warned): init would rewrite the tracked
+# files and the clean-up after a failed init would delete them, and the agent's git add -A would
+# commit either change.
 # WORKSPACE_REPO_DIR overrides the repo path (used by tests).
 build_missing_codegraph_index() {
     local repo_dir="${WORKSPACE_REPO_DIR:-/workspace/repo}"
     [ -d "${repo_dir}/.git" ] || return 0
-    checkout_tracks_codegraph "${repo_dir}" && return 0
+    local tracking=0
+    checkout_tracks_codegraph "${repo_dir}" 2>/dev/null || tracking=$?
+    [ "${tracking}" -eq 1 ] || return 0
 
     if [ -s "${repo_dir}/.codegraph/codegraph.db" ]; then
         info "CodeGraph index already exists in ${repo_dir}, the MCP server catches it up on connect"
@@ -410,12 +413,19 @@ build_missing_codegraph_index() {
     remove_incomplete_codegraph_index "${repo_dir}/.codegraph"
 }
 
-# Succeeds when git tracks any file under the checkout's .codegraph. Checked here rather than
-# passed in by the host, so it always matches the checkout this container sees. When git cannot
-# read the checkout it fails, the same as the host's checkout_tracks_codegraph in lib/state,
-# because the agent's git cannot commit from that checkout either.
+# Returns 0 when git tracks any file under the checkout's .codegraph, 1 when it tracks none, and
+# 2 when git ls-files fails, with git's own error on stderr (exclude_codegraph_from_git shows it;
+# build_missing_codegraph_index, which runs later, discards it). Checked here rather than passed
+# in by the host, so it always matches the checkout this container sees. Callers treat 2 as tracked
+# (fail closed), unlike the host's checkout_tracks_codegraph in lib/state, which fails open
+# because there the checkout may not be cloned yet. Here the checkout always exists, so a git
+# failure (a safe.directory refusal, an unreadable index) is unexpected, and counting it as not
+# tracked when the host saw tracked files and skipped the mount would add the exclude entry and
+# run init among those files, and a failed init's clean-up would then delete them.
 checkout_tracks_codegraph() {
-    [ -n "$(git -C "$1" ls-files -- .codegraph 2>/dev/null)" ]
+    local tracked
+    tracked=$(git -C "$1" ls-files -- .codegraph) || return 2
+    [ -n "${tracked}" ]
 }
 
 # Deletes everything inside the given .codegraph directory but never the directory itself, which
@@ -438,15 +448,21 @@ remove_incomplete_codegraph_index() {
 # file that lacks one, so the entry never joins the last line. Non-fatal on failure:
 # the repository's own .gitignore may still ignore .codegraph/.
 # Skipped, with the session's only warning about it, when the checkout tracks anything under
-# .codegraph: the entry would hide new files there from git, and build_missing_codegraph_index
-# then skips CodeGraph too, so the agent works without an index. It runs first in both modes,
-# so the warning is printed once whichever mode runs.
+# .codegraph, or git ls-files fails so it cannot tell: the entry would hide new files there from
+# git, and build_missing_codegraph_index then skips CodeGraph too, so the agent works without an
+# index. It runs first in both modes, so the warning is printed once whichever mode runs.
 # WORKSPACE_REPO_DIR overrides the repo path (used by tests).
 exclude_codegraph_from_git() {
     local repo_dir="${WORKSPACE_REPO_DIR:-/workspace/repo}"
     [ -d "${repo_dir}/.git" ] || return 0
-    if checkout_tracks_codegraph "${repo_dir}"; then
+    local tracking=0
+    checkout_tracks_codegraph "${repo_dir}" || tracking=$?
+    if [ "${tracking}" -eq 0 ]; then
         warn "The checkout tracks files under .codegraph, so CodeGraph is skipped for this session to leave them untouched: no index is built or cleared there and .codegraph/ is not excluded from git"
+        return 0
+    fi
+    if [ "${tracking}" -eq 2 ]; then
+        warn "git ls-files -- .codegraph failed in ${repo_dir}, so CodeGraph is skipped for this session in case the checkout tracks files there: no index is built or cleared there and .codegraph/ is not excluded from git"
         return 0
     fi
 

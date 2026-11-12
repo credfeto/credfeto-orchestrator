@@ -307,12 +307,16 @@ host skips the mount, with a warning, when the checkout tracks any file under `.
 the mount would hide those files, `git` in the container would see them as deleted, and the
 agent's `git add -A` could commit the deletion. The mount then neither creates nor touches the
 index directory (`checkout_tracks_codegraph` in `lib/state` makes the check on the item's own
-branch, and counts a `git` failure as not tracked). The pivot link is still made, because it runs
+branch, and counts a `git` failure as not tracked, because on the host it covers a checkout that
+has not been cloned yet). The pivot link is still made, because it runs
 before the item's branch is checked out; the directory it creates goes unused and is purged once
 idle. The entrypoint makes the same `git ls-files -- .codegraph` check itself
 (`checkout_tracks_codegraph`), so it cannot disagree with the checkout the container sees, and
 then skips CodeGraph: it runs no `init`, so it neither rewrites the tracked files nor deletes
-them in the clean-up after a failed `init`, and adds no `.git/info/exclude` entry. It prints one
+them in the clean-up after a failed `init`, and adds no `.git/info/exclude` entry. Unlike the
+host's check, it counts a `git` failure as tracked and skips CodeGraph the same way, because the
+checkout always exists in the container, so a failure there (a `safe.directory` refusal, an
+unreadable index) is unexpected and the files it cannot list may be tracked. It prints one
 warning naming the reason, and the session runs without an index. The managed MCP server still
 starts; with no index it only answers that the project is not indexed, but if the repository
 commits a non-empty `.codegraph/codegraph.db` its catch-up and watcher can still update that
