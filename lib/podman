@@ -552,7 +552,8 @@ cleanup_dangling_images() {
     podman image prune --force > /dev/null 2>&1 || true
 }
 
-# Succeeds when a work item's transcript directory has been idle for more than retention_mins: no
+# Succeeds when a work item's directory (a transcript or CodeGraph index directory, for
+# prune_idle_item_dirs) has been idle for more than retention_mins: no
 # file under it was modified within that time, or, when it contains no file at all (only empty
 # subdirectories at most), the directory itself was not. The directory's own mtime is otherwise
 # ignored, because appending to a transcript does not change it, unless dir_mtime_counts is 1:
@@ -1402,8 +1403,8 @@ prepare_claude_container_args() {
     #     purge). Like the five above, the mountpoint is writable only because podman
     #     creates it owned by the mapped developer uid. A pivoted PR's directory may be
     #     a symlink to its Issue's: mkdir -p accepts a live link, chmod applies to the
-    #     Issue directory it points at, and prune_transcripts has already removed any
-    #     dangling one before this runs.
+    #     Issue directory it points at, and prune_transcripts (through the shared
+    #     prune_idle_item_dirs) has already removed any dangling one before this runs.
     CLAUDE_MD_TMPFILE=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp --suffix=.claude-md) || die "Failed to create temp file for CLAUDE.md"
     printf '%s' "${claude_md_content}" > "${CLAUDE_MD_TMPFILE}"
     CLAUDE_SCRATCH_TMPDIR=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp -d --suffix=.claude-scratch) || die "Failed to create scratch directory"
