@@ -832,7 +832,7 @@ is_never_secret_file() {
 # (checkout_tracks_codegraph in containers/agent/entrypoint.sh), so the session runs without an
 # index rather than writing one among the tracked files. The index directory is neither created
 # nor touched then, because no session uses it. checkout_tracks_codegraph (lib/state) makes the
-# check, shared with the pivot link, and explains when it counts as not tracked.
+# check and explains when it counts as not tracked.
 add_codegraph_index_podman_args() {
     local item_type="$1" item_id="$2" index_dir
     if checkout_tracks_codegraph; then
