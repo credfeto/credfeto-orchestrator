@@ -306,12 +306,14 @@ entrypoint then builds an index in the checkout, which the `git clean` afterward
 host skips the mount, with a warning, when the checkout tracks any file under `.codegraph/`: the
 mount would hide those files, `git` in the container would see them as deleted, and the agent's
 `git add -A` could commit the deletion. The mount then neither creates nor touches the index
-directory (`checkout_tracks_codegraph` in `lib/state` makes the check on the item's own branch,
-and counts a `git` failure as not tracked, because on the host it covers a checkout that has not
-been cloned yet). The entrypoint makes the same `git ls-files -- .codegraph` check itself
+directory (`checkout_tracks_codegraph` in `lib/state` makes the check on the item's own branch).
+If `git ls-files` fails there (a corrupt or unreadable index), the host skips the mount the same
+way, with a warning naming the failure, because the checkout has already been cloned and
+checked out by then, so the failure is unexpected and the files it cannot list may be tracked.
+The entrypoint makes the same `git ls-files -- .codegraph` check itself
 (`checkout_tracks_codegraph`), so it cannot disagree with the checkout the container sees, and
 then skips CodeGraph: it runs no `init`, so it neither rewrites the tracked files nor deletes them
-in the clean-up after a failed `init`, and adds no `.git/info/exclude` entry. Unlike the host's
+in the clean-up after a failed `init`, and adds no `.git/info/exclude` entry. Like the host's
 check, it counts a `git` failure as tracked and skips CodeGraph the same way, because the checkout
 always exists in the container, so a failure there (a `safe.directory` refusal, an unreadable
 index) is unexpected and the files it cannot list may be tracked. It prints one warning naming the

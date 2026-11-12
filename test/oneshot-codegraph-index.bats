@@ -15,6 +15,14 @@ load oneshot_helper
 
 CODEGRAPH_MOUNT_SUFFIX=":/workspace/repo/.codegraph:rw"
 
+# The shared setup, with REPO_WORK_DIR made a git checkout that tracks nothing, because
+# add_codegraph_index_podman_args fails closed: it mounts nothing where git ls-files fails.
+setup() {
+    setup_isolated_env
+    source_oneshot
+    git init -q "${REPO_WORK_DIR}"
+}
+
 # Writes an index database into an item's CodeGraph index directory.
 make_codegraph_index() {
     local item_name="$1"
@@ -29,10 +37,9 @@ age_codegraph_index_files() {
     find "${SESSION_BASE_DIR}/codegraph/${item_name}" -exec touch -d "${days} days ago" {} +
 }
 
-# Makes REPO_WORK_DIR a git checkout that tracks a file under .codegraph.
+# Makes the git checkout at REPO_WORK_DIR (setup) track a file under .codegraph.
 track_codegraph_in_checkout() {
     mkdir -p "${REPO_WORK_DIR}/.codegraph"
-    git -C "${REPO_WORK_DIR}" init -q
     printf '*\n' > "${REPO_WORK_DIR}/.codegraph/.gitignore"
     # -f because the file ignores itself, as the one codegraph init writes does.
     git -C "${REPO_WORK_DIR}" add -f .codegraph/.gitignore
@@ -64,7 +71,6 @@ codegraph_mounts() {
 @test "the index is kept across runs of the same item and survives the checkout's git clean -fdX" {
     local args_log="${TEST_TMP}/podman_args"
     stub_podman_run_logging_args "${args_log}"
-    git -C "${REPO_WORK_DIR}" init -q
     printf '.codegraph/\n' > "${REPO_WORK_DIR}/.gitignore"
     make_codegraph_index "Issue_42"
 
@@ -117,10 +123,38 @@ codegraph_mounts() {
     [ -f "${REPO_WORK_DIR}/.codegraph/.gitignore" ]
 }
 
+@test "invoke_claude warns and launches without the index mount when the checkout is not a git checkout" {
+    local args_log="${TEST_TMP}/podman_args"
+    stub_podman_run_logging_args "${args_log}"
+    rm -rf "${REPO_WORK_DIR}/.git"
+    run invoke_claude "test prompt" "Issue" "42" "# per-item instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"not a git repository"* ]]
+    [ "$(grep -cF "git ls-files -- .codegraph failed in ${REPO_WORK_DIR}, so the CodeGraph index is not mounted in case the checkout tracks files there - this session runs without a CodeGraph index" <<< "${output}")" -eq 1 ]
+    [ "$(grep -cx 'run' "${args_log}")" -eq 1 ]
+    [ -z "$(codegraph_mounts "${args_log}")" ]
+    [ ! -e "${SESSION_BASE_DIR}/codegraph/Issue_42" ]
+}
+
+@test "invoke_claude warns and launches without the index mount when git cannot read the checkout's index" {
+    local args_log="${TEST_TMP}/podman_args"
+    stub_podman_run_logging_args "${args_log}"
+    track_codegraph_in_checkout
+    # A corrupt index hides the tracked .codegraph/.gitignore from git ls-files.
+    printf 'corrupt\n' > "${REPO_WORK_DIR}/.git/index"
+    run invoke_claude "test prompt" "Issue" "42" "# per-item instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"git ls-files -- .codegraph failed in ${REPO_WORK_DIR}, so the CodeGraph index is not mounted in case the checkout tracks files there - this session runs without a CodeGraph index"* ]]
+    [[ "${output}" != *"The checkout tracks files under .codegraph"* ]]
+    [ "$(grep -cx 'run' "${args_log}")" -eq 1 ]
+    [ -z "$(codegraph_mounts "${args_log}")" ]
+    [ ! -e "${SESSION_BASE_DIR}/codegraph/Issue_42" ]
+    [ -f "${REPO_WORK_DIR}/.codegraph/.gitignore" ]
+}
+
 @test "invoke_claude mounts the index when the checkout has untracked files under .codegraph" {
     local args_log="${TEST_TMP}/podman_args"
     stub_podman_run_logging_args "${args_log}"
-    git -C "${REPO_WORK_DIR}" init -q
     mkdir -p "${REPO_WORK_DIR}/.codegraph"
     printf '*\n' > "${REPO_WORK_DIR}/.codegraph/.gitignore"
     run invoke_claude "test prompt" "Issue" "42" "# per-item instructions"

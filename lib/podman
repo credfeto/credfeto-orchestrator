@@ -831,12 +831,19 @@ is_never_secret_file() {
 # could commit the deletion. The entrypoint makes the same check itself and then skips CodeGraph
 # (checkout_tracks_codegraph in containers/agent/entrypoint.sh), so the session runs without an
 # index rather than writing one among the tracked files. The index directory is neither created
-# nor touched then, because no session uses it. checkout_tracks_codegraph (lib/state) makes the
-# check and explains when it counts as not tracked.
+# nor touched then, because no session uses it. The mount is skipped the same way, with a warning
+# naming the failure, when git ls-files fails on the checkout, because the files it cannot list
+# may be tracked (fail closed, as in the entrypoint). checkout_tracks_codegraph (lib/state) makes
+# the check.
 add_codegraph_index_podman_args() {
-    local item_type="$1" item_id="$2" index_dir
-    if checkout_tracks_codegraph; then
+    local item_type="$1" item_id="$2" index_dir tracking=0
+    checkout_tracks_codegraph || tracking=$?
+    if [ "${tracking}" -eq 0 ]; then
         warn "The checkout tracks files under .codegraph, so the CodeGraph index is not mounted over them - this session runs without a CodeGraph index"
+        return 0
+    fi
+    if [ "${tracking}" -eq 2 ]; then
+        warn "git ls-files -- .codegraph failed in ${REPO_WORK_DIR}, so the CodeGraph index is not mounted in case the checkout tracks files there - this session runs without a CodeGraph index"
         return 0
     fi
     index_dir=$(codegraph_index_dir_path "${item_type}" "${item_id}")

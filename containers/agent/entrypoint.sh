@@ -417,11 +417,11 @@ build_missing_codegraph_index() {
 # 2 when git ls-files fails, with git's own error on stderr (exclude_codegraph_from_git shows it;
 # build_missing_codegraph_index, which runs later, discards it). Checked here rather than passed
 # in by the host, so it always matches the checkout this container sees. Callers treat 2 as tracked
-# (fail closed), unlike the host's checkout_tracks_codegraph in lib/state, which fails open
-# because there the checkout may not be cloned yet. Here the checkout always exists, so a git
-# failure (a safe.directory refusal, an unreadable index) is unexpected, and counting it as not
-# tracked when the host saw tracked files and skipped the mount would add the exclude entry and
-# run init among those files, and a failed init's clean-up would then delete them.
+# (fail closed), as add_codegraph_index_podman_args in lib/podman does with the host's copy in
+# lib/state before the mount. The checkout always exists here, so a git failure (a safe.directory
+# refusal, an unreadable index) is unexpected, and counting it as not tracked when the host saw
+# tracked files and skipped the mount would add the exclude entry and run init among those files,
+# and a failed init's clean-up would then delete them.
 checkout_tracks_codegraph() {
     local tracked
     tracked=$(git -C "$1" ls-files -- .codegraph) || return 2
