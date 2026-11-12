@@ -14,11 +14,15 @@
 # not die the whole run over it — return a distinguishable code instead so main() can skip just
 # this item and retry it next tick (#1133).
 # On a return of 2, PREFLIGHT_GITHUB_SSH_AUTH_FAILED is 1 when the container's stderr holds the
-# entrypoint's GitHub SSH-auth message (PREFLIGHT_GITHUB_SSH_AUTH_TEXT), and 0 otherwise (#1846).
+# entrypoint's GitHub SSH-auth message (PREFLIGHT_GITHUB_SSH_AUTH_TEXT), and 0 otherwise (#1846),
+# and PREFLIGHT_FAILURE_KIND says which kind of failure it was: name-conflict and github-ssh-auth
+# are faults of the host, and container is the entrypoint's own pre-flight failing on what the
+# item's checkout holds (an SDK its global.json asks for that the image lacks, for one).
 run_claude_fresh() {
     local tmpfile="$1" item_type="${2:-}" item_id="${3:-}"
     local stderrfile podman_exit=0 ssh_auth_failed=0
     PREFLIGHT_GITHUB_SSH_AUTH_FAILED=0
+    PREFLIGHT_FAILURE_KIND=""
     stderrfile=$(mktemp --suffix=.stderr) || die "Failed to create temp file for podman stderr"
     [ -n "${CLAUDE_PROMPT}" ] || die "Prompt is empty — refusing to start container"
     validate_bind_mounts
@@ -70,6 +74,7 @@ run_claude_fresh() {
             # a unit that still works when oneshot does not); main() surfaces it by exiting
             # non-zero when any item hit a pre-flight failure.
             rm -f "${tmpfile}"
+            PREFLIGHT_FAILURE_KIND="name-conflict"
             return 2
         fi
         cat "${stderrfile}" >&2
@@ -93,6 +98,11 @@ run_claude_fresh() {
         jq -r '.result // ""' "${tmpfile}" 2>/dev/null >&2 || true
         rm -f "${tmpfile}"
         PREFLIGHT_GITHUB_SSH_AUTH_FAILED="${ssh_auth_failed}"
+        if [ "${ssh_auth_failed}" = "1" ]; then
+            PREFLIGHT_FAILURE_KIND="github-ssh-auth"
+        else
+            PREFLIGHT_FAILURE_KIND="container"
+        fi
         return 2
     fi
     cat "${stderrfile}" >&2
@@ -123,6 +133,11 @@ PRECHECK_SESSION_LOG=""
 # then treats it as a likely GitHub outage and skips the rest of the tick.
 # shellcheck disable=SC2034  # read by oneshot after sourcing
 PREFLIGHT_GITHUB_SSH_AUTH_FAILED=0
+# The kind of the last run_claude_fresh pre-flight failure: name-conflict, github-ssh-auth or
+# container (see run_claude_fresh), empty before any. oneshot Blocks only for the first two, at
+# MAX_CONSECUTIVE_INFRA_FAILURES; container is recorded against the image and skipped.
+# shellcheck disable=SC2034  # read by oneshot after sourcing
+PREFLIGHT_FAILURE_KIND=""
 
 # Handles is_error=true in the Claude JSON response.
 # On blocking_limit: every run is already a fresh single-phase session, so there is nothing
@@ -1266,6 +1281,16 @@ ensure_agent_container_ready() {
 
     cleanup_dangling_images
     prune_transcripts
+    pull_agent_image_once "${item_type}" "${item_id}"
+}
+
+# Pulls ORCHESTRATOR_IMAGE once per oneshot run (ORCHESTRATOR_IMAGE_PULLED_THIS_RUN), falling
+# back to the cached local image when the pull fails, and dying only when there is neither.
+# Called by ensure_agent_container_ready before a launch, and by preflight_failure_still_applies
+# (lib/state) so an item parked on a pre-flight failure sees a newly built image without a launch.
+# item_type and item_id only feed the Discord notifications.
+pull_agent_image_once() {
+    local item_type="$1" item_id="$2"
     # One pull per oneshot run, not one per item: a moved :latest can take many minutes to pull,
     # and a tick with several actionable items would otherwise pay that cost once per item.
     if [ "${ORCHESTRATOR_IMAGE_PULLED_THIS_RUN}" = "1" ]; then

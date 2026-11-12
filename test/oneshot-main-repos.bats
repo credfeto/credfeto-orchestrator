@@ -1473,14 +1473,17 @@ STUBEOF
     [ "$(cat "${claude_log}")" = "10" ]
 }
 
-@test "main escalates to Blocked after MAX_CONSECUTIVE_INFRA_FAILURES consecutive infra failures (#1133 review)" {
+@test "main escalates to Blocked after MAX_CONSECUTIVE_INFRA_FAILURES consecutive host infra failures (#1133 review)" {
     setup_main_mocks
     fetch_all_priorities() {
         printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
     }
     find_open_nonblocked_pr_for_repo() { printf ''; }
     fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
-    invoke_claude() { return 2; }
+    invoke_claude() {
+        PREFLIGHT_FAILURE_KIND="name-conflict"
+        return 2
+    }
     apply_blocked_label() { printf 'BLOCKED %s #%s\n' "$1" "$2"; return 0; }
     make_stub gh 'exit 0'
     save_infra_failure_count "Issue" 10 "$(( MAX_CONSECUTIVE_INFRA_FAILURES - 1 ))"
@@ -1499,7 +1502,10 @@ STUBEOF
     }
     find_open_nonblocked_pr_for_repo() { printf ''; }
     fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
-    invoke_claude() { return 2; }
+    invoke_claude() {
+        PREFLIGHT_FAILURE_KIND="name-conflict"
+        return 2
+    }
     local call_log="${TEST_TMP}/gh_calls"
     # shellcheck disable=SC2016
     make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
@@ -1511,6 +1517,217 @@ STUBEOF
     [ "${status}" -eq 1 ]
     grep -q "issue comment 10 --repo org/repo --body This item's agent container has failed ${MAX_CONSECUTIVE_INFRA_FAILURES} times in a row before Claude could even start" "${call_log}"
     grep -q "type=Issue id=10 reason=This item's agent container has failed ${MAX_CONSECUTIVE_INFRA_FAILURES} times in a row before Claude could even start" "${_notif_log}"
+}
+
+# --- item branch checkout and pre-flight skip (#1914) -----------------------------
+
+# One feed PR, #5 in org/repo, with the given head branch and isCrossRepository value, whose
+# fingerprint changed, so main reaches the work block for it.
+setup_main_feed_pr() {
+    local head="$1" cross="${2:-false}"
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    PR_HEAD="${head}" PR_CROSS="${cross}"
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"%s","comments":[],"reviews":[],"statusCheckRollup":[],"files":[],"isCrossRepository":%s}\n' "${PR_HEAD}" "${PR_CROSS}"; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint() { printf 'fp-old\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    _GH_ME="testuser"
+}
+
+# One feed Issue, #10 in org/repo, with no PR, that main works.
+setup_main_feed_issue() {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+}
+
+@test "main checks out a PR item's head branch before launching it (#1914)" {
+    setup_main_feed_pr feature/sdk-bump
+    local log="${TEST_TMP}/calls"
+    checkout_item_branch() { printf 'checkout %s\n' "$1" >> "${log}"; }
+    invoke_claude() { printf 'invoke %s %s\n' "$2" "$3" >> "${log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${log}")" = "$(printf 'checkout feature/sdk-bump\ninvoke PullRequest 5')" ]
+}
+
+@test "main keeps an Issue, and a PR from a fork, on main (#1914)" {
+    local log="${TEST_TMP}/calls"
+    setup_main_feed_issue
+    checkout_item_branch() { printf '%s\n' "$1" >> "${log}"; }
+    run main
+    [ "${status}" -eq 0 ]
+
+    setup_main_feed_pr feature/from-fork true
+    checkout_item_branch() { printf '%s\n' "$1" >> "${log}"; }
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${log}")" = "$(printf 'main\nmain')" ]
+}
+
+@test "main skips an item whose branch cannot be checked out, without Blocking or charging it (#1914)" {
+    setup_main_feed_pr feature/sdk-bump
+    local claude_log="${TEST_TMP}/claude_log"
+    checkout_item_branch() { return 1; }
+    invoke_claude() { printf '%s\n' "$3" >> "${claude_log}"; }
+    apply_blocked_label() {
+        printf 'BLOCKED %s #%s\n' "$1" "$2"
+        return 0
+    }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(grep -c "could not check out its branch 'feature/sdk-bump' — retrying next tick" <<< "${output}")" -eq 1 ]
+    [[ "${output}" != *"BLOCKED"* ]]
+    [ ! -f "${claude_log}" ]
+    [ ! -f "$(pr_invocation_guard_file_path 5)" ]
+    [ ! -f "$(infra_failure_guard_file_path PullRequest 5)" ]
+}
+
+@test "main skips an item when the checkout cannot be returned to main, without Blocking or charging it (#1914)" {
+    setup_main_feed_issue
+    local claude_log="${TEST_TMP}/claude_log"
+    ensure_repo_current() { return 3; }
+    invoke_claude() { printf '%s\n' "$3" >> "${claude_log}"; }
+    apply_blocked_label() {
+        printf 'BLOCKED %s #%s\n' "$1" "$2"
+        return 0
+    }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Skipping Issue #10 in org/repo: the checkout could not be returned to main and rebased"* ]]
+    [[ "${output}" != *"BLOCKED"* ]]
+    [ ! -f "${claude_log}" ]
+    [ ! -f "$(invocation_guard_file_path Issue 10)" ]
+}
+
+@test "main skips a PR item while the checkout holds another item's uncommitted changes (#1914)" {
+    setup_main_feed_pr feature/sdk-bump
+    local claude_log="${TEST_TMP}/claude_log"
+    ensure_repo_current() {
+        DIRTY_BRANCH="feature/other-item"
+        return 1
+    }
+    invoke_claude() { printf '%s\n' "$3" >> "${claude_log}"; }
+    apply_blocked_label() {
+        printf 'BLOCKED %s #%s\n' "$1" "$2"
+        return 0
+    }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"uncommitted changes on 'feature/other-item', which is not this item's branch"* ]]
+    [[ "${output}" != *"BLOCKED"* ]]
+    [ ! -f "${claude_log}" ]
+    [ ! -f "$(pr_invocation_guard_file_path 5)" ]
+}
+
+@test "main hands a dirty checkout to the agent of the item whose branch it is on, without switching branch (#1914)" {
+    setup_main_feed_pr feature/sdk-bump
+    local log="${TEST_TMP}/calls"
+    ensure_repo_current() {
+        DIRTY_BRANCH="feature/sdk-bump"
+        return 1
+    }
+    checkout_item_branch() { printf 'checkout %s\n' "$1" >> "${log}"; }
+    invoke_claude() { printf 'invoke %s\n' "$3" >> "${log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Repo not clean for org/repo — handing off to agent to recover"* ]]
+    [ "$(cat "${log}")" = "invoke 5" ]
+}
+
+@test "main never Blocks an item whose own checkout fails the container pre-flight, and records the image and head (#1914)" {
+    setup_main_feed_issue
+    invoke_claude() {
+        PREFLIGHT_GITHUB_SSH_AUTH_FAILED=0
+        PREFLIGHT_FAILURE_KIND="container"
+        return 2
+    }
+    current_agent_image_sha() { printf 'img1'; }
+    checkout_head_sha() { printf 'head1'; }
+    apply_blocked_label() {
+        printf 'BLOCKED %s #%s\n' "$1" "$2"
+        return 0
+    }
+    make_stub gh 'exit 0'
+    # Past the host-fault threshold already: the item's own pre-flight failure must still not Block.
+    save_infra_failure_count "Issue" 10 "${MAX_CONSECUTIVE_INFRA_FAILURES}"
+    # It failed once already on this image and head, so this repeat parks it.
+    record_preflight_failure Issue 10 head1 > /dev/null
+
+    run main
+    # Still a failed tick, so the unit's failure alert fires once for it.
+    [ "${status}" -eq 1 ]
+    [[ "${output}" != *"BLOCKED"* ]]
+    [[ "${output}" != *"times in a row before Claude could even start"* ]]
+    [ "$(grep -c "agent container failed its pre-flight on 'main' (head1) with image img1 — skipping it until the image or the branch changes" <<< "${output}")" -eq 1 ]
+    [ "$(cat "$(preflight_failure_file_path Issue 10)")" = "img1 head1 2" ]
+    [ ! -f "$(invocation_guard_file_path Issue 10)" ]
+    # The host-fault counter is left as it was.
+    load_infra_failure_count "Issue" 10
+    [ "${INFRA_FAILURE_COUNT}" -eq "${MAX_CONSECUTIVE_INFRA_FAILURES}" ]
+}
+
+@test "main retries an item after its first pre-flight failure on an image and head, before parking it (#1914)" {
+    setup_main_feed_issue
+    invoke_claude() {
+        PREFLIGHT_GITHUB_SSH_AUTH_FAILED=0
+        PREFLIGHT_FAILURE_KIND="container"
+        return 2
+    }
+    current_agent_image_sha() { printf 'img1'; }
+    checkout_head_sha() { printf 'head1'; }
+
+    run main
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"agent container failed its pre-flight on 'main' (head1) with image img1 (1/${PREFLIGHT_FAILURES_BEFORE_SKIP}) — retrying next tick"* ]]
+    [ "$(cat "$(preflight_failure_file_path Issue 10)")" = "img1 head1 1" ]
+    [ ! -f "$(invocation_guard_file_path Issue 10)" ]
+    # The first failure still marks the item as touched, so the board is not reset on the retry.
+    [ -f "$(infra_failure_guard_file_path Issue 10)" ]
+}
+
+@test "main skips an item parked on a pre-flight failure without launching it while the image and head are unchanged (#1914)" {
+    setup_main_feed_issue
+    local claude_log="${TEST_TMP}/claude_log"
+    invoke_claude() { printf '%s\n' "$3" >> "${claude_log}"; }
+    current_agent_image_sha() { printf 'img1'; }
+    checkout_head_sha() { printf 'head1'; }
+    record_preflight_failure Issue 10 head1 > /dev/null
+    record_preflight_failure Issue 10 head1 > /dev/null
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${claude_log}" ]
+    [[ "${output}" == *"unchanged: 1"* ]]
+    [[ "${output}" != *"failed its pre-flight"* ]]
+    [ -f "$(preflight_failure_file_path Issue 10)" ]
+}
+
+@test "main launches a parked item again once the agent image changes, and clears its record after a real session (#1914)" {
+    setup_main_feed_issue
+    local claude_log="${TEST_TMP}/claude_log"
+    invoke_claude() { printf '%s\n' "$3" >> "${claude_log}"; }
+    current_agent_image_sha() { printf 'img1'; }
+    checkout_head_sha() { printf 'head1'; }
+    record_preflight_failure Issue 10 head1 > /dev/null
+    current_agent_image_sha() { printf 'img2'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${claude_log}")" = "10" ]
+    [[ "${output}" == *"agent image is now img2 (pre-flight failed on img1) — trying again"* ]]
+    [ ! -f "$(preflight_failure_file_path Issue 10)" ]
 }
 
 @test "main does not escalate to Blocked below the consecutive-infra-failure threshold (#1133 review)" {

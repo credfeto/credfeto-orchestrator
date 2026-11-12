@@ -53,6 +53,104 @@ load oneshot_helper
     [ "${status}" -ne 0 ]
 }
 
+# --- pre-flight failure record (#1914) ------------------------------------------
+
+@test "record_preflight_failure records the image and head the item failed on and prints the image SHA and count (#1914)" {
+    current_agent_image_sha() { printf 'img1'; }
+    run record_preflight_failure Issue 10 head1
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "img1 1" ]
+    [ "$(cat "$(preflight_failure_file_path Issue 10)")" = "img1 head1 1" ]
+}
+
+@test "record_preflight_failure counts failures in a row on the same image and head, and restarts on a new one (#1914)" {
+    current_agent_image_sha() { printf 'img1'; }
+    record_preflight_failure Issue 10 head1 > /dev/null
+    run record_preflight_failure Issue 10 head1
+    [ "${output}" = "img1 2" ]
+    run record_preflight_failure Issue 10 head2
+    [ "${output}" = "img1 1" ]
+    current_agent_image_sha() { printf 'img2'; }
+    run record_preflight_failure Issue 10 head2
+    [ "${output}" = "img2 1" ]
+    [ "$(cat "$(preflight_failure_file_path Issue 10)")" = "img2 head2 1" ]
+}
+
+@test "record_preflight_failure records nothing when the image SHA cannot be read (#1914)" {
+    current_agent_image_sha() { return 1; }
+    run record_preflight_failure Issue 10 head1
+    [ "${status}" -ne 0 ]
+    [ ! -f "$(preflight_failure_file_path Issue 10)" ]
+}
+
+@test "preflight_failure_still_applies is false, and pulls nothing, for an item with no record (#1914)" {
+    local pull_log="${TEST_TMP}/pulls"
+    pull_agent_image_once() { printf 'pull\n' >> "${pull_log}"; }
+    current_agent_image_sha() { printf 'img1'; }
+    run preflight_failure_still_applies Issue 10 head1
+    [ "${status}" -eq 1 ]
+    [ ! -f "${pull_log}" ]
+}
+
+@test "preflight_failure_still_applies is true, silently, while the image and the head are unchanged (#1914)" {
+    local pull_log="${TEST_TMP}/pulls"
+    pull_agent_image_once() { printf 'pull %s %s\n' "$1" "$2" >> "${pull_log}"; }
+    current_agent_image_sha() { printf 'img1'; }
+    record_preflight_failure Issue 10 head1 > /dev/null
+    record_preflight_failure Issue 10 head1 > /dev/null
+
+    run preflight_failure_still_applies Issue 10 head1
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    # The image is pulled first, so a newly built image is seen without launching the item.
+    [ "$(cat "${pull_log}")" = "pull Issue 10" ]
+    [ -f "$(preflight_failure_file_path Issue 10)" ]
+}
+
+@test "preflight_failure_still_applies retries, keeping the record, until the failure has repeated (#1914)" {
+    pull_agent_image_once() { return 0; }
+    current_agent_image_sha() { printf 'img1'; }
+    record_preflight_failure Issue 10 head1 > /dev/null
+
+    run preflight_failure_still_applies Issue 10 head1
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ -f "$(preflight_failure_file_path Issue 10)" ]
+}
+
+@test "preflight_failure_still_applies retries the item once the agent image changes (#1914)" {
+    pull_agent_image_once() { return 0; }
+    current_agent_image_sha() { printf 'img1'; }
+    record_preflight_failure Issue 10 head1 > /dev/null
+    current_agent_image_sha() { printf 'img2'; }
+
+    run preflight_failure_still_applies Issue 10 head1
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"agent image is now img2 (pre-flight failed on img1)"* ]]
+    [ ! -f "$(preflight_failure_file_path Issue 10)" ]
+}
+
+@test "preflight_failure_still_applies retries the item once its branch head changes (#1914)" {
+    pull_agent_image_once() { return 0; }
+    current_agent_image_sha() { printf 'img1'; }
+    record_preflight_failure PullRequest 5 head1 > /dev/null
+
+    run preflight_failure_still_applies PullRequest 5 head2
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"checkout head is now head2 (pre-flight failed on head1)"* ]]
+    [ ! -f "$(preflight_failure_file_path PullRequest 5)" ]
+}
+
+@test "preflight_failure_still_applies retries the item when the image SHA cannot be read (#1914)" {
+    pull_agent_image_once() { return 0; }
+    current_agent_image_sha() { printf 'img1'; }
+    record_preflight_failure Issue 10 head1 > /dev/null
+    current_agent_image_sha() { return 1; }
+
+    run preflight_failure_still_applies Issue 10 head1
+    [ "${status}" -eq 1 ]
+}
+
 @test "try_auto_unblock_env_diagnosed_pr does nothing when the PR has no environment-block marker" {
     export GH_CALL_LOG="${TEST_TMP}/gh_calls"
     # shellcheck disable=SC2016

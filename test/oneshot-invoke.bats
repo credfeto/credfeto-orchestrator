@@ -895,6 +895,7 @@ STUBEOF
     invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2> /dev/null || rc=$?
     [ "${rc}" -eq 2 ]
     [ "${PREFLIGHT_GITHUB_SSH_AUTH_FAILED}" = "1" ]
+    [ "${PREFLIGHT_FAILURE_KIND}" = "github-ssh-auth" ]
 }
 
 @test "invoke_claude clears the GitHub SSH-auth flag for any other pre-flight failure (#1846)" {
@@ -917,6 +918,27 @@ STUBEOF
     invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2> /dev/null || rc=$?
     [ "${rc}" -eq 2 ]
     [ "${PREFLIGHT_GITHUB_SSH_AUTH_FAILED}" = "0" ]
+    # The entrypoint refused the item's own checkout: main() records it against the image and
+    # skips the item rather than Blocking it (#1914).
+    [ "${PREFLIGHT_FAILURE_KIND}" = "container" ]
+}
+
+@test "invoke_claude reports a container-name conflict as a host pre-flight failure (#1914)" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+printf 'Error: container name "orchestrator-credfeto" is already in use by container abc123def456\n' >&2
+exit 1
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    PREFLIGHT_FAILURE_KIND="container"
+    local rc=0
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2> /dev/null || rc=$?
+    [ "${rc}" -eq 2 ]
+    [ "${PREFLIGHT_FAILURE_KIND}" = "name-conflict" ]
 }
 
 @test "PREFLIGHT_GITHUB_SSH_AUTH_TEXT matches the agent entrypoint's SSH-auth pre-flight message (#1846)" {
