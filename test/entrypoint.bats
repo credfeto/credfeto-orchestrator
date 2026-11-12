@@ -1759,15 +1759,12 @@ run_entrypoint_in_repo() {
 # anything else, and records and succeeds for every other call, as the default stub does.
 stub_git_tracking_codegraph() {
     local repo_dir="$1"
-    cat > "${STUB_BIN}/git" << GITEOF
-#!/usr/bin/env bash
-printf '%s\n' "\$*" >> "${TEST_TMP}/git_args"
-if [ "\$*" = "-C ${repo_dir} ls-files -- .codegraph" ]; then
-    printf '.codegraph/config.json\n'
-fi
-exit 0
-GITEOF
-    chmod +x "${STUB_BIN}/git"
+    make_stub_multiline git \
+        "printf '%s\\n' \"\$*\" >> \"${TEST_TMP}/git_args\"" \
+        "if [ \"\$*\" = \"-C ${repo_dir} ls-files -- .codegraph\" ]; then" \
+        "    printf '.codegraph/config.json\\n'" \
+        "fi" \
+        "exit 0"
 }
 
 # Fixture checkout with the tracked .codegraph/config.json the git stub reports.
@@ -1841,16 +1838,13 @@ TRACKED_CODEGRAPH_WARNING="The checkout tracks files under .codegraph, so CodeGr
 # `git -C <repo_dir> ls-files -- .codegraph`, and records and succeeds for every other call.
 stub_git_failing_codegraph_ls_files() {
     local repo_dir="$1"
-    cat > "${STUB_BIN}/git" << GITEOF
-#!/usr/bin/env bash
-printf '%s\n' "\$*" >> "${TEST_TMP}/git_args"
-if [ "\$*" = "-C ${repo_dir} ls-files -- .codegraph" ]; then
-    printf 'fatal: detected dubious ownership in repository at %s\n' "${repo_dir}" >&2
-    exit 128
-fi
-exit 0
-GITEOF
-    chmod +x "${STUB_BIN}/git"
+    make_stub_multiline git \
+        "printf '%s\\n' \"\$*\" >> \"${TEST_TMP}/git_args\"" \
+        "if [ \"\$*\" = \"-C ${repo_dir} ls-files -- .codegraph\" ]; then" \
+        "    printf 'fatal: detected dubious ownership in repository at %s\\n' \"${repo_dir}\" >&2" \
+        "    exit 128" \
+        "fi" \
+        "exit 0"
 }
 
 @test "entrypoint skips codegraph and keeps the .codegraph files when git ls-files fails on the checkout" {

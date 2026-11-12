@@ -1645,16 +1645,8 @@ STUBEOF
 
 @test "invoke_claude passes CODEGRAPH_INIT_TIMEOUT_SECS as container env var" {
     local args_log="${TEST_TMP}/podman_args"
-    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     CODEGRAPH_INIT_TIMEOUT_SECS=1200
-    cat > "${STUB_BIN}/podman" << STUBEOF
-#!/usr/bin/env bash
-[ "\$1" = "pull" ] && exit 0
-[ "\$1" = "inspect" ] && exit 1
-printf "%s\n" "\$@" >> "${args_log}"
-printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
-STUBEOF
-    chmod +x "${STUB_BIN}/podman"
+    stub_podman_run_logging_args "${args_log}"
 
     invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     grep -qx 'CODEGRAPH_INIT_TIMEOUT_SECS=1200' "${args_log}"
