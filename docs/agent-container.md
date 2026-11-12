@@ -289,7 +289,7 @@ follows the same lifecycle as the [session transcripts](#session-transcripts):
   the container and the purge below counts its modification time as use. The pivot links even
   when the checkout tracks files under `.codegraph/` (see below): it runs before the item's
   branch is checked out, so it cannot tell, and the mount's own check keeps any session from
-  using that index.
+  using that index; the directory it creates then goes unused and is purged once idle.
 - Before every launch, `prune_codegraph_indexes` (`lib/podman`) applies the transcript purge
   (`prune_idle_item_dirs`, with the same `TRANSCRIPT_ITEM_RETENTION_DAYS`) to this tree, with
   one difference: the directory's own modification time also counts as use. A session that
@@ -308,25 +308,23 @@ mount would hide those files, `git` in the container would see them as deleted, 
 `git add -A` could commit the deletion. The mount then neither creates nor touches the index
 directory (`checkout_tracks_codegraph` in `lib/state` makes the check on the item's own branch,
 and counts a `git` failure as not tracked, because on the host it covers a checkout that has not
-been cloned yet). The pivot link is still made, because it runs before the item's branch is
-checked out; the directory it creates goes unused and is purged once idle. The entrypoint makes
-the same `git ls-files -- .codegraph` check itself (`checkout_tracks_codegraph`), so it cannot
-disagree with the checkout the container sees, and then skips CodeGraph: it runs no `init`, so it
-neither rewrites the tracked files nor deletes them in the clean-up after a failed `init`, and
-adds no `.git/info/exclude` entry. Unlike the host's check, it counts a `git` failure as tracked
-and skips CodeGraph the same way, because the checkout always exists in the container, so a
-failure there (a `safe.directory` refusal, an unreadable index) is unexpected and the files it
-cannot list may be tracked. It prints one warning naming the reason, and the session runs without
-an index. The managed MCP server still starts; with no index it only answers that the project is
-not indexed, but if the repository commits a non-empty `.codegraph/codegraph.db` its catch-up and
-watcher can still update that file. Only the agent's own container gets the mount. The pre-check
-container does not, because the entrypoint never builds or reads the index in pre-check mode.
-Podman creates the empty `.codegraph` mountpoint in the checkout, and the `git clean` after the
-session removes it. That works in every repository, because `git clean -X` removes only ignored
-files and the entrypoint's `.git/info/exclude` entry makes `.codegraph/` ignored even where
-`.gitignore` does not list it. CodeGraph's SQLite database and its lock files sit on a plain bind
-mount of a local directory, owned by the user the container's `developer` maps to, so they behave
-as they would in the checkout.
+been cloned yet). The entrypoint makes the same `git ls-files -- .codegraph` check itself
+(`checkout_tracks_codegraph`), so it cannot disagree with the checkout the container sees, and
+then skips CodeGraph: it runs no `init`, so it neither rewrites the tracked files nor deletes them
+in the clean-up after a failed `init`, and adds no `.git/info/exclude` entry. Unlike the host's
+check, it counts a `git` failure as tracked and skips CodeGraph the same way, because the checkout
+always exists in the container, so a failure there (a `safe.directory` refusal, an unreadable
+index) is unexpected and the files it cannot list may be tracked. It prints one warning naming the
+reason, and the session runs without an index. The managed MCP server still starts; with no index
+it only answers that the project is not indexed, but if the repository commits a non-empty
+`.codegraph/codegraph.db` its catch-up and watcher can still update that file. Only the agent's
+own container gets the mount. The pre-check container does not, because the entrypoint never
+builds or reads the index in pre-check mode. Podman creates the empty `.codegraph` mountpoint in
+the checkout, and the `git clean` after the session removes it. That works in every repository,
+because `git clean -X` removes only ignored files and the entrypoint's `.git/info/exclude` entry
+makes `.codegraph/` ignored even where `.gitignore` does not list it. CodeGraph's SQLite database
+and its lock files sit on a plain bind mount of a local directory, owned by the user the
+container's `developer` maps to, so they behave as they would in the checkout.
 
 ### Security note: the index is writable
 
