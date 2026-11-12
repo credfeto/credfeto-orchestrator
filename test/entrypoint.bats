@@ -1749,6 +1749,91 @@ run_entrypoint_in_repo() {
     [ ! -e "${TEST_TMP}/claude_ran" ]
 }
 
+# --- checkout that tracks files under .codegraph ---------------------------------
+
+# Replaces the git stub with one that reports .codegraph/config.json as tracked when asked
+# exactly `git -C <repo_dir> ls-files -- .codegraph`, so a test fails if the entrypoint asks
+# anything else, and records and succeeds for every other call, as the default stub does.
+stub_git_tracking_codegraph() {
+    local repo_dir="$1"
+    cat > "${STUB_BIN}/git" << GITEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${TEST_TMP}/git_args"
+if [ "\$*" = "-C ${repo_dir} ls-files -- .codegraph" ]; then
+    printf '.codegraph/config.json\n'
+fi
+exit 0
+GITEOF
+    chmod +x "${STUB_BIN}/git"
+}
+
+# Fixture checkout with the tracked .codegraph/config.json the git stub reports.
+make_repo_tracking_codegraph() {
+    local repo_dir="$1"
+    mkdir -p "${repo_dir}/.git" "${repo_dir}/.codegraph"
+    printf '{"tracked":true}\n' > "${repo_dir}/.codegraph/config.json"
+    stub_git_tracking_codegraph "${repo_dir}"
+}
+
+TRACKED_CODEGRAPH_WARNING="The checkout tracks files under .codegraph, so CodeGraph is skipped for this session to leave them untouched: no index is built or cleared there and .codegraph/ is not excluded from git"
+
+@test "entrypoint skips codegraph init and keeps the tracked files when the checkout tracks .codegraph, even where init would fail" {
+    setup_entrypoint_stubs
+    # An init that would write into the tracked directory and then fail, so the failed-init
+    # clean-up would delete everything there if the entrypoint ever reached it.
+    # shellcheck disable=SC2016  # the stub body expands at stub run time
+    make_stub_multiline codegraph \
+        'printf '\''%s|%s\n'\'' "$(pwd)" "$*" >> "${TEST_TMP}/codegraph_calls"' \
+        'printf '\''{"rewritten":true}\n'\'' > .codegraph/config.json' \
+        'exit 3'
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    make_repo_tracking_codegraph "${repo_dir}"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ ! -e "${TEST_TMP}/codegraph_calls" ]
+    [ "$(cat "${repo_dir}/.codegraph/config.json")" = '{"tracked":true}' ]
+    [ "$(grep -cF "${TRACKED_CODEGRAPH_WARNING}" <<< "${output}")" -eq 1 ]
+    [[ "${output}" != *"codegraph init failed"* ]]
+    [ -e "${TEST_TMP}/claude_ran" ]
+}
+
+@test "entrypoint does not add .codegraph/ to .git/info/exclude when the checkout tracks .codegraph" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    make_repo_tracking_codegraph "${repo_dir}"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ ! -e "${repo_dir}/.git/info/exclude" ]
+}
+
+@test "entrypoint skips codegraph without reporting an existing index when the checkout tracks .codegraph/codegraph.db" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    make_repo_tracking_codegraph "${repo_dir}"
+    printf 'SQLite format 3\n' > "${repo_dir}/.codegraph/codegraph.db"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ ! -e "${TEST_TMP}/codegraph_calls" ]
+    [[ "${output}" != *"CodeGraph index already exists"* ]]
+    [ "$(cat "${repo_dir}/.codegraph/codegraph.db")" = "SQLite format 3" ]
+}
+
+@test "entrypoint warns once and adds no exclude entry in ORCHESTRATOR_PRECHECK mode when the checkout tracks .codegraph" {
+    setup_entrypoint_stubs
+    make_stub pre-commit-check 'exit 0'
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    make_repo_tracking_codegraph "${repo_dir}"
+
+    run_entrypoint_in_repo "${repo_dir}" ORCHESTRATOR_PRECHECK=1
+    [ "${status}" -eq 0 ]
+    [ "$(grep -cF "${TRACKED_CODEGRAPH_WARNING}" <<< "${output}")" -eq 1 ]
+    [ ! -e "${repo_dir}/.git/info/exclude" ]
+    [ ! -e "${TEST_TMP}/codegraph_calls" ]
+}
+
 # --- exclude_codegraph_from_git --------------------------------------------------
 
 @test "entrypoint adds .codegraph/ to the checkout's .git/info/exclude, creating .git/info" {

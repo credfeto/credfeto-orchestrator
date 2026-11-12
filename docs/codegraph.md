@@ -83,8 +83,9 @@ CodeGraph needs. Nothing has to be done by hand.
   `.codegraph`, so the index persists between that item's containers, an Issue and the PR it
   pivots to share one, a different item starts with a fresh `init`, and a directory no session
   has used for 14 days is purged, the same lifecycle as the session transcripts. A repository
-  that tracks files under `.codegraph/` gets no mount, because it would hide them, so its index
-  is rebuilt in the checkout every session. See
+  that tracks files under `.codegraph/` gets no mount, because it would hide them, and the
+  entrypoint then skips CodeGraph, building and deleting nothing there and adding no exclude
+  entry, so that repository's sessions run without an index. See
   [agent-container.md](agent-container.md#the-codegraph-index) for the details, and
   [its security note](agent-container.md#security-note-the-index-is-writable) for why the
   writable, persistent index is an accepted risk. While the
@@ -220,8 +221,9 @@ repository that does not yet ignore `.codegraph/`, a `git add -A` would commit
 `.codegraph/.gitignore`. So before it indexes, and in pre-check mode too, the agent container's
 entrypoint adds `.codegraph/` to the checkout's `.git/info/exclude` (`exclude_codegraph_from_git`
 in `containers/agent/entrypoint.sh`). It appends the line only when it is missing, creates
-`.git/info/` when needed, and never touches the repository's tracked `.gitignore`. If the write
-fails it only warns (see
+`.git/info/` when needed, and never touches the repository's tracked `.gitignore`. It adds no
+line when the checkout tracks files under `.codegraph/`, because the entrypoint then skips
+CodeGraph and writes nothing there. If the write fails it only warns (see
 [agent-container.md](agent-container.md#what-the-entrypoint-checks-before-the-agent-ever-starts)).
 The exclude is local to that checkout and is never pushed, so the `.gitignore` lines above are
 still wanted. On a workstation nothing writes the exclude, so check that a repository ignores
