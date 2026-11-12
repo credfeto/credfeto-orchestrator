@@ -139,7 +139,7 @@ empty.
 
 Just before it starts `claude`, the entrypoint builds the CodeGraph index that the managed
 `codegraph` MCP server reads, but only when there is none. When `.codegraph/codegraph.db` is
-missing it runs `codegraph init --yes -v` in the repository checkout with stdin closed, which
+missing or empty it runs `codegraph init --yes -v` in the repository checkout with stdin closed, which
 creates `.codegraph/` and builds the full index. Otherwise it leaves the index alone and runs no
 `codegraph` command: `.codegraph/` is the item's own host directory, which persists between that
 item's containers (see [The CodeGraph index](#the-codegraph-index)), and the MCP server catches
@@ -149,8 +149,12 @@ step is non-fatal: if `codegraph init` fails, the entrypoint prints a warning an
 `claude`, because a missing index only makes code lookups slower. The build is also time-limited,
 because it runs inside the session's `AGENT_TIMEOUT_MINUTES` and a hung build would otherwise end
 the session as an agent timeout: after `CODEGRAPH_INIT_TIMEOUT_SECS` (default 900, set in
-`lib/globals` and passed in by `oneshot`) the entrypoint stops it, prints a warning and starts
-`claude` without an index. It is skipped when the
+`lib/globals` and passed in by `oneshot`) the entrypoint stops it, killing it 10 seconds later
+if it ignores the stop (exit 137, also reported as timed out), prints a warning and starts
+`claude` without an index. After any failed, timed-out or killed `init` the entrypoint deletes
+everything inside `.codegraph/` (never the directory itself, which is a mountpoint), because the
+directory persists and `init` treats a half-built database that already has its schema as
+initialized; the next session then runs `init` again from empty. It is skipped when the
 checkout has no `.git` directory, and in pre-check mode (below). Running it before `claude` keeps
 indexing from competing with the agent's own builds and tests for the container's memory.
 `codegraph init` writes `.codegraph/.gitignore`, which ignores everything else in that directory.
