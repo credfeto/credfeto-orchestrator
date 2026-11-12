@@ -474,6 +474,51 @@ resolve_resumable_issue_branch() {
     return 0
 }
 
+# Says whether another item in this run's queue (items_json, the priorities feed after the owner
+# filter) owns a dirty checkout's branch, by the same rule as dirty_branch_belongs_to_item
+# (lib/git): a queued Issue in the repository owns main and a branch named for it, and a queued
+# PR owns its head branch. The current item (item_type, item_id) is left out. Outputs the owner
+# as "<type> #<id>" and returns 0 when one is queued: that item recovers the work, so the caller
+# keeps skipping. Returns 1 when none is, and always for a detached HEAD (an empty branch), so
+# the caller may stash the checkout. Returns 2 when the open PRs on the branch cannot be listed:
+# whether a queued PR owns it is then unknown, and the caller must not stash.
+dirty_branch_owned_by_queued_item() {
+    local items_json="$1" repo="$2" dirty_branch="$3" item_type="$4" item_id="$5"
+    [ -n "${dirty_branch}" ] || return 1
+
+    local queued_type queued_id head_prs pr_number
+    local -a queued_prs=()
+    while IFS=$'\t' read -r queued_type queued_id; do
+        [ -n "${queued_id}" ] || continue
+        [ "${queued_type}" = "${item_type}" ] && [ "${queued_id}" = "${item_id}" ] && continue
+        if [ "${queued_type}" = "Issue" ]; then
+            if dirty_branch_belongs_to_item Issue "${queued_id}" "${dirty_branch}" ""; then
+                printf 'Issue #%s' "${queued_id}"
+                return 0
+            fi
+        elif [ "${queued_type}" = "PullRequest" ]; then
+            queued_prs+=("${queued_id}")
+        fi
+    done < <(printf '%s' "${items_json}" | jq -r --arg repo "${repo}" \
+        '.[] | select(.repository == $repo) | [.itemType, (.id | tostring)] | @tsv' 2> /dev/null)
+
+    [ "${#queued_prs[@]}" -gt 0 ] || return 1
+    if ! head_prs=$(gh pr list --repo "${repo}" --head "${dirty_branch}" --state open --json number --jq '.[].number' 2> /dev/null); then
+        warn "Could not list the open PRs on '${dirty_branch}' in ${repo} to tell whether a queued item owns it"
+        return 2
+    fi
+    while IFS= read -r pr_number; do
+        [ -n "${pr_number}" ] || continue
+        for queued_id in "${queued_prs[@]}"; do
+            if [ "${pr_number}" = "${queued_id}" ]; then
+                printf 'PullRequest #%s' "${queued_id}"
+                return 0
+            fi
+        done
+    done <<< "${head_prs}"
+    return 1
+}
+
 pr_has_dependency_label() {
     local pr_json="$1"
     printf '%s' "${pr_json}" | jq -e '[(.labels // [])[] | .name | ascii_downcase] | any(contains("dependencies"))' > /dev/null 2>&1

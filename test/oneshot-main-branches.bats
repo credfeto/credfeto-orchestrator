@@ -382,6 +382,165 @@ push_remote_branch() {
     [ "${status}" -eq 1 ]
 }
 
+# --- autostash_dirty_checkout / dirty_branch_owned_by_queued_item (#1917) -------
+
+# Leaves REPO_WORK_DIR on branch, live on origin, with an uncommitted change to a tracked file:
+# the state ensure_repo_current reports as a dirty checkout.
+make_dirty_branch_checkout() {
+    local remote_dir="$1" branch="$2"
+    push_remote_branch "${remote_dir}" "${branch}"
+    ensure_repo_current > /dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" checkout -q -B "${branch}" --track "origin/${branch}" > /dev/null 2>&1
+    printf 'tracked\n' > "${REPO_WORK_DIR}/work.txt"
+    git -C "${REPO_WORK_DIR}" add work.txt > /dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" -c commit.gpgsign=false commit -q -m "work" > /dev/null 2>&1
+    printf 'unfinished\n' >> "${REPO_WORK_DIR}/work.txt"
+}
+
+@test "autostash_dirty_checkout stashes a dirty checkout on a branch no item owns, and the checkout then returns to main (#1917)" {
+    local remote_dir rc=0 subject_regex
+    remote_dir=$(setup_ensure_repo_current_remote)
+    make_dirty_branch_checkout "${remote_dir}" feature/abandoned
+    DIRTY_BRANCH=""
+    ensure_repo_current > /dev/null 2>&1 || rc=$?
+    [ "${rc}" -eq 1 ]
+    [ "${DIRTY_BRANCH}" = "feature/abandoned" ]
+
+    run autostash_dirty_checkout "${DIRTY_BRANCH}"
+    [ "${status}" -eq 0 ]
+    [ "$(grep -cF "Stashed 1 uncommitted file(s) on 'feature/abandoned', which no queued item owns, for ${REPO_FULL} as stash@{0}" <<< "${output}")" -eq 1 ]
+    subject_regex='^On feature/abandoned: orchestrator-autostash feature/abandoned [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z: dirty tree on unowned branch$'
+    [[ "$(git -C "${REPO_WORK_DIR}" stash list --format='%gs')" =~ ${subject_regex} ]]
+    [ -z "$(git -C "${REPO_WORK_DIR}" status --porcelain --untracked-files=all)" ]
+    # Nothing is dropped: the change is kept in the stash.
+    [ "$(git -C "${REPO_WORK_DIR}" stash show -p 'stash@{0}' | grep -c '^+unfinished')" -eq 1 ]
+
+    # The normal branch switch for the next item now goes ahead.
+    ensure_repo_current > /dev/null 2>&1
+    [ "$(git -C "${REPO_WORK_DIR}" branch --show-current)" = "main" ]
+}
+
+@test "autostash_dirty_checkout includes untracked files in the stash (#1917)" {
+    local remote_dir
+    remote_dir=$(setup_ensure_repo_current_remote)
+    make_dirty_branch_checkout "${remote_dir}" feature/abandoned
+    printf 'new\n' > "${REPO_WORK_DIR}/untracked.txt"
+
+    run autostash_dirty_checkout feature/abandoned
+    [ "${status}" -eq 0 ]
+    [ "$(grep -cF "Stashed 2 uncommitted file(s) on 'feature/abandoned'" <<< "${output}")" -eq 1 ]
+    [ ! -e "${REPO_WORK_DIR}/untracked.txt" ]
+    [ "$(git -C "${REPO_WORK_DIR}" show 'stash@{0}^3:untracked.txt')" = "new" ]
+}
+
+@test "autostash_dirty_checkout stashes a dirty detached HEAD, and the checkout then returns to main (#1917)" {
+    local rc=0 subject_regex
+    setup_ensure_repo_current_remote > /dev/null
+    printf 'tracked\n' > "${REPO_WORK_DIR}/work.txt"
+    git -C "${REPO_WORK_DIR}" add work.txt > /dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" -c commit.gpgsign=false commit -q -m "work" > /dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" checkout -q --detach HEAD > /dev/null 2>&1
+    printf 'unfinished\n' >> "${REPO_WORK_DIR}/work.txt"
+    DIRTY_BRANCH="unset"
+    ensure_repo_current > /dev/null 2>&1 || rc=$?
+    [ "${rc}" -eq 1 ]
+    [ -z "${DIRTY_BRANCH}" ]
+
+    run autostash_dirty_checkout "${DIRTY_BRANCH}"
+    [ "${status}" -eq 0 ]
+    [ "$(grep -cF "Stashed 1 uncommitted file(s) on 'a detached HEAD', which no queued item owns" <<< "${output}")" -eq 1 ]
+    subject_regex='^On \(no branch\): orchestrator-autostash detached [0-9T:-]+Z: dirty tree on unowned branch$'
+    [[ "$(git -C "${REPO_WORK_DIR}" stash list --format='%gs')" =~ ${subject_regex} ]]
+
+    ensure_repo_current > /dev/null 2>&1
+    [ "$(git -C "${REPO_WORK_DIR}" branch --show-current)" = "main" ]
+}
+
+@test "autostash_dirty_checkout returns 1 when the stash fails (#1917)" {
+    REPO_WORK_DIR="${TEST_TMP}/not-a-repo"
+    mkdir -p "${REPO_WORK_DIR}"
+
+    run autostash_dirty_checkout feature/abandoned
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"Failed to stash the uncommitted changes on 'feature/abandoned'"* ]]
+    [[ "${output}" != *"Stashed"* ]]
+}
+
+@test "autostash_dirty_checkout keeps the newest AUTOSTASH_KEEP autostashes and never touches other stashes (#1917)" {
+    AUTOSTASH_KEEP=2
+    setup_ensure_repo_current_remote > /dev/null
+    printf 'tracked\n' > "${REPO_WORK_DIR}/work.txt"
+    git -C "${REPO_WORK_DIR}" add work.txt > /dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" -c commit.gpgsign=false commit -q -m "work" > /dev/null 2>&1
+    local name
+    for name in own a1 other a2 a3; do
+        printf '%s\n' "${name}" >> "${REPO_WORK_DIR}/work.txt"
+        case "${name}" in
+            own) git -C "${REPO_WORK_DIR}" stash push -q -m "a person's own work" ;;
+            other) git -C "${REPO_WORK_DIR}" stash push -q -m "orchestrator-autostash-lookalike, not an autostash" ;;
+            # Autostashes left by earlier runs, more than the limit allows.
+            *) git -C "${REPO_WORK_DIR}" stash push -q -m "orchestrator-autostash ${name} 2026-01-01T00:00:00Z: dirty tree on unowned branch" ;;
+        esac
+    done
+    printf 'a4\n' >> "${REPO_WORK_DIR}/work.txt"
+
+    # Newest first: a4, a3, a2, other, a1, own. a2 and a1 are beyond the newest two.
+    run autostash_dirty_checkout a4
+    [ "${status}" -eq 0 ]
+    [ "$(grep -c "Dropped old autostash" <<< "${output}")" -eq 2 ]
+    [[ "${output}" == *"Dropped old autostash stash@{4} for ${REPO_FULL} (keeping the newest 2): orchestrator-autostash a1 "* ]]
+    [[ "${output}" == *"Dropped old autostash stash@{2} for ${REPO_FULL} (keeping the newest 2): orchestrator-autostash a2 "* ]]
+    local remaining
+    remaining=$(git -C "${REPO_WORK_DIR}" stash list --format='%gs' | sed 's/^On [^:]*: //' | cut -d' ' -f1-2)
+    [ "${remaining}" = "$(printf '%s\n' 'orchestrator-autostash a4' 'orchestrator-autostash a3' 'orchestrator-autostash-lookalike, not' "a person's")" ]
+}
+
+@test "dirty_branch_owned_by_queued_item finds a queued Issue that owns main or its own branch, leaving out the current item (#1917)" {
+    local queue='[{"id":5,"itemType":"PullRequest","repository":"org/repo"},{"id":42,"itemType":"Issue","repository":"org/repo"},{"id":43,"itemType":"Issue","repository":"org/other"}]'
+    make_stub gh 'exit 0'
+
+    run dirty_branch_owned_by_queued_item "${queue}" org/repo fix/42-sdk PullRequest 5
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Issue #42" ]
+    run dirty_branch_owned_by_queued_item "${queue}" org/repo main PullRequest 5
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Issue #42" ]
+    # An Issue queued in another repository owns nothing here.
+    run dirty_branch_owned_by_queued_item "${queue}" org/repo fix/43-other PullRequest 5
+    [ "${status}" -eq 1 ]
+    # The current item itself is left out.
+    run dirty_branch_owned_by_queued_item "${queue}" org/repo fix/42-sdk Issue 42
+    [ "${status}" -eq 1 ]
+}
+
+@test "dirty_branch_owned_by_queued_item finds a queued PR by its head branch (#1917)" {
+    local queue='[{"id":5,"itemType":"PullRequest","repository":"org/repo"},{"id":6,"itemType":"PullRequest","repository":"org/repo"}]'
+    make_stub gh 'case "$*" in *"--head feature/other"*) printf "6\n" ;; esac'
+
+    run dirty_branch_owned_by_queued_item "${queue}" org/repo feature/other PullRequest 5
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "PullRequest #6" ]
+
+    # An open PR on the branch that is not in the queue owns nothing.
+    make_stub gh 'printf "9\n"'
+    run dirty_branch_owned_by_queued_item "${queue}" org/repo feature/other PullRequest 5
+    [ "${status}" -eq 1 ]
+}
+
+@test "dirty_branch_owned_by_queued_item finds no owner for a detached HEAD, and returns 2 when the PR lookup fails (#1917)" {
+    local queue='[{"id":5,"itemType":"PullRequest","repository":"org/repo"},{"id":6,"itemType":"PullRequest","repository":"org/repo"}]'
+    make_stub gh 'exit 1'
+
+    run dirty_branch_owned_by_queued_item "${queue}" org/repo "" PullRequest 5
+    [ "${status}" -eq 1 ]
+    run dirty_branch_owned_by_queued_item "${queue}" org/repo feature/other PullRequest 5
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"Could not list the open PRs on 'feature/other' in org/repo"* ]]
+    # With no other PR queued in the repository there is nothing to look up.
+    run dirty_branch_owned_by_queued_item '[{"id":5,"itemType":"PullRequest","repository":"org/repo"}]' org/repo feature/other PullRequest 5
+    [ "${status}" -eq 1 ]
+}
+
 # --- git_commits_behind unit tests (#1298) --------------------------------------
 
 @test "git_commits_behind reports 0 when ref and upstream are the same commit" {

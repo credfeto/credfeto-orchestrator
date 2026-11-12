@@ -80,11 +80,11 @@ source "${ONESHOT_DIR}/lib/podman" \
 # resolve_gh_me, list_bot_created_open_prs, fetch_pr_fields_json, json_has_commit_author_identity,
 # find_open_nonblocked_pr_for_repo, pr_has_bot_authored_commit, find_human_taken_over_pr_for_issue,
 # resolve_resumable_issue_branch, pr_has_dependency_label,
-# pr_has_dependency_update_branch, pr_should_use_dependency_prompt, and
-# pr_is_human_driven are declared in lib/github. ensure_rules_current,
+# pr_has_dependency_update_branch, pr_should_use_dependency_prompt, dirty_branch_owned_by_queued_item,
+# and pr_is_human_driven are declared in lib/github. ensure_rules_current,
 # clean_local_git_url_rewrites, ensure_repo_current,
-# checkout_item_branch, checkout_head_sha, dirty_branch_belongs_to_item,
-# recover_orphaned_branch, find_stale_issue_branch, and try_nonagentic_rebase are declared in
+# checkout_item_branch, checkout_head_sha, dirty_branch_belongs_to_item, autostash_dirty_checkout,
+# prune_autostashes, recover_orphaned_branch, find_stale_issue_branch, and try_nonagentic_rebase are declared in
 # lib/git.
 # check_required_tools and hash_sha256 are declared in lib/core.
 
@@ -357,6 +357,7 @@ main() {
     local pr_has_unaddressed_comment review_pipeline_finished settled_note
     local pr_required_checks pr_base_requires_checks pr_required_checks_lookup_failed pr_next_phase pr_unaddressed_comments_text
     local ensure_repo_current_status trusted_logins item_branch item_head_sha preflight_image_sha preflight_failures
+    local dirty_owner dirty_owner_rc dirty_skip_reason
     local standoff_pr standoff_rc human_driven_rc closed_takeover_marker closed_pr_tagged_marker
     local stale_issue_branch resumable_branch
     local background_stall
@@ -1309,6 +1310,28 @@ main() {
 
         ensure_repo_current
         ensure_repo_current_status=$?
+        dirty_skip_reason=""
+        if [ "${ensure_repo_current_status}" -eq 1 ] \
+            && ! dirty_branch_belongs_to_item "${item_type}" "${item_id}" "${DIRTY_BRANCH}" "${branch_name}"; then
+            # A dirty checkout that is not this item's: when another queued item owns its branch,
+            # that item recovers it and this one is skipped below. When none does (or HEAD is
+            # detached), nothing ever would, and every item in the repository would be skipped on
+            # every tick, so the work is stashed (kept in the clone, never dropped) and this item
+            # carries on with the normal switch to its own branch.
+            dirty_owner=$(dirty_branch_owned_by_queued_item "${items_json}" "${item_repo}" "${DIRTY_BRANCH}" "${item_type}" "${item_id}")
+            dirty_owner_rc=$?
+            if [ "${dirty_owner_rc}" -eq 0 ]; then
+                dirty_skip_reason="${dirty_owner} in the queue owns it"
+            elif [ "${dirty_owner_rc}" -ne 1 ]; then
+                dirty_skip_reason="it could not be told whether a queued item owns it"
+            elif autostash_dirty_checkout "${DIRTY_BRANCH}"; then
+                DIRTY_BRANCH=""
+                ensure_repo_current
+                ensure_repo_current_status=$?
+            else
+                dirty_skip_reason="no queued item owns it, but stashing it failed"
+            fi
+        fi
         if [ "${ensure_repo_current_status}" -eq 2 ]; then
             count_error=$((count_error + 1))
             item_status_log+=("$(record_item_status "${item_type}" "${item_id}" "${item_repo}" "failed to bring the repo up to date - skipping this item for now")")
@@ -1325,7 +1348,7 @@ main() {
             # branch: another item's uncommitted work is that item's to recover, and handing it to
             # this one would have the pre-flight and the session judge the wrong branch.
             if ! dirty_branch_belongs_to_item "${item_type}" "${item_id}" "${DIRTY_BRANCH}" "${branch_name}"; then
-                warn "Skipping ${item_type} #${item_id} in ${item_repo}: the checkout has uncommitted changes on '${DIRTY_BRANCH:-a detached HEAD}', which is not this item's branch — leaving it for the item that owns it"
+                warn "Skipping ${item_type} #${item_id} in ${item_repo}: the checkout has uncommitted changes on '${DIRTY_BRANCH:-a detached HEAD}', which is not this item's branch (${dirty_skip_reason:-it is still dirty after stashing}) — retrying next tick"
                 count_error=$((count_error + 1))
                 item_status_log+=("$(record_item_status "${item_type}" "${item_id}" "${item_repo}" "checkout has uncommitted changes from another item - skipping this item for now")")
                 continue
