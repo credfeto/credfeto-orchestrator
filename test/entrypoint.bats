@@ -1557,12 +1557,77 @@ run_entrypoint_in_repo() {
     setup_entrypoint_stubs
     local repo_dir="${TEST_TMP}/codegraph-repo"
     mkdir -p "${repo_dir}/.git" "${repo_dir}/.codegraph"
-    touch "${repo_dir}/.codegraph/codegraph.db"
+    printf 'SQLite format 3\n' > "${repo_dir}/.codegraph/codegraph.db"
 
     run_entrypoint_in_repo "${repo_dir}"
     [ "${status}" -eq 0 ]
     [ ! -e "${TEST_TMP}/codegraph_calls" ]
     [[ "${output}" == *"CodeGraph index already exists in ${repo_dir}"* ]]
+    [ -e "${TEST_TMP}/claude_ran" ]
+}
+
+@test "entrypoint runs codegraph init when .codegraph holds an empty database" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git" "${repo_dir}/.codegraph"
+    touch "${repo_dir}/.codegraph/codegraph.db"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${TEST_TMP}/codegraph_calls")" = "${repo_dir}|init --yes -v" ]
+}
+
+@test "entrypoint clears a failed codegraph init's index but keeps the directory, so the next run inits again" {
+    setup_entrypoint_stubs
+    # shellcheck disable=SC2016  # the stub body expands at stub run time
+    make_stub_multiline codegraph \
+        'printf '\''%s|%s\n'\'' "$(pwd)" "$*" >> "${TEST_TMP}/codegraph_calls"' \
+        'printf '\''SQLite format 3\n'\'' > .codegraph/codegraph.db' \
+        'printf '\''*\n'\'' > .codegraph/.gitignore' \
+        'mkdir -p .codegraph/cache && touch .codegraph/cache/partial' \
+        'exit 1'
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git" "${repo_dir}/.codegraph"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"codegraph init failed in ${repo_dir}, continuing without a code index"* ]]
+    [ -d "${repo_dir}/.codegraph" ]
+    [ -z "$(ls -A "${repo_dir}/.codegraph")" ]
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ "$(grep -c '|init --yes -v$' "${TEST_TMP}/codegraph_calls")" -eq 2 ]
+}
+
+@test "entrypoint keeps the index codegraph init built when it succeeds" {
+    setup_entrypoint_stubs
+    # shellcheck disable=SC2016  # the stub body expands at stub run time
+    make_stub_multiline codegraph \
+        'printf '\''SQLite format 3\n'\'' > .codegraph/codegraph.db' \
+        'exit 0'
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git" "${repo_dir}/.codegraph"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ -s "${repo_dir}/.codegraph/codegraph.db" ]
+}
+
+@test "entrypoint logs codegraph init killed with SIGKILL (exit 137) as timed out and clears its index" {
+    setup_entrypoint_stubs
+    # SIGKILL on itself makes timeout exit 137, as it does when --kill-after has to kill a hung init.
+    # shellcheck disable=SC2016  # the stub body expands at stub run time
+    make_stub_multiline codegraph 'touch .codegraph/codegraph.db' 'kill -KILL $$'
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git" "${repo_dir}/.codegraph"
+
+    run_entrypoint_in_repo "${repo_dir}" CODEGRAPH_INIT_TIMEOUT_SECS=30
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"codegraph init timed out after 30s in ${repo_dir}, continuing without a code index"* ]]
+    [[ "${output}" != *"codegraph init failed"* ]]
+    [ ! -e "${repo_dir}/.codegraph/codegraph.db" ]
+    [ -d "${repo_dir}/.codegraph" ]
     [ -e "${TEST_TMP}/claude_ran" ]
 }
 
@@ -1582,13 +1647,14 @@ run_entrypoint_in_repo() {
     setup_entrypoint_stubs
     # exec so the timeout's signal reaches sleep itself and no orphan keeps the output pipe open.
     # shellcheck disable=SC2016  # the stub body expands at stub run time
-    make_stub_multiline codegraph 'touch "${TEST_TMP}/codegraph_started"' 'exec sleep 30'
+    make_stub_multiline codegraph 'touch "${TEST_TMP}/codegraph_started" .codegraph/codegraph.db' 'exec sleep 30'
     local repo_dir="${TEST_TMP}/codegraph-repo"
-    mkdir -p "${repo_dir}/.git"
+    mkdir -p "${repo_dir}/.git" "${repo_dir}/.codegraph"
 
     run_entrypoint_in_repo "${repo_dir}" CODEGRAPH_INIT_TIMEOUT_SECS=1
     [ "${status}" -eq 0 ]
     [ -e "${TEST_TMP}/codegraph_started" ]
+    [ ! -e "${repo_dir}/.codegraph/codegraph.db" ]
     [[ "${output}" == *"codegraph init timed out after 1s in ${repo_dir}, continuing without a code index"* ]]
     [[ "${output}" != *"codegraph init failed"* ]]
     [ -e "${TEST_TMP}/claude_ran" ]
