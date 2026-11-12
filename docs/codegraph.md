@@ -70,7 +70,7 @@ CodeGraph needs. Nothing has to be done by hand.
   watcher updates the index as files change. The entrypoint's own `codegraph init` runs before
   Claude, outside the hooks and permissions, so it is unaffected.
 - **The index.** The entrypoint builds the index just before it starts `claude`, only when it is
-  missing: with no `.codegraph/codegraph.db`, or an empty one, it runs `codegraph init --yes -v`,
+  missing: with no `.codegraph/codegraph.db`, or an empty one, it runs `codegraph init --yes`,
   stopped after `CODEGRAPH_INIT_TIMEOUT_SECS` (default 900; a value above half of the session's
   `AGENT_TIMEOUT_MINUTES` in seconds is clamped to half of it, leaving room for the 10-second
   kill grace) so a hung build cannot use up the

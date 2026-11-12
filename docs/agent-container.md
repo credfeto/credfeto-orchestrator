@@ -139,7 +139,7 @@ empty.
 
 Just before it starts `claude`, the entrypoint builds the CodeGraph index that the managed
 `codegraph` MCP server reads, but only when there is none. When `.codegraph/codegraph.db` is
-missing or empty it runs `codegraph init --yes -v` in the repository checkout with stdin closed, which
+missing or empty it runs `codegraph init --yes` in the repository checkout with stdin closed, which
 creates `.codegraph/` and builds the full index. Otherwise it leaves the index alone and runs no
 `codegraph` command: `.codegraph/` is the item's own host directory, which persists between that
 item's containers (see [The CodeGraph index](#the-codegraph-index)), and the MCP server catches

@@ -1539,7 +1539,7 @@ run_entrypoint_in_repo() {
 
     run_entrypoint_in_repo "${repo_dir}"
     [ "${status}" -eq 0 ]
-    [ "$(cat "${TEST_TMP}/codegraph_calls")" = "${repo_dir}|init --yes -v" ]
+    [ "$(cat "${TEST_TMP}/codegraph_calls")" = "${repo_dir}|init --yes" ]
     [ -e "${TEST_TMP}/claude_ran" ]
 }
 
@@ -1550,7 +1550,7 @@ run_entrypoint_in_repo() {
 
     run_entrypoint_in_repo "${repo_dir}"
     [ "${status}" -eq 0 ]
-    [ "$(cat "${TEST_TMP}/codegraph_calls")" = "${repo_dir}|init --yes -v" ]
+    [ "$(cat "${TEST_TMP}/codegraph_calls")" = "${repo_dir}|init --yes" ]
 }
 
 @test "entrypoint does not run codegraph when the index already exists" {
@@ -1574,7 +1574,7 @@ run_entrypoint_in_repo() {
 
     run_entrypoint_in_repo "${repo_dir}"
     [ "${status}" -eq 0 ]
-    [ "$(cat "${TEST_TMP}/codegraph_calls")" = "${repo_dir}|init --yes -v" ]
+    [ "$(cat "${TEST_TMP}/codegraph_calls")" = "${repo_dir}|init --yes" ]
 }
 
 @test "entrypoint clears a failed codegraph init's index but keeps the directory, so the next run inits again" {
@@ -1597,7 +1597,7 @@ run_entrypoint_in_repo() {
 
     run_entrypoint_in_repo "${repo_dir}"
     [ "${status}" -eq 0 ]
-    [ "$(grep -c '|init --yes -v$' "${TEST_TMP}/codegraph_calls")" -eq 2 ]
+    [ "$(grep -c '|init --yes$' "${TEST_TMP}/codegraph_calls")" -eq 2 ]
 }
 
 @test "entrypoint keeps the index codegraph init built when it succeeds" {
