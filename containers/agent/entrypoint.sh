@@ -447,10 +447,12 @@ remove_incomplete_codegraph_index() {
 # not, as git treats them as part of the pattern), after adding a final newline to an exclude
 # file that lacks one, so the entry never joins the last line. Non-fatal on failure:
 # the repository's own .gitignore may still ignore .codegraph/.
-# Skipped, with the session's only warning about it, when the checkout tracks anything under
-# .codegraph, or git ls-files fails so it cannot tell: the entry would hide new files there from
-# git, and build_missing_codegraph_index then skips CodeGraph too, so the agent works without an
-# index. It runs first in both modes, so the warning is printed once whichever mode runs.
+# Skipped, with a warning, when the checkout tracks anything under .codegraph, or git ls-files
+# fails so it cannot tell: the entry would hide new files there from git, and
+# build_missing_codegraph_index then skips CodeGraph too, so the agent works without an index.
+# The warning is printed once per container start, not once per work item: the pre-check and the
+# agent container each run this, and the host's add_codegraph_index_podman_args (lib/podman)
+# warns about the same checkout before it starts the agent container.
 # WORKSPACE_REPO_DIR overrides the repo path (used by tests).
 exclude_codegraph_from_git() {
     local repo_dir="${WORKSPACE_REPO_DIR:-/workspace/repo}"
