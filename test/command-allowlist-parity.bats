@@ -244,3 +244,34 @@ EXPECTED_NON_BASH_TOOLS=(
         [ "${status}" -ne 0 ]
     done
 }
+
+# Agents bump a transitive dependency in package-lock.json with `npm update <pkg> --package-lock-only`
+# (#1921), so npm update is allowed in the same plain shape as npm install: one entry with the
+# subcommand as the literal first word. A blanket Bash(npm *) or an entry with an option before the
+# subcommand (such as npm --prefix <dir> update) is the wildcard-before-the-subcommand shape the
+# subcommand rule forbids, so --prefix goes after the subcommand, where enforce-allowed-dirs checks
+# it, and the later-position config-option denies cover npm update as they do every subcommand.
+@test "npm update is allowed in the same plain-subcommand shape as npm install, with no wider npm entry (#1921)" {
+    local allow_entries deny_entries wide opt
+    if [ ! -s "${SETTINGS}" ]; then
+        echo "SETTINGS not found or empty: ${SETTINGS}" >&2
+        return 1
+    fi
+    allow_entries=$(jq -r '.permissions.allow[]' "${SETTINGS}")
+    deny_entries=$(jq -r '.permissions.deny[]' "${SETTINGS}")
+
+    printf '%s\n' "${allow_entries}" | grep -qxF 'Bash(npm install *)'
+    printf '%s\n' "${allow_entries}" | grep -qxF 'Bash(npm update *)'
+
+    wide=$(printf '%s\n' "${allow_entries}" | grep -E '^Bash\(npm( \*|\*| -)' | grep -vxF 'Bash(npm --version)' || true)
+    if [ -n "${wide}" ]; then
+        echo "permissions.allow has an npm entry wider than one plain subcommand:" >&2
+        echo "${wide}" >&2
+        return 1
+    fi
+
+    for opt in globalconfig script-shell userconfig; do
+        printf '%s\n' "${deny_entries}" | grep -qxF "Bash(npm * --${opt}*)"
+        printf '%s\n' "${deny_entries}" | grep -qxF "Bash(npm * -${opt}*)"
+    done
+}

@@ -946,6 +946,14 @@ git status'
     [ "${status}" -eq 2 ]
 }
 
+@test "npm update is accepted by name, and an npm_config_* assignment in front of it is blocked like any npm call (#1921)" {
+    run_hook 'npm update lodash --package-lock-only'
+    [ "${status}" -eq 0 ]
+    run_hook 'npm_config_script_shell=/evil npm update lodash'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'assignment to npm_config_script_shell is not permitted'* ]]
+}
+
 @test "env-var-blocklist matching is case-insensitive - npm honours any case of npm_config_ (#1385 security review)" {
     run_hook 'NPM_config_script_shell=/evil npm run build'
     [ "${status}" -eq 2 ]

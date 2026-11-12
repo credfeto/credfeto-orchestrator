@@ -255,6 +255,19 @@ assert_blocked() {
     assert_allowed "npm ci"
 }
 
+@test "npm update gets the same --prefix and config-option checks as npm install (#1921)" {
+    assert_allowed "npm install lodash --package-lock-only"
+    assert_allowed "npm update lodash --package-lock-only"
+    assert_allowed "npm update lodash --package-lock-only --prefix sub"
+    assert_blocked "npm install lodash --package-lock-only --prefix ${OUTSIDE}" 'outside the allowed directories'
+    assert_blocked "npm update lodash --package-lock-only --prefix ${OUTSIDE}" 'outside the allowed directories'
+    assert_blocked "npm --prefix=${OUTSIDE} update lodash" 'outside the allowed directories'
+    assert_blocked "npm update lodash -C ${OUTSIDE}" 'outside the allowed directories'
+    assert_blocked "npm update lodash --script-shell=/evil" '--script-shell'
+    assert_blocked "npm update lodash --userconfig=/evil/.npmrc" '--userconfig'
+    assert_blocked "npm update lodash --globalconf=/evil/npmrc" '--globalconfig'
+}
+
 # --- node ------------------------------------------------------------------------
 
 @test "node running a script under .github/actions is allowed, with an optional leading --check and script arguments" {
