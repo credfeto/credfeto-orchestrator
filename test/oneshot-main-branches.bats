@@ -272,6 +272,116 @@ setup_ensure_repo_current_remote() {
     [ "$(git -C "${REPO_WORK_DIR}" rev-list --count HEAD)" -eq 3 ]
 }
 
+@test "ensure_repo_current returns 3, not a die, when main cannot be rebased onto origin/main (#1914)" {
+    local remote_dir other
+    remote_dir=$(setup_ensure_repo_current_remote)
+    printf 'local\n' > "${REPO_WORK_DIR}/clash.txt"
+    git -C "${REPO_WORK_DIR}" add clash.txt > /dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" -c commit.gpgsign=false commit -m "local" > /dev/null 2>&1
+    other="${TEST_TMP}/other-clone"
+    git clone -q "${remote_dir}" "${other}"
+    printf 'remote\n' > "${other}/clash.txt"
+    git -C "${other}" add clash.txt > /dev/null 2>&1
+    git -C "${other}" -c user.email=t@example.com -c user.name=T -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -m "remote" > /dev/null 2>&1
+    git -C "${other}" push -q origin main > /dev/null 2>&1
+
+    run ensure_repo_current
+    [ "${status}" -eq 3 ]
+    [[ "${output}" == *"Failed to rebase main with origin/main"* ]]
+    # The interrupted rebase is aborted, so the next tick starts from a usable checkout.
+    [ ! -d "$(git -C "${REPO_WORK_DIR}" rev-parse --absolute-git-dir)/rebase-merge" ]
+    [ "$(git -C "${REPO_WORK_DIR}" branch --show-current)" = "main" ]
+}
+
+# --- checkout_item_branch / dirty_branch_belongs_to_item (#1914) ----------------
+
+# Pushes branch (one commit ahead of main) to remote_dir from an independent clone, so the
+# checkout under test only sees it on origin once it fetches.
+push_remote_branch() {
+    local remote_dir="$1" branch="$2" clone_dir="${TEST_TMP}/branch-clone-${RANDOM}"
+    git clone -q "${remote_dir}" "${clone_dir}"
+    git -C "${clone_dir}" checkout -q -b "${branch}"
+    git -C "${clone_dir}" -c user.email=t@example.com -c user.name=T -c commit.gpgsign=false -c core.hooksPath=/dev/null \
+        commit -q --allow-empty -m "work on ${branch}"
+    git -C "${clone_dir}" push -q origin "${branch}" > /dev/null 2>&1
+}
+
+@test "checkout_item_branch puts a clean checkout on a PR's head branch, tracking origin (#1914)" {
+    local remote_dir
+    remote_dir=$(setup_ensure_repo_current_remote)
+    push_remote_branch "${remote_dir}" feature/sdk-bump
+    ensure_repo_current > /dev/null 2>&1
+
+    run checkout_item_branch feature/sdk-bump
+    [ "${status}" -eq 0 ]
+    [ "$(git -C "${REPO_WORK_DIR}" branch --show-current)" = "feature/sdk-bump" ]
+    [ "$(git -C "${REPO_WORK_DIR}" rev-parse HEAD)" = "$(git -C "${REPO_WORK_DIR}" rev-parse origin/feature/sdk-bump)" ]
+    [ "$(git -C "${REPO_WORK_DIR}" rev-parse --abbrev-ref 'feature/sdk-bump@{upstream}')" = "origin/feature/sdk-bump" ]
+}
+
+@test "checkout_item_branch resets a stale local copy of the head branch to origin's (#1914)" {
+    local remote_dir
+    remote_dir=$(setup_ensure_repo_current_remote)
+    # A local branch of the same name left behind at main's old tip by an earlier session.
+    git -C "${REPO_WORK_DIR}" branch feature/sdk-bump > /dev/null 2>&1
+    push_remote_branch "${remote_dir}" feature/sdk-bump
+    ensure_repo_current > /dev/null 2>&1
+    [ "$(git -C "${REPO_WORK_DIR}" rev-parse feature/sdk-bump)" != "$(git -C "${REPO_WORK_DIR}" rev-parse origin/feature/sdk-bump)" ]
+
+    run checkout_item_branch feature/sdk-bump
+    [ "${status}" -eq 0 ]
+    [ "$(git -C "${REPO_WORK_DIR}" branch --show-current)" = "feature/sdk-bump" ]
+    [ "$(git -C "${REPO_WORK_DIR}" rev-parse HEAD)" = "$(git -C "${REPO_WORK_DIR}" rev-parse origin/feature/sdk-bump)" ]
+}
+
+@test "checkout_item_branch fails, leaving the checkout on main, when the head branch is not on origin (#1914)" {
+    setup_ensure_repo_current_remote > /dev/null
+    ensure_repo_current > /dev/null 2>&1
+
+    run checkout_item_branch feature/gone
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"Branch 'feature/gone' does not exist on origin"* ]]
+    [ "$(git -C "${REPO_WORK_DIR}" branch --show-current)" = "main" ]
+}
+
+@test "checkout_item_branch leaves an Issue's checkout on main (#1914)" {
+    setup_ensure_repo_current_remote > /dev/null
+    ensure_repo_current > /dev/null 2>&1
+
+    run checkout_item_branch main
+    [ "${status}" -eq 0 ]
+    [ "$(git -C "${REPO_WORK_DIR}" branch --show-current)" = "main" ]
+}
+
+@test "checkout_head_sha prints the commit the checkout is on (#1914)" {
+    setup_ensure_repo_current_remote > /dev/null
+    run checkout_head_sha
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(git -C "${REPO_WORK_DIR}" rev-parse HEAD)" ]
+}
+
+@test "dirty_branch_belongs_to_item matches a PR only on its own head branch (#1914)" {
+    dirty_branch_belongs_to_item PullRequest 5 feature/sdk-bump feature/sdk-bump
+    run dirty_branch_belongs_to_item PullRequest 5 feature/other feature/sdk-bump
+    [ "${status}" -eq 1 ]
+    run dirty_branch_belongs_to_item PullRequest 5 main feature/sdk-bump
+    [ "${status}" -eq 1 ]
+    run dirty_branch_belongs_to_item PullRequest 5 "" feature/sdk-bump
+    [ "${status}" -eq 1 ]
+}
+
+@test "dirty_branch_belongs_to_item matches an Issue on main or on a branch named for it (#1914)" {
+    dirty_branch_belongs_to_item Issue 42 main ""
+    dirty_branch_belongs_to_item Issue 42 fix/42-sdk ""
+    run dirty_branch_belongs_to_item Issue 42 fix/420-other ""
+    [ "${status}" -eq 1 ]
+    run dirty_branch_belongs_to_item Issue 42 feature/sdk-bump ""
+    [ "${status}" -eq 1 ]
+    # A detached HEAD belongs to no item.
+    run dirty_branch_belongs_to_item Issue 42 "" ""
+    [ "${status}" -eq 1 ]
+}
+
 # --- git_commits_behind unit tests (#1298) --------------------------------------
 
 @test "git_commits_behind reports 0 when ref and upstream are the same commit" {

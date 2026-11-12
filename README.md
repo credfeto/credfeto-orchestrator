@@ -190,13 +190,37 @@ pre-flight git SSH auth failed — treating as a likely GitHub outage, skipping 
 
 picks no further items and exits 0, so the unit does not record a failure.
 
-- As with any pre-flight failure, the attempt is not counted against the item's invocation
-  budget, and the item's consecutive pre-flight failure counter still advances. A key that GitHub
-  really does refuse is therefore still marked `Blocked` after `MAX_CONSECUTIVE_INFRA_FAILURES`
-  ticks in a row.
+- As with any pre-flight failure caused by the host (this one, or a container-name conflict),
+  the attempt is not counted against the item's invocation budget, and the item's consecutive
+  pre-flight failure counter still advances. A key that GitHub really does refuse is therefore
+  still marked `Blocked` after `MAX_CONSECUTIVE_INFRA_FAILURES` ticks in a row.
 - Other pre-flight failures behave as before: `oneshot` moves on to the next item and, if no
   session runs, exits 1 so the unit's failure alert fires. If an earlier item in the same tick
   failed pre-flight for another reason, the tick still exits 1.
+
+### The item's own checkout
+
+Before it launches a container for an item, `oneshot` puts a clean repository checkout on the
+branch the item needs: a PR's head branch, tracking origin, or `main` for an issue (and for a PR
+from a fork). The container's pre-flight, such as the .NET SDK check against `global.json`,
+therefore judges the item's own files.
+
+Local checkout state never gets an item marked `Blocked`. The item is skipped for the tick, with
+one log line saying why, no agent and no invocation or idle budget charged, when:
+
+- the checkout cannot be put on that branch (a checkout or rebase failure), or
+- it holds uncommitted changes on another item's branch. A dirty checkout goes to the agent to
+  recover only for the item whose branch it is on (for an issue, `main` or a branch named for
+  the issue).
+
+When the agent container's pre-flight refuses the item's own checkout (for example, its
+`global.json` asks for an SDK the image does not have yet), `oneshot` logs it and records the
+agent image SHA and the checkout's commit in the item's `.preflight-failure` state file. Once it
+has failed `PREFLIGHT_FAILURES_BEFORE_SKIP` times (default 2) in a row on the same image and
+commit, the item is skipped without launching it, and without further log lines, while both are
+unchanged; the repeat keeps a one-off container start failure from parking the item. A new agent
+image, or a new commit on the item's branch (on `main`, for an issue), retries it automatically.
+The item is never Blocked for this.
 
 ### Unit-failure alerts (`notify-unit-failure`)
 

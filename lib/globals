@@ -484,9 +484,20 @@ MAX_ISSUE_IDLE_INVOCATIONS="${MAX_ISSUE_IDLE_INVOCATIONS:-5}"
 MAX_PR_ENV_AUTO_UNBLOCKS="${MAX_PR_ENV_AUTO_UNBLOCKS:-3}"
 [[ "${MAX_PR_ENV_AUTO_UNBLOCKS}" =~ ^[1-9][0-9]*$ ]] || MAX_PR_ENV_AUTO_UNBLOCKS=3
 
+# How many times in a row an item's own checkout must fail the agent container's pre-flight, on
+# the same agent image and the same checkout head, before the item is skipped until either
+# changes (preflight_failure_still_applies, lib/state). The repeat tells a check that will keep
+# failing (an SDK the image does not have) from a one-off container start failure, which would
+# otherwise park the item until the next image build or push. Never Blocks. Override with
+# PREFLIGHT_FAILURES_BEFORE_SKIP.
+PREFLIGHT_FAILURES_BEFORE_SKIP="${PREFLIGHT_FAILURES_BEFORE_SKIP:-2}"
+[[ "${PREFLIGHT_FAILURES_BEFORE_SKIP}" =~ ^[1-9][0-9]*$ ]] || PREFLIGHT_FAILURES_BEFORE_SKIP=2
+
 # How many CONSECUTIVE agent-container failures before Claude ever starts (invoke_claude
-# returning 2 — see run_claude_fresh, #1133) an item tolerates before being marked Blocked for
-# a human. This budget is separate from MAX_PR_TOTAL_INVOCATIONS/MAX_ISSUE_TOTAL_INVOCATIONS,
+# returning 2 — see run_claude_fresh, #1133) caused by the host (PREFLIGHT_FAILURE_KIND
+# github-ssh-auth or name-conflict) an item tolerates before being marked Blocked for a human.
+# The entrypoint refusing the item's own checkout (kind container) never counts here and never
+# Blocks: it is recorded against the image and skipped until that changes (lib/state). This budget is separate from MAX_PR_TOTAL_INVOCATIONS/MAX_ISSUE_TOTAL_INVOCATIONS,
 # which a pre-flight failure never touches: without a SEPARATE escalation path, a persistently
 # broken container (bad image, always-failing pre-flight check) would retry silently forever —
 # previously any such failure called die(), killing the whole oneshot run and giving an
