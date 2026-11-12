@@ -163,6 +163,16 @@ codegraph_mounts() {
     [ ! -e "${SESSION_BASE_DIR}/codegraph/Issue_5" ]
 }
 
+@test "prune_codegraph_indexes judges an index directory with no file by the directory's own age" {
+    mkdir -p "${SESSION_BASE_DIR}/codegraph/Issue_5" "${SESSION_BASE_DIR}/codegraph/Issue_6"
+    touch -d '15 days ago' "${SESSION_BASE_DIR}/codegraph/Issue_5"
+    touch -d '10 days ago' "${SESSION_BASE_DIR}/codegraph/Issue_6"
+    run prune_codegraph_indexes
+    [ "${status}" -eq 0 ]
+    [ ! -e "${SESSION_BASE_DIR}/codegraph/Issue_5" ]
+    [ -d "${SESSION_BASE_DIR}/codegraph/Issue_6" ]
+}
+
 @test "invoke_claude records the session's use of the index, so an index only queried is not purged as idle" {
     local args_log="${TEST_TMP}/podman_args"
     stub_podman_run_logging_args "${args_log}"
