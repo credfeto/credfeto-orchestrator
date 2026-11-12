@@ -561,18 +561,14 @@ cleanup_dangling_images() {
 # when find cannot read the directory, so the caller keeps it rather than reading empty output as
 # idle.
 transcript_item_idle() {
-    local dir="$1" retention_mins="$2" dir_mtime_counts="$3" any_file recent=""
-    if [ "${dir_mtime_counts}" = "1" ]; then
+    local dir="$1" retention_mins="$2" dir_mtime_counts="$3" any_file recent
+    any_file=$(find "${dir}" -type f -print -quit 2>/dev/null) || return 2
+    if [ "${dir_mtime_counts}" = "1" ] || [ -z "${any_file}" ]; then
         recent=$(find "${dir}" -maxdepth 0 ! -mmin "+${retention_mins}" -print 2>/dev/null) || return 2
         [ -z "${recent}" ] || return 1
     fi
-    any_file=$(find "${dir}" -type f -print -quit 2>/dev/null) || return 2
-    if [ -n "${any_file}" ]; then
-        recent=$(find "${dir}" -type f ! -mmin "+${retention_mins}" -print -quit 2>/dev/null) || return 2
-    elif [ "${dir_mtime_counts}" != "1" ]; then
-        # With dir_mtime_counts 1 the directory's own mtime was already checked above.
-        recent=$(find "${dir}" -maxdepth 0 ! -mmin "+${retention_mins}" -print 2>/dev/null) || return 2
-    fi
+    [ -n "${any_file}" ] || return 0
+    recent=$(find "${dir}" -type f ! -mmin "+${retention_mins}" -print -quit 2>/dev/null) || return 2
     [ -z "${recent}" ]
 }
 
