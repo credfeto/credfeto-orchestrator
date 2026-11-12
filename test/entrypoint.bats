@@ -1837,6 +1837,48 @@ TRACKED_CODEGRAPH_WARNING="The checkout tracks files under .codegraph, so CodeGr
     [ ! -e "${TEST_TMP}/codegraph_calls" ]
 }
 
+# Replaces the git stub with one that fails, as a safe.directory refusal does, when asked exactly
+# `git -C <repo_dir> ls-files -- .codegraph`, and records and succeeds for every other call.
+stub_git_failing_codegraph_ls_files() {
+    local repo_dir="$1"
+    cat > "${STUB_BIN}/git" << GITEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${TEST_TMP}/git_args"
+if [ "\$*" = "-C ${repo_dir} ls-files -- .codegraph" ]; then
+    printf 'fatal: detected dubious ownership in repository at %s\n' "${repo_dir}" >&2
+    exit 128
+fi
+exit 0
+GITEOF
+    chmod +x "${STUB_BIN}/git"
+}
+
+@test "entrypoint skips codegraph and keeps the .codegraph files when git ls-files fails on the checkout" {
+    setup_entrypoint_stubs
+    # An init that would write into .codegraph and then fail, so the failed-init clean-up would
+    # delete everything there if the entrypoint ever reached it.
+    # shellcheck disable=SC2016  # the stub body expands at stub run time
+    make_stub_multiline codegraph \
+        'printf '\''%s|%s\n'\'' "$(pwd)" "$*" >> "${TEST_TMP}/codegraph_calls"' \
+        'printf '\''{"rewritten":true}\n'\'' > .codegraph/config.json' \
+        'exit 3'
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git" "${repo_dir}/.codegraph"
+    printf '{"tracked":true}\n' > "${repo_dir}/.codegraph/config.json"
+    stub_git_failing_codegraph_ls_files "${repo_dir}"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ ! -e "${TEST_TMP}/codegraph_calls" ]
+    [ ! -e "${repo_dir}/.git/info/exclude" ]
+    [ "$(cat "${repo_dir}/.codegraph/config.json")" = '{"tracked":true}' ]
+    [ "$(grep -cF "git ls-files -- .codegraph failed in ${repo_dir}, so CodeGraph is skipped for this session in case the checkout tracks files there: no index is built or cleared there and .codegraph/ is not excluded from git" <<< "${output}")" -eq 1 ]
+    [ "$(grep -cF "fatal: detected dubious ownership in repository at ${repo_dir}" <<< "${output}")" -eq 1 ]
+    [[ "${output}" != *"${TRACKED_CODEGRAPH_WARNING}"* ]]
+    [[ "${output}" != *"codegraph init failed"* ]]
+    [ -e "${TEST_TMP}/claude_ran" ]
+}
+
 # --- exclude_codegraph_from_git --------------------------------------------------
 
 @test "entrypoint adds .codegraph/ to the checkout's .git/info/exclude, creating .git/info" {
