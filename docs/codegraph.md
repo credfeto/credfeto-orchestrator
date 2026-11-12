@@ -88,8 +88,7 @@ CodeGraph needs. Nothing has to be done by hand.
   repository's sessions run without an index. See
   [agent-container.md](agent-container.md#the-codegraph-index) for the details, and [its security
   note](agent-container.md#security-note-the-index-is-writable) for why the writable, persistent
-  index is an accepted risk. While the session runs, the MCP server watches the checkout and
-  updates the index as files change.
+  index is an accepted risk.
 - **Time and memory.** The first `init` for a work item builds the whole index. On a large
   repository that can take minutes, which delays the start of that one session. Later sessions
   for the same item run no indexing step at start: the MCP server's catch-up on connect only reads
