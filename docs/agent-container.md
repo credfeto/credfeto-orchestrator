@@ -171,8 +171,6 @@ only when it is missing, creates `.git/info/` when needed and never touches the 
 `.gitignore`. If the write fails it only warns, because the repository's own `.gitignore` may
 already ignore `.codegraph/`. It adds no entry when the checkout tracks any file under
 `.codegraph/`, because the entry would hide new files there from `git`.
-Because the mount sits over the checkout, `git` inside the container sees those files exactly as
-it would in a plain directory.
 
 Only once every one of these passes does the entrypoint exec `claude` itself, handing it the
 prompt built by `oneshot` (see [oneshot.md](oneshot.md) and
