@@ -308,6 +308,25 @@ CodeGraph's SQLite database and its lock files sit on a plain bind mount of a lo
 owned by the user the container's `developer` maps to, so they behave as they would in the
 checkout.
 
+### Security note: the index is writable
+
+The index is mounted read-write (`:rw` in `add_codegraph_index_podman_args`), because the
+entrypoint's `init` and the MCP server's catch-up both write to it. So a prompt-injected
+session could alter `codegraph.db` (the image includes `sqlite3`), and later sessions on the
+same item would then get planted source from `codegraph_explore`. This is an accepted risk,
+not an oversight: the index is built from the same checkout, which the agent can already write
+to, and agents read the files directly anyway, so a poisoned index crosses no trust boundary
+that a poisoned checkout does not. Two things limit it:
+
+- The index is per item. It is never shared with another item or repository; the only sharing
+  is between an Issue and the PR it pivots to, through the link described above.
+- An index nothing has used for 14 days is purged, as described above.
+
+To discard an index you no longer trust, delete the item's directory (and, for an Issue that
+has pivoted, the PR's link to it, or the purge removes the dangling link later). The next
+session for that item starts with an empty directory, so the entrypoint runs a fresh
+`codegraph init`.
+
 ## Assumptions
 
 - The host has already loaded a usable SSH key (via `ssh-agent`) and GPG signing key before
