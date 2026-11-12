@@ -72,25 +72,24 @@ CodeGraph needs. Nothing has to be done by hand.
 - **The index.** The entrypoint builds the index just before it starts `claude`, only when it is
   missing: with no `.codegraph/codegraph.db`, or an empty one, it runs `codegraph init --yes`,
   stopped after `CODEGRAPH_INIT_TIMEOUT_SECS` (default 900; a value above half of the session's
-  `AGENT_TIMEOUT_MINUTES` in seconds is clamped to half of it, leaving room for the 10-second
-  kill grace) so a hung build cannot use up the
-  session's time, in which case the session continues without an index. After any failed,
-  timed-out or killed `init` it deletes everything inside `.codegraph/` (not the mounted directory
-  itself), so the next session builds the index again rather than keeping a half-built one;
-  otherwise it runs
-  no `codegraph` command, and the MCP server catches the existing index up with the working tree
-  when Claude connects, before it answers the first query. The index does not live in the host's checkout, where the `git clean -fdX`
-  after every session would delete it. `oneshot` mounts a host directory per work item at
-  `.codegraph`, so the index persists between that item's containers, an Issue and the PR it
-  pivots to share one, a different item starts with a fresh `init`, and a directory no session
-  has used for 14 days is purged, the same lifecycle as the session transcripts. A repository
-  that tracks files under `.codegraph/` gets no mount, because it would hide them, and the
-  entrypoint then skips CodeGraph, building and deleting nothing there and adding no exclude
-  entry, so that repository's sessions run without an index. See
-  [agent-container.md](agent-container.md#the-codegraph-index) for the details, and
-  [its security note](agent-container.md#security-note-the-index-is-writable) for why the
-  writable, persistent index is an accepted risk. While the
-  session runs, the MCP server watches the checkout and updates the index as files change.
+  `AGENT_TIMEOUT_MINUTES` in seconds is clamped to half of it, leaving room for the 10-second kill
+  grace) so a hung build cannot use up the session's time, in which case the session continues
+  without an index. After any failed, timed-out or killed `init` it deletes everything inside
+  `.codegraph/` (not the mounted directory itself), so the next session builds the index again
+  rather than keeping a half-built one; otherwise it runs no `codegraph` command, and the MCP
+  server catches the existing index up with the working tree when Claude connects, before it
+  answers the first query. The index does not live in the host's checkout, where the
+  `git clean -fdX` after every session would delete it. `oneshot` mounts a host directory per work
+  item at `.codegraph`, so the index persists between that item's containers, an Issue and the PR
+  it pivots to share one, a different item starts with a fresh `init`, and a directory no session
+  has used for 14 days is purged, the same lifecycle as the session transcripts. A repository that
+  tracks files under `.codegraph/` gets no mount, because it would hide them, and the entrypoint
+  then skips CodeGraph, building and deleting nothing there and adding no exclude entry, so that
+  repository's sessions run without an index. See
+  [agent-container.md](agent-container.md#the-codegraph-index) for the details, and [its security
+  note](agent-container.md#security-note-the-index-is-writable) for why the writable, persistent
+  index is an accepted risk. While the session runs, the MCP server watches the checkout and
+  updates the index as files change.
 - **Time and memory.** The first `init` for a work item builds the whole index. On a large
   repository that can take minutes, which delays the start of that one session. Later sessions
   for the same item run no indexing step at start: the MCP server's catch-up on connect only reads

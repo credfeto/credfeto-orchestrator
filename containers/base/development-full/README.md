@@ -220,12 +220,14 @@ owner and mode, both `ENV` values and the global tool. See
 [docs/development/claude-hooks.md](../../../docs/development/claude-hooks.md#the-build-dotnet-mcp-server).
 
 `codegraph` is the code knowledge graph MCP server, a stdio server started as `codegraph serve --mcp` from
-`PATH` (the `codegraph` CLI installed by `development-tools`), with `alwaysLoad` set. The entry is exactly the one `codegraph install` writes
-for Claude Code, so a host's own entry merges as the same server in `install-claude-hooks`. It has no `env`, as
-the image already sets `CODEGRAPH_TELEMETRY=0`, and `mcp__codegraph__*` in `permissions.allow` allows all of its
-tools. Agents use only those MCP tools: `codegraph` is not on the hook `command-allowlist` and has no
-`Bash(codegraph ...)` allow entry, so the hooks reject it in an agent's shell. The entrypoint's own `codegraph init`
-builds a missing index before Claude starts, outside the hooks and permissions; the MCP server catches an existing index up when Claude connects. In a repository with no `.codegraph/` index its tools answer that the project is not indexed. See
+`PATH` (the `codegraph` CLI installed by `development-tools`), with `alwaysLoad` set. The entry is exactly
+the one `codegraph install` writes for Claude Code, so a host's own entry merges as the same server in
+`install-claude-hooks`. It has no `env`, as the image already sets `CODEGRAPH_TELEMETRY=0`, and
+`mcp__codegraph__*` in `permissions.allow` allows all of its tools. Agents use only those MCP tools:
+`codegraph` is not on the hook `command-allowlist` and has no `Bash(codegraph ...)` allow entry, so the hooks
+reject it in an agent's shell. The entrypoint's own `codegraph init` builds a missing index before Claude
+starts, outside the hooks and permissions; the MCP server catches an existing index up when Claude connects.
+In a repository with no `.codegraph/` index its tools answer that the project is not indexed. See
 [docs/development/claude-hooks.md](../../../docs/development/claude-hooks.md#the-codegraph-mcp-server).
 
 The repo-root `install-claude-hooks` script installs this same layout onto the current host, so the
