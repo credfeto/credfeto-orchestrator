@@ -1614,9 +1614,10 @@ run_entrypoint_in_repo() {
     [ -s "${repo_dir}/.codegraph/codegraph.db" ]
 }
 
-@test "entrypoint logs codegraph init killed with SIGKILL (exit 137) as timed out and clears its index" {
+@test "entrypoint logs codegraph init killed with SIGKILL (exit 137) as killed, not timed out, and clears its index" {
     setup_entrypoint_stubs
-    # SIGKILL on itself makes timeout exit 137, as it does when --kill-after has to kill a hung init.
+    # SIGKILL on itself makes timeout exit 137, as it does when --kill-after has to kill a hung init
+    # or the kernel OOM killer kills it, so the warning names both causes and claims no timeout.
     # shellcheck disable=SC2016  # the stub body expands at stub run time
     make_stub_multiline codegraph 'touch .codegraph/codegraph.db' 'kill -KILL $$'
     local repo_dir="${TEST_TMP}/codegraph-repo"
@@ -1624,7 +1625,8 @@ run_entrypoint_in_repo() {
 
     run_entrypoint_in_repo "${repo_dir}" CODEGRAPH_INIT_TIMEOUT_SECS=30
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"codegraph init timed out after 30s in ${repo_dir}, continuing without a code index"* ]]
+    [[ "${output}" == *"codegraph init was killed (SIGKILL: the timeout's --kill-after, or the kernel OOM killer) in ${repo_dir}, continuing without a code index"* ]]
+    [[ "${output}" != *"codegraph init timed out"* ]]
     [[ "${output}" != *"codegraph init failed"* ]]
     [ ! -e "${repo_dir}/.codegraph/codegraph.db" ]
     [ -d "${repo_dir}/.codegraph" ]
@@ -1656,6 +1658,7 @@ run_entrypoint_in_repo() {
     [ -e "${TEST_TMP}/codegraph_started" ]
     [ ! -e "${repo_dir}/.codegraph/codegraph.db" ]
     [[ "${output}" == *"codegraph init timed out after 1s in ${repo_dir}, continuing without a code index"* ]]
+    [[ "${output}" != *"codegraph init was killed"* ]]
     [[ "${output}" != *"codegraph init failed"* ]]
     [ -e "${TEST_TMP}/claude_ran" ]
 }
