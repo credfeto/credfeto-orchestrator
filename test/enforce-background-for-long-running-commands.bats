@@ -308,6 +308,11 @@ teardown() {
     [ "${status}" -eq 0 ]
 }
 
+@test "npm update is allowed without run_in_background, like npm install (#1921)" {
+    run_hook "npm update lodash --package-lock-only"
+    [ "${status}" -eq 0 ]
+}
+
 @test "bun test without run_in_background is blocked" {
     run_hook "bun test"
     [ "${status}" -eq 2 ]
