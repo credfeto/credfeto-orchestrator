@@ -71,7 +71,8 @@ CodeGraph needs. Nothing has to be done by hand.
   Claude, outside the hooks and permissions, so it is unaffected.
 - **The index.** The entrypoint builds the index just before it starts `claude`, only when it is
   missing: with no `.codegraph/codegraph.db`, or an empty one, it runs `codegraph init --yes -v`,
-  stopped after `CODEGRAPH_INIT_TIMEOUT_SECS` (default 900) so a hung build cannot use up the
+  stopped after `CODEGRAPH_INIT_TIMEOUT_SECS` (default 900; a value not below the session's
+  `AGENT_TIMEOUT_MINUTES` in seconds is clamped to half of it) so a hung build cannot use up the
   session's time, in which case the session continues without an index. After any failed,
   timed-out or killed `init` it deletes everything inside `.codegraph/` (not the mounted directory
   itself), so the next session builds the index again rather than keeping a half-built one;

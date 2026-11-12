@@ -1669,6 +1669,20 @@ STUBEOF
     [ "${output}" = "900" ]
 }
 
+@test "CODEGRAPH_INIT_TIMEOUT_SECS at or above AGENT_TIMEOUT_SECS is clamped to half of it" {
+    run bash -c 'BASEDIR="$1"; AGENT_TIMEOUT_MINUTES=10; CODEGRAPH_INIT_TIMEOUT_SECS=3600; source "$1/lib/globals"; printf "%s" "${CODEGRAPH_INIT_TIMEOUT_SECS}"' _ "${REPO_ROOT}"
+    [ "${output}" = "300" ]
+    run bash -c 'BASEDIR="$1"; AGENT_TIMEOUT_MINUTES=10; CODEGRAPH_INIT_TIMEOUT_SECS=600; source "$1/lib/globals"; printf "%s" "${CODEGRAPH_INIT_TIMEOUT_SECS}"' _ "${REPO_ROOT}"
+    [ "${output}" = "300" ]
+    run bash -c 'BASEDIR="$1"; AGENT_TIMEOUT_MINUTES=10; unset CODEGRAPH_INIT_TIMEOUT_SECS; source "$1/lib/globals"; printf "%s" "${CODEGRAPH_INIT_TIMEOUT_SECS}"' _ "${REPO_ROOT}"
+    [ "${output}" = "300" ]
+}
+
+@test "CODEGRAPH_INIT_TIMEOUT_SECS below AGENT_TIMEOUT_SECS is kept" {
+    run bash -c 'BASEDIR="$1"; AGENT_TIMEOUT_MINUTES=10; CODEGRAPH_INIT_TIMEOUT_SECS=599; source "$1/lib/globals"; printf "%s" "${CODEGRAPH_INIT_TIMEOUT_SECS}"' _ "${REPO_ROOT}"
+    [ "${output}" = "599" ]
+}
+
 @test "invoke_claude passes GIT_USER_EMAIL as container env var when set" {
     local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
