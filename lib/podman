@@ -816,12 +816,11 @@ is_never_secret_file() {
 # could commit the deletion. The entrypoint makes the same check itself and then skips CodeGraph
 # (checkout_tracks_codegraph in containers/agent/entrypoint.sh), so the session runs without an
 # index rather than writing one among the tracked files. The index directory is neither created
-# nor touched then, because no session uses it. When git cannot read the checkout, the agent's
-# git cannot commit from it either, so the mount goes ahead. The check sees the branch checked
-# out at launch, not one the agent switches to inside the container.
+# nor touched then, because no session uses it. checkout_tracks_codegraph (lib/state) makes the
+# check, shared with the pivot link, and explains when it counts as not tracked.
 add_codegraph_index_podman_args() {
     local item_type="$1" item_id="$2" index_dir
-    if [ -n "$(git -C "${REPO_WORK_DIR}" ls-files -- .codegraph 2>/dev/null)" ]; then
+    if checkout_tracks_codegraph; then
         warn "The checkout tracks files under .codegraph, so the CodeGraph index is not mounted over them - this session runs without a CodeGraph index"
         return 0
     fi

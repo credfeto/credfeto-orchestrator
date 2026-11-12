@@ -288,7 +288,9 @@ follows the same lifecycle as the [session transcripts](#session-transcripts):
   sessions reuse the index the Issue's sessions built, which the MCP server catches up on connect.
   The pivot counts as activity here too, but it touches `Issue_<n>/` itself rather than writing
   `.orchestrator-last-pivot` into it, because the directory is CodeGraph's own `.codegraph` in
-  the container and the purge below counts its modification time as use.
+  the container and the purge below counts its modification time as use. When the checkout
+  tracks files under `.codegraph/` (see below), the pivot links nothing and neither creates nor
+  touches `Issue_<n>/`, because no session mounts it.
 - Before every launch, `prune_codegraph_indexes` (`lib/podman`) applies the transcript purge
   (`prune_idle_item_dirs`, with the same `TRANSCRIPT_ITEM_RETENTION_DAYS`) to this tree, with
   one difference: the directory's own modification time also counts as use. A session that
@@ -305,7 +307,8 @@ entrypoint then builds an index in the checkout, which the `git clean` afterward
 host skips the mount, with a warning, when the checkout tracks any file under `.codegraph/`:
 the mount would hide those files, `git` in the container would see them as deleted, and the
 agent's `git add -A` could commit the deletion. The index directory is then neither created nor
-touched. The entrypoint makes the same `git ls-files -- .codegraph` check itself
+touched, by the mount or by the pivot link (`checkout_tracks_codegraph` in `lib/state` makes the
+check for both, and counts a `git` failure as not tracked). The entrypoint makes the same `git ls-files -- .codegraph` check itself
 (`checkout_tracks_codegraph`), so it cannot disagree with the checkout the container sees, and
 then skips CodeGraph: it runs no `init`, so it neither rewrites the tracked files nor deletes
 them in the clean-up after a failed `init`, and adds no `.git/info/exclude` entry. It prints one
