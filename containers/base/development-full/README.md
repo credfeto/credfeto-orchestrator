@@ -395,7 +395,7 @@ under `/etc/claude-code/hooks/`; `/etc/claude-code/hooks/reject-obfuscated-comma
 `.../enforce-allowed-dirs`, `.../block-config-skills`, `.../enforce-git-identity`, `.../enforce-git-policy`,
 `.../block-git-worktree`, `.../block-dotnet-tool-install`, `.../block-github-mcp-write-tools`,
 `.../enforce-ssh-host-and-key`, `.../enforce-curl-host`, `.../enforce-background-for-long-running-commands`,
-and `.../cache-gh-lookups` must each be root:root 0755; the
+`.../cache-gh-lookups` and `.../block-secret-file-reads` must each be root:root 0755; the
 `/etc/claude-code/hooks/{command-allowlist,command-blocklist,env-var-blocklist,allowed-dirs}` policy data
 files must each be root:root 0444, `allowed-dirs` must list the three agent mounts, and no
 `allowed-dirs.local` may be baked in.
