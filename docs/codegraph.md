@@ -173,11 +173,11 @@ the only platforms the pinned archives cover. Other platforms are listed on the
    MCP server name(s) used for two different servers in <home>/.claude.json or by the shipped managed-mcp.json: codegraph. Rename one of each pair and re-run.
    ```
 
-   Once the managed file ships `codegraph`, the `~/.claude.json` entry is optional, so the fix is
-   to make it identical or remove it.
+   Once `install-claude-hooks` installs the managed file, which ships `codegraph`, the
+   `~/.claude.json` entry is optional, so the fix is to make it identical or remove it.
 
-1. **Re-run `install-claude-hooks` after the container change is merged.** Pull this repository's
-   checkout first. The re-run installs the managed files that now include CodeGraph:
+1. **Re-run `install-claude-hooks`.** Pull this repository's checkout first. The re-run installs
+   the managed files that include CodeGraph:
    `mcp__codegraph__*` in the managed permissions and the `codegraph` server in
    `/etc/claude-code/managed-mcp.json`. Claude Code sessions reach CodeGraph only through the MCP
    tools; the host's hooks still refuse every `codegraph` shell command a session runs, because
