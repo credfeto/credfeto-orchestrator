@@ -24,8 +24,8 @@ TypeScript/JavaScript.
 | [Agent container](#agent-container) | Pinned CLI, managed MCP server, MCP permission, index at start | Done in this repository |
 | [Developer workstations](#developer-workstations) | Pinned CLI, Claude Code wiring, `install-claude-hooks` re-run, per-repository index | Manual, per workstation |
 | [Every repository](#every-repository) | `.codegraph/` in `.gitignore` | Templates done; reaches each repository through the `.gitignore` sync. The agent container also excludes it in every checkout it works on |
-| [Agent definitions](#agent-definitions) | `mcp__codegraph__*` in the agents' tool lists, plus a usage note | [credfeto/credfeto-ai-skills#60](https://github.com/credfeto/credfeto-ai-skills/issues/60) |
-| [Shared instructions](#shared-instructions) | The CodeGraph section in cs-template's global instructions | Not started |
+| [Agent definitions](#agent-definitions) | `mcp__codegraph__codegraph_explore` and `ToolSearch` in the agents' tool lists, plus the `credfeto-codegraph` skill | Done in [credfeto/credfeto-ai-skills#61](https://github.com/credfeto/credfeto-ai-skills/pull/61) |
+| [Shared instructions](#shared-instructions) | The CodeGraph rule in cs-template's global instructions | Done in [credfeto/cs-template#1223](https://github.com/credfeto/cs-template/pull/1223); the per-user block is removed by hand on each workstation |
 
 ## Agent container
 
@@ -236,42 +236,34 @@ To undo this part, leave the ignore line in place. It does nothing when no index
 
 The agent definitions come from `credfeto/credfeto-ai-skills` and are linked into the image at
 build time. Agents whose definitions have an explicit `tools:` list cannot call MCP tools that the
-list does not name. The six code-review lenses only have `Read`, `Grep`, `Glob` and `Skill`, and
-no agent has a `codegraph` shell fallback, so they cannot use CodeGraph at all.
-[credfeto/credfeto-ai-skills#60](https://github.com/credfeto/credfeto-ai-skills/issues/60) adds
-`mcp__codegraph__*` to those tool lists, including the six lenses, and adds a shared
-`credfeto-codegraph` skill with the usage note. Until it lands, only the main session and agents
-without an explicit tool list can use CodeGraph.
+list does not name, and no agent has a `codegraph` shell fallback. Since
+[credfeto/credfeto-ai-skills#61](https://github.com/credfeto/credfeto-ai-skills/pull/61),
+16 agents, including the six code-review lenses, preload the shared `credfeto-codegraph` skill and
+are granted exactly `mcp__codegraph__codegraph_explore`, plus `ToolSearch` because Claude Code may
+defer an MCP tool until tool search loads it. The skill is generated from cs-template's CodeGraph
+rule (see [Shared instructions](#shared-instructions)).
 
-Once it merges, the next image build picks it up. Workstations pick it up when their agents are
-next installed from `credfeto/credfeto-ai-skills`.
+The image picks the definitions up when it is built. Workstations pick them up when their agents
+are next installed from `credfeto/credfeto-ai-skills`.
 
 To undo this part, revert that change in `credfeto/credfeto-ai-skills` and rebuild the image.
 
 ## Shared instructions
 
-This is described here only; none of it has been done.
+The CodeGraph rule is in cs-template's global instructions, in
+`ai/global/codegraph.instructions.md`, listed in `ai/global/index.md` (added by
+[credfeto/cs-template#1223](https://github.com/credfeto/cs-template/pull/1223), for
+[credfeto/cs-template#1220](https://github.com/credfeto/cs-template/issues/1220)).
+`credfeto/credfeto-ai-skills` syncs it and generates the `credfeto-codegraph` skill from it. Unlike
+the section `codegraph install` writes into each user's own `~/.claude/CLAUDE.md`, it reaches the
+agents in the container. It allows only the `codegraph_explore` MCP tool, never the `codegraph`
+command line, and says to skip CodeGraph in a repository with no `.codegraph/` directory.
 
-The CodeGraph section is in each user's own `~/.claude/CLAUDE.md`, written by `codegraph install`,
-so agents in the container never see it. It should move into cs-template's global instructions
-(a file under `ai/global`, listed in `ai/global/index.md`). Its last line also has to change,
-because the container now indexes automatically, and its shell bullet is dropped, because agents
-have no shell access to `codegraph`. Suggested text:
-
-```markdown
-## CodeGraph
-
-In a repository indexed by CodeGraph (a `.codegraph/` directory exists at the repository root), use it before grep, find or reading files to understand or locate code:
-
-- **MCP tool** (when available): `codegraph_explore` answers most code questions in one call, returning the relevant symbols' source and the call paths between them. Name a file or symbol in the query to read its current line-numbered source. If it is listed but deferred, load it by name through tool search.
-
-The agent container indexes every repository automatically before the session starts. On a workstation, indexing is the user's decision: if there is no `.codegraph/` directory, skip CodeGraph.
-```
-
-Once it is in cs-template, delete the block between `<!-- CODEGRAPH_START -->` and
-`<!-- CODEGRAPH_END -->` from `~/.claude/CLAUDE.md`. `codegraph install` writes the block again,
-and so does `codegraph upgrade`, which re-runs the install for agents that are already set up. After
-either, remove the block again, or accept the duplicate.
+On each workstation, delete the block between `<!-- CODEGRAPH_START -->` and
+`<!-- CODEGRAPH_END -->` from `~/.claude/CLAUDE.md`, because the global rule replaces it.
+`codegraph install` writes the block again, and so does `codegraph upgrade`, which re-runs the
+install for agents that are already set up. After either, remove the block again, or accept the
+duplicate.
 
 To undo this part, revert the cs-template change.
 
@@ -282,12 +274,14 @@ To undo this part, revert the cs-template change.
    the sync has not reached yet.
 1. Merge this repository's container change. The image rebuilds, and the next agent sessions
    index their repository at start.
-1. Merge [credfeto/credfeto-ai-skills#60](https://github.com/credfeto/credfeto-ai-skills/issues/60)
-   and rebuild the image, so sub-agents and review lenses can call the tools.
+1. Rebuild the image, so it carries the agent definitions from
+   [credfeto/credfeto-ai-skills#61](https://github.com/credfeto/credfeto-ai-skills/pull/61) (merged)
+   and sub-agents and review lenses can call the tool.
 1. On each workstation: install the pinned CLI, turn telemetry off, run `codegraph install`, re-run
    `install-claude-hooks`, and index the repositories wanted.
-1. Move the CodeGraph section into cs-template's global instructions and remove the per-user
-   block.
+1. On each workstation, remove the per-user `~/.claude/CLAUDE.md` block, now that cs-template's
+   global instructions carry the rule
+   ([credfeto/cs-template#1223](https://github.com/credfeto/cs-template/pull/1223), merged).
 
 ## Judging whether it is worth it
 
@@ -317,10 +311,11 @@ If agents rarely call it, or the counts do not drop, roll it back.
    gone, the indexes stay until deleted by hand. To reclaim the space, delete the `codegraph/`
    directory under each repository's state directory, for example
    `rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}"/orchestrator/*/*/codegraph`.
-1. **Agent definitions.** Revert the change from
-   [credfeto/credfeto-ai-skills#60](https://github.com/credfeto/credfeto-ai-skills/issues/60) and
-   rebuild the image.
-1. **Shared instructions.** Revert the cs-template change, if it was made.
+1. **Agent definitions.** Revert
+   [credfeto/credfeto-ai-skills#61](https://github.com/credfeto/credfeto-ai-skills/pull/61)
+   and rebuild the image.
+1. **Shared instructions.** Revert
+   [credfeto/cs-template#1223](https://github.com/credfeto/cs-template/pull/1223).
 1. **Each workstation**, in this order, because the CLI is needed for the first two steps:
    1. In each indexed repository, run `codegraph uninit --force`, which deletes `.codegraph/`.
    1. Run `codegraph uninstall --target claude --location global`. It removes the `~/.claude.json`
