@@ -360,20 +360,26 @@ seed_orchestrator_cache() {
 # has none. An existing index is left alone: the MCP server reconciles it with the working tree
 # when Claude connects, before it answers the first query, and its watcher keeps it current while
 # the session runs. It runs here, before claude starts, so the full build never overlaps the
-# agent's own builds and tests in the container's memory limit. The check is on the database
-# rather than the directory because a .codegraph/ without codegraph.db is not a usable index, and
-# `init` rebuilds it. `--yes` is required: without it `init` can wait on a stdin select prompt
-# even with no TTY. Non-fatal on failure: a missing index only makes code lookups slower.
+# agent's own builds and tests in the container's memory limit. The check is on a non-empty
+# database rather than the directory because a .codegraph/ without codegraph.db, or with an empty
+# one, is not a usable index, and `init` rebuilds it. `--yes` is required: without it `init` can
+# wait on a stdin select prompt even with no TTY. Non-fatal on failure: a missing index only
+# makes code lookups slower.
 # The build is bounded by CODEGRAPH_INIT_TIMEOUT_SECS (oneshot passes lib/globals' value; the
 # same default and fallback apply here for manual runs), because it runs inside the session's
 # AGENT_TIMEOUT and a hung build would otherwise end the session as an agent timeout. A build
-# that ignores SIGTERM is killed 10 seconds later.
+# that ignores SIGTERM is killed 10 seconds later; timeout then exits 137, logged as a timeout
+# like 124.
+# After any failed, timed-out or killed init the contents of .codegraph/ are deleted, because
+# the directory persists on the host and `init` treats a database that already has its schema as
+# initialized, so a half-built index would otherwise be kept by every later session. Only the
+# contents go: the directory itself is a bind mountpoint.
 # WORKSPACE_REPO_DIR overrides the repo path (used by tests).
 build_missing_codegraph_index() {
     local repo_dir="${WORKSPACE_REPO_DIR:-/workspace/repo}"
     [ -d "${repo_dir}/.git" ] || return 0
 
-    if [ -f "${repo_dir}/.codegraph/codegraph.db" ]; then
+    if [ -s "${repo_dir}/.codegraph/codegraph.db" ]; then
         info "CodeGraph index already exists in ${repo_dir}, the MCP server catches it up on connect"
         return 0
     fi
@@ -385,11 +391,23 @@ build_missing_codegraph_index() {
     local init_status=0
     (cd "${repo_dir}" && timeout --kill-after=10 "${timeout_secs}" codegraph init --yes -v < /dev/null) \
         || init_status=$?
-    if [ "${init_status}" -eq 124 ]; then
+    [ "${init_status}" -eq 0 ] && return 0
+
+    if [ "${init_status}" -eq 124 ] || [ "${init_status}" -eq 137 ]; then
         warn "codegraph init timed out after ${timeout_secs}s in ${repo_dir}, continuing without a code index"
-    elif [ "${init_status}" -ne 0 ]; then
+    else
         warn "codegraph init failed in ${repo_dir}, continuing without a code index"
     fi
+    remove_incomplete_codegraph_index "${repo_dir}/.codegraph"
+}
+
+# Deletes everything inside the given .codegraph directory but never the directory itself, which
+# is a bind mountpoint in the agent container, so the next session's init starts from empty.
+remove_incomplete_codegraph_index() {
+    local index_dir="$1"
+    [ -d "${index_dir}" ] || return 0
+    find "${index_dir}" -mindepth 1 -delete 2>/dev/null \
+        || warn "Failed to remove the incomplete CodeGraph index in ${index_dir}, the next session may keep it"
 }
 
 # Adds .codegraph/ to the checkout's .git/info/exclude, so a repository whose .gitignore does not
