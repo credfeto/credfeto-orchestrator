@@ -369,8 +369,9 @@ seed_orchestrator_cache() {
 # The build is bounded by CODEGRAPH_INIT_TIMEOUT_SECS (oneshot passes lib/globals' value; the
 # same default and fallback apply here for manual runs), because it runs inside the session's
 # AGENT_TIMEOUT and a hung build would otherwise end the session as an agent timeout. A build
-# that ignores SIGTERM is killed 10 seconds later; timeout then exits 137, logged as a timeout
-# like 124.
+# that ignores SIGTERM is killed 10 seconds later; timeout then exits 137. Exit 124 is logged as
+# a timeout, but 137 only as a kill, because the kernel OOM killer's SIGKILL gives the same status
+# and a fast out-of-memory kill logged as a timeout would point diagnosis at the wrong limit.
 # After any failed, timed-out or killed init the contents of .codegraph/ are deleted, because
 # the directory persists on the host and `init` treats a database that already has its schema as
 # initialized, so a half-built index would otherwise be kept by every later session. Only the
@@ -398,8 +399,10 @@ build_missing_codegraph_index() {
         || init_status=$?
     [ "${init_status}" -eq 0 ] && return 0
 
-    if [ "${init_status}" -eq 124 ] || [ "${init_status}" -eq 137 ]; then
+    if [ "${init_status}" -eq 124 ]; then
         warn "codegraph init timed out after ${timeout_secs}s in ${repo_dir}, continuing without a code index"
+    elif [ "${init_status}" -eq 137 ]; then
+        warn "codegraph init was killed (SIGKILL: the timeout's --kill-after, or the kernel OOM killer) in ${repo_dir}, continuing without a code index"
     else
         warn "codegraph init failed in ${repo_dir}, continuing without a code index"
     fi
