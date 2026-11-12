@@ -101,17 +101,14 @@ list_local_tool() {
 }
 
 # Installs a global tool stub whose body is the given line, or by default one that prints the same
-# report as the dotnet stub. It is written beside the target and renamed onto it, as make_stub does,
-# so a parallel bats job never sees a half-written or not yet executable file.
+# report as the dotnet stub. make_stub writes it, pointed at the global tool's directory, so it gets
+# the same atomic write that stops a parallel bats job seeing a half-written file.
 make_global_tool() {
     # shellcheck disable=SC2016  # expanded by the stub, not here
     local body='printf "%s\n" "global" "cwd=$(pwd -P)" "root=${BUILD_MCP_REPO_ROOT}" "argc=$#" "$@"'
     [ "$#" -eq 0 ] || body="$1"
-    local tmp="${GLOBAL_TOOL}.$$_${RANDOM}${RANDOM}"
     mkdir -p "${GLOBAL_TOOL%/*}"
-    printf '%s\n' '#!/usr/bin/env bash' "${body}" > "${tmp}"
-    chmod 0755 "${tmp}"
-    "${REAL_MV}" "${tmp}" "${GLOBAL_TOOL}"
+    STUB_BIN="${GLOBAL_TOOL%/*}" make_stub "${GLOBAL_TOOL##*/}" "${body}"
 }
 
 # Makes a git repository with a nested subfolder.
