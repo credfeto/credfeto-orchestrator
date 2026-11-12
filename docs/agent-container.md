@@ -149,7 +149,8 @@ step is non-fatal: if `codegraph init` fails, the entrypoint prints a warning an
 `claude`, because a missing index only makes code lookups slower. The build is also time-limited,
 because it runs inside the session's `AGENT_TIMEOUT_MINUTES` and a hung build would otherwise end
 the session as an agent timeout: after `CODEGRAPH_INIT_TIMEOUT_SECS` (default 900, set in
-`lib/globals` and passed in by `oneshot`) the entrypoint stops it, killing it 10 seconds later
+`lib/globals`, which clamps a value not below the session's limit to half of it, and passed in
+by `oneshot`) the entrypoint stops it, killing it 10 seconds later
 if it ignores the stop (exit 137, also reported as timed out), prints a warning and starts
 `claude` without an index. After any failed, timed-out or killed `init` the entrypoint deletes
 everything inside `.codegraph/` (never the directory itself, which is a mountpoint), because the
