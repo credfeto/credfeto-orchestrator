@@ -156,7 +156,8 @@ if it ignores the stop (exit 137, also reported as timed out), prints a warning 
 everything inside `.codegraph/` (never the directory itself, which is a mountpoint), because the
 directory persists and `init` treats a half-built database that already has its schema as
 initialized; the next session then runs `init` again from empty. It is skipped when the
-checkout has no `.git` directory, and in pre-check mode (below). Running it before `claude` keeps
+checkout has no `.git` directory, in pre-check mode (below), and when the checkout tracks any
+file under `.codegraph/` (see [The CodeGraph index](#the-codegraph-index)). Running it before `claude` keeps
 indexing from competing with the agent's own builds and tests for the container's memory.
 `codegraph init` writes `.codegraph/.gitignore`, which ignores everything else in that directory.
 That file is itself left untracked, and the image sets no global git excludes file to hide it.
@@ -166,7 +167,8 @@ whose `.gitignore` does not yet ignore `.codegraph/` (see
 [codegraph.md](codegraph.md#every-repository)). It runs in pre-check mode too, appends the line
 only when it is missing, creates `.git/info/` when needed and never touches the tracked
 `.gitignore`. If the write fails it only warns, because the repository's own `.gitignore` may
-already ignore `.codegraph/`.
+already ignore `.codegraph/`. It adds no entry when the checkout tracks any file under
+`.codegraph/`, because the entry would hide new files there from `git`.
 Because the mount sits over the checkout, `git` inside the container sees those files exactly as
 it would in a plain directory.
 
@@ -294,10 +296,17 @@ follows the same lifecycle as the [session transcripts](#session-transcripts):
 The directory is created mode `0700` before the mount, because the index holds the repository's
 code. If it cannot be created, `oneshot` warns and starts the session without the mount; the
 entrypoint then builds an index in the checkout, which the `git clean` afterwards deletes. The
-same happens, with a warning, when the checkout tracks any file under `.codegraph/`: the mount
-would hide those files, `git` in the container would see them as deleted, and the agent's
-`git add -A` could commit the deletion. The index directory is then neither created nor touched,
-and the index built beside the tracked files is rebuilt every session. Only
+host skips the mount, with a warning, when the checkout tracks any file under `.codegraph/`:
+the mount would hide those files, `git` in the container would see them as deleted, and the
+agent's `git add -A` could commit the deletion. The index directory is then neither created nor
+touched. The entrypoint makes the same `git ls-files -- .codegraph` check itself
+(`checkout_tracks_codegraph`), so it cannot disagree with the checkout the container sees, and
+then skips CodeGraph: it runs no `init`, so it neither rewrites the tracked files nor deletes
+them in the clean-up after a failed `init`, and adds no `.git/info/exclude` entry. It prints one
+warning naming the reason, and the session runs without an index. The managed MCP server still
+starts; with no index it only answers that the project is not indexed, but if the repository
+commits a non-empty `.codegraph/codegraph.db` its catch-up and watcher can still update that
+file. Only
 the agent's own container gets the mount. The pre-check container does not, because the
 entrypoint never builds or reads the index in pre-check mode. Podman creates the empty
 `.codegraph` mountpoint in the checkout, and the `git clean` after the session removes it. That

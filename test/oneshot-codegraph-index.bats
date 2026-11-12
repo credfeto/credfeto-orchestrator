@@ -105,18 +105,11 @@ codegraph_mounts() {
     git -C "${REPO_WORK_DIR}" add -f .codegraph/.gitignore
     run invoke_claude "test prompt" "Issue" "42" "# per-item instructions"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"The checkout tracks files under .codegraph, so the CodeGraph index is not mounted over them - this session builds its index in the checkout and it will not be kept"* ]]
+    [[ "${output}" == *"The checkout tracks files under .codegraph, so the CodeGraph index is not mounted over them - this session runs without a CodeGraph index"* ]]
     [ "$(grep -cx 'run' "${args_log}")" -eq 1 ]
     [ -z "$(codegraph_mounts "${args_log}")" ]
     [ ! -e "${SESSION_BASE_DIR}/codegraph/Issue_42" ]
-
-    # The entrypoint's exclude entry and the index codegraph init builds in the checkout: the
-    # clean after the session deletes the index and keeps the tracked file.
-    printf '.codegraph/\n' >> "${REPO_WORK_DIR}/.git/info/exclude"
-    printf 'index\n' > "${REPO_WORK_DIR}/.codegraph/codegraph.db"
-    git -C "${REPO_WORK_DIR}" clean -q -fdX
     [ -f "${REPO_WORK_DIR}/.codegraph/.gitignore" ]
-    [ ! -e "${REPO_WORK_DIR}/.codegraph/codegraph.db" ]
 }
 
 @test "invoke_claude mounts the index when the checkout has untracked files under .codegraph" {
