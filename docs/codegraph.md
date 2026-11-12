@@ -294,7 +294,8 @@ similar tasks before and after:
 - Tokens per session, and wall-clock time.
 - The delay indexing adds to session start: the entrypoint logs `Running codegraph init` when it
   builds a missing index, `CodeGraph index already exists` when it skips an existing one, and a
-  warning containing `failed in` when `init` fails.
+  warning containing `failed in`, `timed out after` or `was killed` when `init` fails, hits
+  `CODEGRAPH_INIT_TIMEOUT_SECS` or is killed.
 
 If agents rarely call it, or the counts do not drop, roll it back.
 
