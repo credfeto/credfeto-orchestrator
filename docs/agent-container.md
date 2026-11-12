@@ -236,14 +236,17 @@ Every failure is a warning and never fails the run; the PR's sessions then get a
 their own.
 
 Retention is by age, enforced before every container launch by `prune_transcripts`
-(`lib/podman`). It does not depend on an item closing: a merged PR and the Issue it closes drop
-out of the priorities feed, so `oneshot` almost never sees an item closed.
+(`lib/podman`), through `prune_idle_item_dirs`, the logic it shares with the
+[CodeGraph index](#the-codegraph-index) purge. It does not depend on an item closing: a merged
+PR and the Issue it closes drop out of the priorities feed, so `oneshot` almost never sees an
+item closed.
 
 - An item's whole transcript directory is deleted once no file in it has been modified for
-  14 days (`TRANSCRIPT_ITEM_RETENTION_DAYS` in `lib/globals`). Its age is the newest file
-  modification time under it, found without following links; the directory's own modification
-  time is not used, because appending to a transcript does not change it. A directory that
-  contains no files is aged by its own modification time.
+  14 days (`TRANSCRIPT_ITEM_RETENTION_DAYS` in `lib/globals`, which also sets the CodeGraph
+  index retention). Its age is the newest file modification time under it, found without
+  following links; the directory's own modification time is not used, because appending to a
+  transcript does not change it. A directory that contains no files is aged by its own
+  modification time.
 - A pivoted PR's link is never followed and is never deleted while its target exists. The PR's
   sessions write into the Issue's directory through it, so that directory stays fresh while the
   PR is being worked, and both go together once it has been idle for 14 days. A link whose
@@ -285,14 +288,15 @@ follows the same lifecycle as the [session transcripts](#session-transcripts):
   The pivot counts as activity here too, but it touches `Issue_<n>/` itself rather than writing
   `.orchestrator-last-pivot` into it, because the directory is CodeGraph's own `.codegraph` in
   the container and the purge below counts its modification time as use.
-- Before every launch, `prune_codegraph_indexes` (`lib/podman`) applies the transcript purge to
-  this tree, with one difference: the directory's own modification time also counts as use.
-  A session that only queries the index writes no file in it, so `add_codegraph_index_podman_args`
-  touches the directory each time it is mounted (through a pivoted PR's link, the Issue's
-  directory). An item's directory is therefore deleted once no session has mounted it and no
-  file in it has been modified for 14 days, and a link whose target is gone is deleted. The purge
-  runs before the mount, so an index last used more than 14 days ago is still deleted and the
-  session starts a fresh `init`.
+- Before every launch, `prune_codegraph_indexes` (`lib/podman`) applies the transcript purge
+  (`prune_idle_item_dirs`, with the same `TRANSCRIPT_ITEM_RETENTION_DAYS`) to this tree, with
+  one difference: the directory's own modification time also counts as use. A session that
+  only queries the index writes no file in it, so `add_codegraph_index_podman_args` touches
+  the directory each time it is mounted (through a pivoted PR's link, the Issue's directory).
+  An item's directory is therefore deleted once no session has mounted it and no file in it has
+  been modified for 14 days, and a link whose target is gone is deleted. The purge runs before
+  the mount, so an index last used more than 14 days ago is still deleted and the session
+  starts a fresh `init`.
 
 The directory is created mode `0700` before the mount, because the index holds the repository's
 code. If it cannot be created, `oneshot` warns and starts the session without the mount; the
