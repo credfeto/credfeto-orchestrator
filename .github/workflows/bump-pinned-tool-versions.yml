@@ -1,9 +1,9 @@
 ---
 name: "Bump pinned tool versions"
 
-# containers/base/development-tools/Dockerfile curl-installs six standalone CLI tools (hadolint,
-# dotenv-linter, sqlcmd, actionlint, trufflehog, trivy), each pinned to an exact release and
-# verified against a hand-recorded SHA256 checksum for supply-chain integrity (#140). Dependabot's
+# containers/base/development-tools/Dockerfile curl-installs seven standalone CLI tools (hadolint,
+# dotenv-linter, sqlcmd, actionlint, trufflehog, trivy, codegraph), each pinned to an exact release
+# and verified against a hand-recorded SHA256 checksum for supply-chain integrity (#140). Dependabot's
 # `docker` ecosystem only parses `FROM` image references, so it never sees or bumps these ARGs -
 # they only ever moved reactively, when a stale pin's own CVE started failing a Trivy scan
 # (#1240, #1412). This workflow closes that gap (#1413): daily, it checks each tool's latest
@@ -56,6 +56,7 @@ jobs:
           - "actionlint"
           - "trufflehog"
           - "trivy"
+          - "codegraph"
     steps:
       - name: "Checkout source"
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

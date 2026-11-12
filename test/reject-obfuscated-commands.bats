@@ -30,6 +30,17 @@ teardown() {
     [ "${status}" -eq 0 ]
 }
 
+# Agents reach CodeGraph only through its codegraph_explore MCP tool; the codegraph CLI is
+# for the entrypoint, which runs before Claude, so no agent Bash call may run it.
+@test "codegraph explore and codegraph sync are rejected as not on the allowlist" {
+    run_hook 'codegraph explore "where is the allowlist parsed and who calls it"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'not on the known-good command allowlist'* ]]
+    run_hook "codegraph sync"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'not on the known-good command allowlist'* ]]
+}
+
 @test "the bracket test idiom is allowed (issue #1282)" {
     run_hook "[ -d /proc/2094 ]"
     [ "${status}" -eq 0 ]

@@ -519,8 +519,9 @@ AUTOSTASH_KEEP="${AUTOSTASH_KEEP:-20}"
 MAX_CONSECUTIVE_INFRA_FAILURES="${MAX_CONSECUTIVE_INFRA_FAILURES:-5}"
 [[ "${MAX_CONSECUTIVE_INFRA_FAILURES}" =~ ^[1-9][0-9]*$ ]] || MAX_CONSECUTIVE_INFRA_FAILURES=5
 
-# How long a work item's transcript directory is kept on the host after the last modification of
-# any file in it (prune_transcripts in lib/podman). Age-based because oneshot never observes most
+# How long a work item's transcript and CodeGraph index directories are kept on the host after
+# their last use (prune_transcripts and prune_codegraph_indexes, both through the shared
+# prune_idle_item_dirs in lib/podman). Age-based because oneshot never observes most
 # items closing: a merged PR and the Issue it closes drop out of the priorities feed first.
 # shellcheck disable=SC2034  # read by lib/podman after sourcing
 TRANSCRIPT_ITEM_RETENTION_DAYS=14
@@ -528,6 +529,8 @@ TRANSCRIPT_ITEM_RETENTION_DAYS=14
 # (link_pivot_pr_transcripts in lib/state), so the pivot counts as activity and the prune before
 # the launch cannot purge an Issue that has been idle. A dot-file at the root of the mounted
 # ~/.claude/projects, beside Claude Code's per-project subdirectories rather than inside one.
+# Not used in the CodeGraph index tree, whose pivot touches the Issue's directory itself
+# (link_pivot_pr_codegraph_index).
 # shellcheck disable=SC2034  # read by lib/state after sourcing
 TRANSCRIPT_PIVOT_ACTIVITY_FILE_NAME=".orchestrator-last-pivot"
 
@@ -596,6 +599,22 @@ GH_COLLABORATORS_RETRY_DELAY_SECS="${GH_COLLABORATORS_RETRY_DELAY_SECS:-2}"
 # compacted within a few turns and could end with "Autocompact is thrashing" (#1866).
 CLAUDE_CODE_AUTO_COMPACT_WINDOW="${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-160000}"
 [[ "${CLAUDE_CODE_AUTO_COMPACT_WINDOW}" =~ ^[1-9][0-9]*$ ]] || CLAUDE_CODE_AUTO_COMPACT_WINDOW=160000
+
+# Upper bound, in seconds, on the entrypoint's `codegraph init` index build, which runs inside the
+# agent container before claude starts and so inside AGENT_TIMEOUT_SECS. Without it a hung or very
+# slow build would use up the session's whole budget and end it as an agent timeout. On reaching
+# it the entrypoint warns and starts claude without an index. Passed into the container as
+# CODEGRAPH_INIT_TIMEOUT_SECS; the entrypoint applies the same default and fallback itself.
+# Override with CODEGRAPH_INIT_TIMEOUT_SECS in the environment. The entrypoint's timeout waits a
+# further 10 seconds (its --kill-after) before killing a build that ignores the stop, so a value
+# just below AGENT_TIMEOUT_SECS (599 against 600) would still let a hung build end the session as
+# an agent timeout. A value above half of AGENT_TIMEOUT_SECS is therefore silently clamped to
+# half of it (warn does not exist yet when this file runs), which guarantees the agent at least
+# half its budget and keeps the build's worst case, plus the grace, below AGENT_TIMEOUT_SECS
+# (at least 60, so half plus 10 always fits).
+CODEGRAPH_INIT_TIMEOUT_SECS="${CODEGRAPH_INIT_TIMEOUT_SECS:-900}"
+[[ "${CODEGRAPH_INIT_TIMEOUT_SECS}" =~ ^[1-9][0-9]*$ ]] || CODEGRAPH_INIT_TIMEOUT_SECS=900
+(( CODEGRAPH_INIT_TIMEOUT_SECS <= AGENT_TIMEOUT_SECS / 2 )) || CODEGRAPH_INIT_TIMEOUT_SECS=$(( AGENT_TIMEOUT_SECS / 2 ))
 
 # Login of the PR create bot: the account that opens the PRs for the AI's work, deliberately a
 # different account from the AI agent (the one _GH_ME resolves to) so each can tell what the other

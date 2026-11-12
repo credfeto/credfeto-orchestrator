@@ -107,6 +107,7 @@ the real GitHub PAT never enters the container.
 | `actionlint` | GitHub release `.tar.gz` archive of `rhysd/actionlint` at the pinned `ACTIONLINT_VERSION` | `sha256sum -c` against the pinned `ACTIONLINT_SHA256_*` ARGs, before extraction |
 | `trufflehog` | GitHub release `.tar.gz` archive of `trufflesecurity/trufflehog` at the pinned `TRUFFLEHOG_VERSION` | `sha256sum -c` against the pinned `TRUFFLEHOG_SHA256_*` ARGs, before extraction |
 | `trivy` | GitHub release `.tar.gz` archive of `aquasecurity/trivy` at the pinned `TRIVY_VERSION` | `sha256sum -c` against the pinned `TRIVY_SHA256_*` ARGs, before extraction |
+| `codegraph` | GitHub release `.tar.gz` archive of `colbymchenry/codegraph` at the pinned `CODEGRAPH_VERSION`. The archive is a directory (a launcher, its own bundled Node runtime and the app), so it is unpacked whole into `/opt/codegraph` and `/usr/local/bin/codegraph` is a symlink to its launcher; no system Node.js is needed. `CODEGRAPH_TELEMETRY=0` is set in the image environment, because upstream telemetry is on by default. | `sha256sum -c` against the pinned `CODEGRAPH_SHA256_*` ARGs, before extraction |
 | `bats` | `bats-core/bats-core` cloned at the pinned `BATS_REF` tag and installed with its `install.sh` into `/usr/local`. The clone is removed afterwards. | bats-core publishes no release assets or checksums, so the build fails unless the clone's `HEAD` is the pinned `BATS_COMMIT` |
 | `composite-action-lint` | Built from `COMPOSITE_ACTION_LINT_REF` (default `master`) of `bettermarks/composite-action-lint` in a throwaway Go builder stage, because no release binaries are published upstream. The binary lands in `/opt/composite-action-lint/` and is symlinked to `/usr/local/bin/composite-action-lint`. | None beyond the HTTPS clone. The commit it was built from is recorded in `/opt/composite-action-lint/.env`. |
 
@@ -156,6 +157,7 @@ workload execution. The `developer` home directory is referenced in two ways:
 
 | Path | Permissions | Why tamper-resistant |
 | --- | --- | --- |
+| `/opt/codegraph/` | `root:root`, `go-w` throughout | Extracted with `--no-same-owner` and then `chmod -R go-w`, so the `developer` user cannot replace the launcher, its bundled Node runtime or the app. `/usr/local/bin/codegraph` is a root-owned symlink to its launcher. |
 | `/opt/composite-action-lint/` | `root:root`, directory `0755` | Owned by root; the `developer` user (and any other non-root process) cannot write into it. The binary and `.env` provenance file inside cannot be replaced or deleted without root. |
 | `/opt/composite-action-lint/composite-action-lint` | `root:root`, `0755` | The binary itself is owned and write-protected by root. World-executable but not world-writable. |
 | `/opt/composite-action-lint/.env` | `root:root` (inherited) | Records the exact `HEAD` SHA and upstream URL baked in at build time; a non-root process cannot alter the provenance record. |
@@ -181,7 +183,7 @@ to confirm it exits with status 0. The binaries checked are:
 
 `git`, `gpg`, `curl`, `jq`, `dotnet`, `shellcheck`, `shfmt`, `bats`,
 `sqlite3`, `gh`, `hadolint`, `dotenv-linter`, `sqlcmd`, `actionlint`,
-`trufflehog`, `trivy`, `python3`, `ansible-lint`, `flake8`, `pylint`,
+`trufflehog`, `trivy`, `codegraph`, `python3`, `ansible-lint`, `flake8`, `pylint`,
 `yamllint`, `pre-commit`, `xmllint`, `bwrap`, `checkbashisms`
 
 **shellcheck minimum version.** `shellcheck --version` must report at least

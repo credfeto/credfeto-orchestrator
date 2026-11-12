@@ -443,6 +443,24 @@ expected_mcp_names() {
     [ ! -e "${CLAUDE_MANAGED_DIR}" ]
 }
 
+# `codegraph install` writes this exact entry into a host's ~/.claude.json, so the shipped one must
+# match it for the merge to treat the two as the same server.
+@test "a host codegraph server as codegraph install writes it is installed once, and with another definition is fatal" {
+    allow_sudo
+    write_host_claude_json '{"mcpServers": {"codegraph": {"type": "stdio", "command": "codegraph", "args": ["serve", "--mcp"], "alwaysLoad": true}}}'
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(installed_mcp_names)" = "$(expected_mcp_names)" ]
+    [ "$(jq -c '.mcpServers.codegraph' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "$(jq -c '.mcpServers.codegraph' "${SOURCE_MANAGED_MCP}")" ]
+
+    rm -rf "${CLAUDE_MANAGED_DIR}"
+    write_host_claude_json '{"mcpServers": {"codegraph": {"type": "stdio", "command": "/usr/bin/other-codegraph", "args": ["serve", "--mcp"]}}}'
+    run main
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"used for two different servers"*": codegraph."* ]]
+    [ ! -e "${CLAUDE_MANAGED_DIR}" ]
+}
+
 # A literal env value is refused for what it is, not for looking like a secret: a plain path, with
 # no secret-shaped key or value, is still left out, because managed-mcp.json is world-readable.
 @test "a host server with a literal env value that does not look like a secret is still refused" {
@@ -701,6 +719,12 @@ kb_token_privacy_predicates() {
     [ "${output}" = '{"type":"stdio","command":"/etc/claude-code/mcp/build-dotnet-mcp"}' ]
 }
 
+@test "the shipped codegraph server is the stdio codegraph serve --mcp entry codegraph install writes, with no env" {
+    run jq -c '.mcpServers.codegraph' "${SOURCE_MANAGED_MCP}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = '{"type":"stdio","command":"codegraph","args":["serve","--mcp"],"alwaysLoad":true}' ]
+}
+
 @test "no server in the shipped managed-mcp.json carries literal headers (#1818)" {
     run jq -c '[.mcpServers | to_entries[] | select(.value | has("headers")) | .key]' "${SOURCE_MANAGED_MCP}"
     [ "${output}" = '[]' ]
@@ -723,6 +747,23 @@ kb_token_privacy_predicates() {
 
 @test "the managed settings allow every build-dotnet MCP tool (#1818)" {
     jq -r '.permissions.allow[]' "${SOURCE_MANAGED_SETTINGS}" | grep -qxF 'mcp__build-dotnet__*'
+}
+
+@test "the managed settings allow every codegraph MCP tool and deny none of them" {
+    jq -r '.permissions.allow[]' "${SOURCE_MANAGED_SETTINGS}" | grep -qxF 'mcp__codegraph__*'
+    [ "$(jq -r '.permissions.deny[]' "${SOURCE_MANAGED_SETTINGS}" | grep -c '^mcp__codegraph__')" -eq 0 ]
+}
+
+# Agents reach CodeGraph only through its MCP tools, so the shell has no codegraph entry at all.
+@test "the managed settings allow no codegraph shell command" {
+    run jq -r '.permissions.allow[] | select(startswith("Bash(codegraph"))' "${SOURCE_MANAGED_SETTINGS}"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
+@test "the Dockerfile sanity block pins the codegraph allow rule" {
+    local dockerfile="${SOURCE_DIR}/Dockerfile"
+    grep -qF "jq -e '.permissions.allow | index(\"mcp__codegraph__*\")' /etc/claude-code/managed-settings.json" "${dockerfile}"
 }
 
 @test "the Dockerfile sanity block pins the build-dotnet server, its wrapper's owner and mode, its root, its tool mode, the global tool and allow rule, forbids Authorization text, and pins no server set (#1818, #1850)" {
@@ -755,14 +796,14 @@ run_dockerfile_mcp_checks() {
 }
 
 @test "the Dockerfile managed-mcp.json checks pass the shipped file and a copy with extra servers (#1850)" {
-    [ "$(dockerfile_mcp_programs | wc -l)" -ge 3 ]
+    [ "$(dockerfile_mcp_programs | wc -l)" -ge 4 ]
     run_dockerfile_mcp_checks "${SOURCE_MANAGED_MCP}"
 
     jq '.mcpServers += {"extra-ide": {"type": "http", "url": "http://127.0.0.1:65000/stream"}, "extra-tool": {"type": "stdio", "command": "/usr/bin/extra-tool", "env": {"MODE": "serve"}}}' "${SOURCE_MANAGED_MCP}" > "${TEST_TMP}/extra.json"
     run_dockerfile_mcp_checks "${TEST_TMP}/extra.json"
 }
 
-@test "the Dockerfile managed-mcp.json checks fail without cfwf, kb or build-dotnet, or with any of them changed (#1850)" {
+@test "the Dockerfile managed-mcp.json checks fail without cfwf, kb, build-dotnet or codegraph, or with any of them changed (#1850)" {
     local filter
     for filter in \
         'del(.mcpServers.cfwf)' \
@@ -776,7 +817,13 @@ run_dockerfile_mcp_checks() {
         '.mcpServers.kb = {"type": "stdio", "command": "/usr/bin/kb"}' \
         'del(.mcpServers["build-dotnet"])' \
         '.mcpServers["build-dotnet"].env.EXTRA = "x"' \
-        '.mcpServers["build-dotnet"].command = "/home/developer/.dotnet/tools/credfeto-build-dotnet"'; do
+        '.mcpServers["build-dotnet"].command = "/home/developer/.dotnet/tools/credfeto-build-dotnet"' \
+        'del(.mcpServers.codegraph)' \
+        '.mcpServers.codegraph.type = "http"' \
+        '.mcpServers.codegraph.command = "/usr/bin/other-codegraph"' \
+        '.mcpServers.codegraph.args = ["serve"]' \
+        '.mcpServers.codegraph.env = {"CODEGRAPH_TELEMETRY": "1"}' \
+        'del(.mcpServers.codegraph.alwaysLoad)'; do
         jq "${filter}" "${SOURCE_MANAGED_MCP}" > "${TEST_TMP}/broken.json"
         if run_dockerfile_mcp_checks "${TEST_TMP}/broken.json"; then
             echo "the Dockerfile checks accepted: ${filter}" >&2

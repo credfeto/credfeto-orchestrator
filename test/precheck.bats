@@ -172,6 +172,22 @@ write_failing_run_body() {
     [ "${KB_MCP_TOKEN}" = "kb-secret-token" ]
 }
 
+@test "the pre-check container gets no CodeGraph index mount and creates no index directory (#1882)" {
+    setup_precheck_repo
+    stub_precheck_podman
+    write_run_body \
+        'printf "\n-> orchestrator-precheck: running pre-commit-check\n"' \
+        'exit 0'
+
+    prepare_precheck_section pr "PullRequest_7" "${HEAD_SHA}" PullRequest 7 2> /dev/null
+
+    [ "${PRECHECK_STATUS}" = "pass" ]
+    local args="${TEST_TMP}/podman_run_args"
+    grep -qx -- "ORCHESTRATOR_PRECHECK=1" "${args}"
+    [ "$(grep -c -- "${CONTAINER_REPO_PATH}/.codegraph" "${args}")" -eq 0 ]
+    [ ! -e "${SESSION_BASE_DIR}/codegraph" ]
+}
+
 @test "the pre-check runs with the PR head checked out, and fixer changes are reset afterwards (#1785)" {
     setup_precheck_repo
     stub_precheck_podman

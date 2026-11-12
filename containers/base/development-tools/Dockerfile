@@ -72,6 +72,11 @@ ARG TRUFFLEHOG_SHA256_ARM64=a0382d83dd58c967af5dd0175cc732c62c836ab1d15dc9ae71b0
 ARG TRIVY_VERSION=0.76.2
 ARG TRIVY_SHA256_AMD64=bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf
 ARG TRIVY_SHA256_ARM64=ab9d51f86e6a5fb936f605faff6b593ac51bc378fff4d3e8b9d58358b9c367c3
+# codegraph: pinned to a specific release for reproducible, verifiable builds.
+# Update CODEGRAPH_VERSION and both SHA256 ARGs together when bumping.
+ARG CODEGRAPH_VERSION=1.6.2
+ARG CODEGRAPH_SHA256_AMD64=ef0af416092128fb1ccc723786000b7edf4a6971fe604acd08bf966e4f37b828
+ARG CODEGRAPH_SHA256_ARM64=c8c6be292be21d00dea26bad8b28d434731cf612fb8cc475dc10f5b3038b5b64
 # bats: bats-core publishes no release assets or checksums, so it is pinned to a
 # release tag plus the commit that tag resolves to (the peeled commit, not the
 # annotated tag object). Update BATS_REF and BATS_COMMIT together when bumping.
@@ -373,6 +378,33 @@ RUN ARCH=$(dpkg --print-architecture) \
     && chmod 0755 /usr/local/bin/trivy \
     && trivy --version
 
+# ---- codegraph - code knowledge graph CLI (colbymchenry/codegraph) ----------
+# The standalone release is a directory, not a single binary: a launcher in
+# bin/, its own bundled Node runtime and the app under lib/. It is unpacked
+# whole into /opt/codegraph and the launcher, which resolves its own symlink,
+# is linked onto PATH. The archive is verified against the pinned SHA256
+# before extraction; upstream's install.sh does no verification, so it is not
+# used. Asset naming uses "x64"/"arm64". Telemetry is on by default upstream,
+# so it is switched off here, before the first `codegraph` run below.
+ENV CODEGRAPH_TELEMETRY=0
+
+RUN ARCH=$(dpkg --print-architecture) \
+    && case "$ARCH" in \
+         amd64) CG_ARCH=x64;   SHA256="${CODEGRAPH_SHA256_AMD64}" ;; \
+         arm64) CG_ARCH=arm64; SHA256="${CODEGRAPH_SHA256_ARM64}" ;; \
+         *) echo "unsupported arch: $ARCH" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL \
+        "https://github.com/colbymchenry/codegraph/releases/download/v${CODEGRAPH_VERSION}/codegraph-linux-${CG_ARCH}.tar.gz" \
+        -o /tmp/codegraph.tar.gz \
+    && echo "${SHA256}  /tmp/codegraph.tar.gz" | sha256sum -c - \
+    && mkdir -p /opt/codegraph \
+    && tar -xzf /tmp/codegraph.tar.gz -C /opt/codegraph --strip-components=1 --no-same-owner \
+    && rm /tmp/codegraph.tar.gz \
+    && chmod -R go-w /opt/codegraph \
+    && ln -s /opt/codegraph/bin/codegraph /usr/local/bin/codegraph \
+    && codegraph --version
+
 # ---- bats (bats-core) — Bash Automated Testing System -----------------------
 # Cloned at the pinned tag and checked against the pinned commit, so a moved
 # or re-pointed tag fails the build. install.sh copies bin/bats, libexec/ and
@@ -501,6 +533,7 @@ RUN { \
       echo "actionlint: $(actionlint -version | head -n1 || echo 'version unknown')"; \
       echo "trufflehog: $(trufflehog --version || echo 'version unknown')"; \
       echo "trivy: $(trivy --version | head -n1 | sed 's/^Version: *//' || echo 'version unknown')"; \
+      echo "codegraph: $(codegraph --version || echo 'version unknown')"; \
       echo "gh: $(gh --version | head -n1 || echo 'version unknown')"; \
       echo "bwrap: $(bwrap --version || echo 'version unknown')"; \
       echo "shellcheck: $(dpkg-query -W -f='${Version}' shellcheck || echo 'version unknown')"; \
@@ -527,7 +560,7 @@ RUN { \
 RUN set -e; \
     echo "== binary presence + version probe =="; \
     for cmd in git gpg curl jq dotnet shellcheck shfmt bats sqlite3 gh \
-               hadolint dotenv-linter sqlcmd actionlint trufflehog trivy \
+               hadolint dotenv-linter sqlcmd actionlint trufflehog trivy codegraph \
                python3 ansible-lint flake8 pylint clang \
                yamllint pre-commit xmllint bwrap checkbashisms; do \
         if ! command -v "$cmd" >/dev/null 2>&1; then \

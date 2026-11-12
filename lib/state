@@ -838,7 +838,8 @@ rearm_closed_issue_markers() {
 }
 
 # Parent of every transcript directory; the one place its location is defined, so the mount
-# (transcript_dir_path) and the purge (prune_transcripts in lib/podman) cannot drift apart.
+# (transcript_dir_path) and the purge (prune_transcripts, through the shared prune_idle_item_dirs
+# in lib/podman) cannot drift apart.
 transcripts_root_path() {
     printf '%s/transcripts' "${SESSION_BASE_DIR}"
 }
@@ -846,61 +847,132 @@ transcripts_root_path() {
 # Host directory bind-mounted at the container's ~/.claude/projects, where Claude Code writes
 # its session transcripts. One per work item so every session the item ever runs accumulates in
 # one place and the whole directory can be purged once the item has been idle for
-# TRANSCRIPT_ITEM_RETENTION_DAYS (prune_transcripts in lib/podman).
+# TRANSCRIPT_ITEM_RETENTION_DAYS (prune_transcripts, through the shared prune_idle_item_dirs in
+# lib/podman).
 transcript_dir_path() {
     local item_type="$1" item_id="$2"
     printf '%s/%s_%s' "$(transcripts_root_path)" "${item_type}" "${item_id}"
 }
 
-# Creates a transcript directory and restricts both it and the transcripts root to the owner,
-# because the transcripts hold verbatim command text and output. Returns non-zero on failure and
-# leaves the caller to decide whether that is fatal.
-ensure_transcript_dir() {
+# Parent of every per-item CodeGraph index directory; the one place its location is defined, so
+# the mount (codegraph_index_dir_path) and the purge (prune_codegraph_indexes, through the shared
+# prune_idle_item_dirs in lib/podman) cannot drift apart.
+codegraph_index_root_path() {
+    printf '%s/codegraph' "${SESSION_BASE_DIR}"
+}
+
+# Host directory bind-mounted at the container's /workspace/repo/.codegraph, where the
+# entrypoint's codegraph init and the codegraph MCP server keep the index. It lives outside
+# the checkout so the git clean -fdX after every session and pre-check cannot remove it, and it
+# follows the transcript lifecycle: one per work item, shared by an Issue and the PR it pivots to
+# (link_pivot_pr_codegraph_index), and purged once no session has mounted it for
+# TRANSCRIPT_ITEM_RETENTION_DAYS (prune_codegraph_indexes, through the shared prune_idle_item_dirs
+# in lib/podman). A new item therefore starts with an empty directory and the entrypoint runs a
+# full codegraph init.
+# A checkout that tracks files under .codegraph gets no mount (add_codegraph_index_podman_args,
+# through checkout_tracks_codegraph).
+codegraph_index_dir_path() {
+    local item_type="$1" item_id="$2"
+    printf '%s/%s_%s' "$(codegraph_index_root_path)" "${item_type}" "${item_id}"
+}
+
+# Returns 0 when the host checkout at REPO_WORK_DIR tracks anything under .codegraph, 1 when it
+# tracks none, and 2 when git ls-files fails, with git's own error on stderr: the host's copy of
+# the entrypoint's own check (checkout_tracks_codegraph in containers/agent/entrypoint.sh), with
+# the same returns. Its only caller, add_codegraph_index_podman_args, treats 2 as tracked (fail
+# closed), as the entrypoint does: it runs after the checkout is cloned and on the item's branch,
+# so a git failure (a corrupt or unreadable index) is unexpected and the files it cannot list
+# may be tracked. The check sees the branch checked out on the host when it runs (the item's own,
+# after checkout_item_branch in lib/git), not one the agent switches to inside the container.
+checkout_tracks_codegraph() {
+    local tracked
+    tracked=$(git -C "${REPO_WORK_DIR}" ls-files -- .codegraph) || return 2
+    [ -n "${tracked}" ]
+}
+
+# Creates a per-item state directory (a transcript or CodeGraph index directory) and restricts
+# both it and its root to the owner, because transcripts hold verbatim command text and output
+# and the index holds the repository's code. Returns non-zero on failure and leaves the caller
+# to decide whether that is fatal.
+ensure_item_state_dir() {
     local dir="$1"
     mkdir -p "${dir}" && chmod 0700 "${dir%/*}" "${dir}"
 }
 
-# Called on the Issue-to-PR pivot: makes the PR's transcript directory a relative symlink to the
-# Issue's, so the pivoted sessions' transcripts accumulate with the Issue's, keep that directory
-# fresh while the PR is worked, and are purged with it once it has been idle for
-# TRANSCRIPT_ITEM_RETENTION_DAYS (prune_transcripts in lib/podman, which then removes the dangling
-# link). The pivot itself counts as activity: the Issue directory is ensured and its
-# TRANSCRIPT_PIVOT_ACTIVITY_FILE_NAME touched, so the prune that runs before this launch cannot
-# purge an Issue that has been idle and leave the PR's sessions to start a directory of their own.
-# For the same reason a link left dangling by an earlier purge of that Issue becomes live again.
-# An existing PullRequest_<m> link, live or dangling, is left as it is. An empty real
-# PullRequest_<m> directory (created when the PR was processed before any pivot, or after an
-# earlier purge of its Issue) is replaced by the link; a non-empty one is kept, so no transcript
-# is lost.
+# Called on the Issue-to-PR pivot, once per kind of per-item state, through
+# link_pivot_pr_transcripts and link_pivot_pr_codegraph_index: makes the PR's directory pr_path a
+# relative symlink to the Issue's issue_dir, so the pivoted sessions' state accumulates with the
+# Issue's, keeps that directory fresh while the PR is worked, and is purged with it once it has
+# been idle for TRANSCRIPT_ITEM_RETENTION_DAYS (prune_idle_item_dirs in lib/podman, which then
+# removes the dangling link). The pivot itself counts as activity: the Issue directory is ensured
+# and marked as used, so the prune that runs before this launch cannot purge an Issue that has
+# been idle and leave the PR's sessions to start a directory of their own. For the same reason a
+# link left dangling by an earlier purge of that Issue becomes live again.
+# dir_mtime_counts says how the use is marked, and matches the value that tree's prune passes to
+# transcript_item_idle: 1 touches the Issue directory itself and writes nothing inside it,
+# because that directory is a tool's own (the CodeGraph index, mounted as the container's
+# .codegraph); anything else touches TRANSCRIPT_PIVOT_ACTIVITY_FILE_NAME inside it, because that
+# prune ignores the directory's own mtime.
+# An existing PR link, live or dangling, is left as it is. An empty real PR directory (created
+# when the PR was processed before any pivot, or after an earlier purge of its Issue) is replaced
+# by the link; a non-empty one is kept, so nothing in it is lost.
+# noun names the contents in messages ("transcripts") and adjective the directory and link
+# ("transcript").
 # Best-effort: a failure only means the pivoted sessions get a directory of their own.
-link_pivot_pr_transcripts() {
-    local issue_id="$1" pr_number="$2" issue_dir pr_path
-    issue_dir=$(transcript_dir_path "Issue" "${issue_id}")
-    pr_path=$(transcript_dir_path "PullRequest" "${pr_number}")
-    if ! ensure_transcript_dir "${issue_dir}" 2>/dev/null; then
-        warn "Failed to create transcript directory ${issue_dir}, so PR #${pr_number} transcripts will not be linked to Issue #${issue_id}"
+link_pivot_pr_item_dir() {
+    local issue_dir="$1" pr_path="$2" issue_id="$3" pr_number="$4" noun="$5" adjective="$6" dir_mtime_counts="$7"
+    local activity_path="${issue_dir}/${TRANSCRIPT_PIVOT_ACTIVITY_FILE_NAME}"
+    [ "${dir_mtime_counts}" = "1" ] && activity_path="${issue_dir}"
+    if ! ensure_item_state_dir "${issue_dir}" 2>/dev/null; then
+        warn "Failed to create ${adjective} directory ${issue_dir}, so PR #${pr_number} ${noun} will not be linked to Issue #${issue_id}"
         return 0
     fi
-    touch "${issue_dir}/${TRANSCRIPT_PIVOT_ACTIVITY_FILE_NAME}" 2>/dev/null \
-        || warn "Failed to record pivot activity in ${issue_dir}, so Issue #${issue_id} transcripts may be purged as idle"
+    touch "${activity_path}" 2>/dev/null \
+        || warn "Failed to record pivot activity in ${issue_dir}, so Issue #${issue_id} ${noun} may be purged as idle"
     # -L first: -d is also true for a live link, and rmdir must only ever see a real directory.
     [ -L "${pr_path}" ] && return 0
     if [ -d "${pr_path}" ]; then
         # find without following links sees dot-files too; a failed read counts as non-empty.
         if [ -n "$(find "${pr_path}" -mindepth 1 -print -quit 2>/dev/null || printf 'unreadable')" ]; then
-            info "PR #${pr_number} already has transcripts of its own at ${pr_path}, so they are kept and not linked to Issue #${issue_id}"
+            info "PR #${pr_number} already has ${noun} of its own at ${pr_path}, so they are kept and not linked to Issue #${issue_id}"
             return 0
         fi
         if ! rmdir "${pr_path}" 2>/dev/null; then
-            warn "Failed to remove empty transcript directory ${pr_path}, so PR #${pr_number} transcripts will not be linked to Issue #${issue_id}"
+            warn "Failed to remove empty ${adjective} directory ${pr_path}, so PR #${pr_number} ${noun} will not be linked to Issue #${issue_id}"
             return 0
         fi
     elif [ -e "${pr_path}" ]; then
         return 0
     fi
     ln -s "${issue_dir##*/}" "${pr_path}" 2>/dev/null \
-        || warn "Failed to link PR #${pr_number} transcripts to Issue #${issue_id}, so they will be kept in a directory of their own"
+        || warn "Failed to link PR #${pr_number} ${noun} to Issue #${issue_id}, so they will be kept in a directory of their own"
     return 0
+}
+
+# Links the PR's transcript directory to the Issue's on the pivot (link_pivot_pr_item_dir).
+link_pivot_pr_transcripts() {
+    local issue_id="$1" pr_number="$2"
+    link_pivot_pr_item_dir "$(transcript_dir_path "Issue" "${issue_id}")" \
+        "$(transcript_dir_path "PullRequest" "${pr_number}")" "${issue_id}" "${pr_number}" \
+        "transcripts" "transcript" 0
+}
+
+# Links the PR's CodeGraph index directory to the Issue's on the pivot (link_pivot_pr_item_dir),
+# so the PR's sessions reuse the index the Issue's sessions built instead of starting a
+# full init. The pivot touches the Issue's directory rather than writing a file into it, because
+# the directory is CodeGraph's own .codegraph in the container and prune_codegraph_indexes counts
+# its mtime as use.
+# Links even when the checkout tracks files under .codegraph: the pivot runs before the item's
+# ensure_repo_current and checkout_item_branch (lib/git), so a check here would judge whatever
+# branch the previous session left checked out, and a wrong skip would leave the PR with an
+# index of its own that is then never linked. The mount's check (add_codegraph_index_podman_args)
+# runs on the item's own branch and keeps any session from using such an index; the unused
+# directory is purged once the pivot stops touching it.
+link_pivot_pr_codegraph_index() {
+    local issue_id="$1" pr_number="$2"
+    link_pivot_pr_item_dir "$(codegraph_index_dir_path "Issue" "${issue_id}")" \
+        "$(codegraph_index_dir_path "PullRequest" "${pr_number}")" "${issue_id}" "${pr_number}" \
+        "CodeGraph index files" "CodeGraph index" 1
 }
 
 # Tags an open PR whose linked issue has been closed, and leaves a comment for investigation.

@@ -279,6 +279,7 @@ Additional documentation is in the [docs/](docs/) folder:
 - [How the Workflow board works](docs/workflow-board.md)
 - [How fingerprinting works](docs/fingerprinting.md)
 - [How the agent container works](docs/agent-container.md)
+- [How CodeGraph is set up and rolled out](docs/codegraph.md) - the agent container, workstations, repositories, agent definitions and shared instructions, with rollback.
 - [How the base image chain works](docs/base-image-chain.md)
 - [How GitHub integration works](docs/github-integration.md)
 - [How Discord notifications work](docs/discord-notifications.md)

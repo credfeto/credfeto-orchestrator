@@ -79,6 +79,13 @@ STUBEOF
     # gpg stub: always succeeds (simulates key present + test sign succeeds).
     make_stub gpg 'exit 0'
 
+    # codegraph stub: records its working directory and arguments, then succeeds, so no test
+    # runs a real index build against a fixture repo.
+    # shellcheck disable=SC2016  # the stub body expands at stub run time
+    make_stub_multiline codegraph \
+        'printf '\''%s|%s\n'\'' "$(pwd)" "$*" >> "${TEST_TMP}/codegraph_calls"' \
+        'exit 0'
+
     # gh stub: a fake login for `gh api user --jq '.login'` (seed_orchestrator_cache's own
     # call) so the default case is a successfully-populated cache; tests of the
     # cache-miss/failure paths override this stub themselves after calling this function.
@@ -281,13 +288,14 @@ STUBEOF
 
 # --- verify_hooks_fresh -----------------------------------------------------------
 
-# Shared env vars for verify_hooks_fresh tests.
+# The identity env vars the entrypoint requires before it does anything else.
+IDENTITY_ENV=(CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice"
+    GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234")
+
+# Runs the entrypoint with the shared identity env vars plus any extra NAME=value args.
 run_entrypoint_with_hooks_env() {
     local extra_env=("$@")
-    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
-        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
-        "${extra_env[@]}" \
-        bash "${ENTRYPOINT}"
+    run env "${IDENTITY_ENV[@]}" "${extra_env[@]}" bash "${ENTRYPOINT}"
 }
 
 @test "entrypoint skips hooks check when rules .env is absent" {
@@ -1511,4 +1519,514 @@ BIND_SOCKET='python3 -I -c "import os, socket; socket.socket(socket.AF_UNIX).bin
         bash "${ENTRYPOINT}"
     [ "${status}" -eq 0 ]
     [[ "${output}" != *"Working on:"* ]]
+}
+
+# --- build_missing_codegraph_index -----------------------------------------------
+
+# Runs the entrypoint against a fake repo checkout with a claude stub that records it ran.
+run_entrypoint_in_repo() {
+    local repo_dir="$1"
+    shift
+    # shellcheck disable=SC2016  # the stub body expands at stub run time
+    make_stub_multiline claude 'touch "${TEST_TMP}/claude_ran"' 'exit 0'
+    run_entrypoint_with_hooks_env "$@" WORKSPACE_REPO_DIR="${repo_dir}"
+}
+
+@test "entrypoint runs codegraph init in the repo when it has no .codegraph directory" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${TEST_TMP}/codegraph_calls")" = "${repo_dir}|init --yes" ]
+    [ -e "${TEST_TMP}/claude_ran" ]
+}
+
+@test "entrypoint runs codegraph init when .codegraph exists without its database" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git" "${repo_dir}/.codegraph"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${TEST_TMP}/codegraph_calls")" = "${repo_dir}|init --yes" ]
+}
+
+@test "entrypoint does not run codegraph when the index already exists" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git" "${repo_dir}/.codegraph"
+    printf 'SQLite format 3\n' > "${repo_dir}/.codegraph/codegraph.db"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ ! -e "${TEST_TMP}/codegraph_calls" ]
+    [[ "${output}" == *"CodeGraph index already exists in ${repo_dir}"* ]]
+    [ -e "${TEST_TMP}/claude_ran" ]
+}
+
+@test "entrypoint runs codegraph init when .codegraph holds an empty database" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git" "${repo_dir}/.codegraph"
+    touch "${repo_dir}/.codegraph/codegraph.db"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${TEST_TMP}/codegraph_calls")" = "${repo_dir}|init --yes" ]
+}
+
+@test "entrypoint clears a failed codegraph init's index but keeps the directory, so the next run inits again" {
+    setup_entrypoint_stubs
+    # shellcheck disable=SC2016  # the stub body expands at stub run time
+    make_stub_multiline codegraph \
+        'printf '\''%s|%s\n'\'' "$(pwd)" "$*" >> "${TEST_TMP}/codegraph_calls"' \
+        'printf '\''SQLite format 3\n'\'' > .codegraph/codegraph.db' \
+        'printf '\''*\n'\'' > .codegraph/.gitignore' \
+        'mkdir -p .codegraph/cache && touch .codegraph/cache/partial' \
+        'exit 1'
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git" "${repo_dir}/.codegraph"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"codegraph init failed in ${repo_dir}, continuing without a code index"* ]]
+    [ -d "${repo_dir}/.codegraph" ]
+    [ -z "$(ls -A "${repo_dir}/.codegraph")" ]
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ "$(grep -c '|init --yes$' "${TEST_TMP}/codegraph_calls")" -eq 2 ]
+}
+
+@test "entrypoint keeps the index codegraph init built when it succeeds" {
+    setup_entrypoint_stubs
+    # shellcheck disable=SC2016  # the stub body expands at stub run time
+    make_stub_multiline codegraph \
+        'printf '\''SQLite format 3\n'\'' > .codegraph/codegraph.db' \
+        'exit 0'
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git" "${repo_dir}/.codegraph"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ -s "${repo_dir}/.codegraph/codegraph.db" ]
+}
+
+@test "entrypoint logs codegraph init killed with SIGKILL (exit 137) as killed, not timed out, and clears its index" {
+    setup_entrypoint_stubs
+    # SIGKILL on itself makes timeout exit 137, as it does when --kill-after has to kill a hung init
+    # or the kernel OOM killer kills it, so the warning names both causes and claims no timeout.
+    # shellcheck disable=SC2016  # the stub body expands at stub run time
+    make_stub_multiline codegraph 'touch .codegraph/codegraph.db' 'kill -KILL $$'
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git" "${repo_dir}/.codegraph"
+
+    run_entrypoint_in_repo "${repo_dir}" CODEGRAPH_INIT_TIMEOUT_SECS=30
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"codegraph init was killed (SIGKILL: the timeout's --kill-after, or the kernel OOM killer) in ${repo_dir}, continuing without a code index"* ]]
+    [[ "${output}" != *"codegraph init timed out"* ]]
+    [[ "${output}" != *"codegraph init failed"* ]]
+    [ ! -e "${repo_dir}/.codegraph/codegraph.db" ]
+    [ -d "${repo_dir}/.codegraph" ]
+    [ -e "${TEST_TMP}/claude_ran" ]
+}
+
+@test "entrypoint warns and still starts claude when codegraph init fails" {
+    setup_entrypoint_stubs
+    make_stub codegraph 'exit 3'
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"codegraph init failed in ${repo_dir}, continuing without a code index"* ]]
+    [ -e "${TEST_TMP}/claude_ran" ]
+}
+
+@test "entrypoint warns and still starts claude when codegraph init exceeds its time limit" {
+    setup_entrypoint_stubs
+    # exec so the timeout's signal reaches sleep itself and no orphan keeps the output pipe open.
+    # shellcheck disable=SC2016  # the stub body expands at stub run time
+    make_stub_multiline codegraph 'touch "${TEST_TMP}/codegraph_started" .codegraph/codegraph.db' 'exec sleep 30'
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git" "${repo_dir}/.codegraph"
+
+    run_entrypoint_in_repo "${repo_dir}" CODEGRAPH_INIT_TIMEOUT_SECS=1
+    [ "${status}" -eq 0 ]
+    [ -e "${TEST_TMP}/codegraph_started" ]
+    [ ! -e "${repo_dir}/.codegraph/codegraph.db" ]
+    [[ "${output}" == *"codegraph init timed out after 1s in ${repo_dir}, continuing without a code index"* ]]
+    [[ "${output}" != *"codegraph init was killed"* ]]
+    [[ "${output}" != *"codegraph init failed"* ]]
+    [ -e "${TEST_TMP}/claude_ran" ]
+}
+
+@test "entrypoint lets codegraph init finish within the configured time limit" {
+    setup_entrypoint_stubs
+    # shellcheck disable=SC2016  # the stub body expands at stub run time
+    make_stub_multiline codegraph 'sleep 2' 'touch "${TEST_TMP}/codegraph_finished"'
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git"
+
+    run_entrypoint_in_repo "${repo_dir}" CODEGRAPH_INIT_TIMEOUT_SECS=30
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Running codegraph init in ${repo_dir} (time limit 30s)"* ]]
+    [ -e "${TEST_TMP}/codegraph_finished" ]
+    [[ "${output}" != *"codegraph init timed out"* ]]
+    [ -e "${TEST_TMP}/claude_ran" ]
+}
+
+@test "entrypoint falls back to a 900s codegraph init time limit when the setting is unset or invalid" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Running codegraph init in ${repo_dir} (time limit 900s)"* ]]
+
+    run_entrypoint_in_repo "${repo_dir}" CODEGRAPH_INIT_TIMEOUT_SECS=0
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Running codegraph init in ${repo_dir} (time limit 900s)"* ]]
+
+    run_entrypoint_in_repo "${repo_dir}" CODEGRAPH_INIT_TIMEOUT_SECS=abc
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Running codegraph init in ${repo_dir} (time limit 900s)"* ]]
+}
+
+@test "entrypoint gives codegraph no stdin so it can never wait on a prompt" {
+    setup_entrypoint_stubs
+    # shellcheck disable=SC2016  # the stub body expands at stub run time
+    make_stub_multiline codegraph 'cat > "${TEST_TMP}/codegraph_stdin"' 'exit 0'
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git"
+
+    make_stub claude 'exit 0'
+    printf 'prompt text\n' | env WORKSPACE_REPO_DIR="${repo_dir}" "${IDENTITY_ENV[@]}" \
+        bash "${ENTRYPOINT}" 2>/dev/null
+    [ -e "${TEST_TMP}/codegraph_stdin" ]
+    [ ! -s "${TEST_TMP}/codegraph_stdin" ]
+}
+
+@test "entrypoint keeps codegraph init output off stdout, which oneshot parses as Claude's JSON result" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git"
+    make_stub claude "printf '{\"type\":\"result\"}\\n'"
+
+    make_stub_multiline codegraph 'printf '\''Indexing files...\n'\''' 'exit 0'
+    env WORKSPACE_REPO_DIR="${repo_dir}" "${IDENTITY_ENV[@]}" bash "${ENTRYPOINT}" \
+        < /dev/null > "${TEST_TMP}/stdout" 2> "${TEST_TMP}/stderr"
+    [ "$(cat "${TEST_TMP}/stdout")" = '{"type":"result"}' ]
+    grep -qF 'Indexing files...' "${TEST_TMP}/stderr"
+
+    make_stub_multiline codegraph 'printf '\''Indexing files...\n'\''' 'exit 3'
+    env WORKSPACE_REPO_DIR="${repo_dir}" "${IDENTITY_ENV[@]}" bash "${ENTRYPOINT}" \
+        < /dev/null > "${TEST_TMP}/stdout" 2> "${TEST_TMP}/stderr"
+    [ "$(cat "${TEST_TMP}/stdout")" = '{"type":"result"}' ]
+    grep -qF "codegraph init failed in ${repo_dir}" "${TEST_TMP}/stderr"
+}
+
+@test "entrypoint skips codegraph when the repo directory is not a git checkout" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ ! -e "${TEST_TMP}/codegraph_calls" ]
+    [ -e "${TEST_TMP}/claude_ran" ]
+}
+
+@test "entrypoint skips codegraph in ORCHESTRATOR_PRECHECK mode" {
+    setup_entrypoint_stubs
+    make_stub pre-commit-check 'exit 0'
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git"
+
+    run_entrypoint_in_repo "${repo_dir}" ORCHESTRATOR_PRECHECK=1
+    [ "${status}" -eq 0 ]
+    [ ! -e "${TEST_TMP}/codegraph_calls" ]
+    [ ! -e "${TEST_TMP}/claude_ran" ]
+}
+
+# --- checkout that tracks files under .codegraph ---------------------------------
+
+# Replaces the git stub with one that reports .codegraph/config.json as tracked when asked
+# exactly `git -C <repo_dir> ls-files -- .codegraph`, so a test fails if the entrypoint asks
+# anything else, and records and succeeds for every other call, as the default stub does.
+stub_git_tracking_codegraph() {
+    local repo_dir="$1"
+    make_stub_multiline git \
+        "printf '%s\\n' \"\$*\" >> \"${TEST_TMP}/git_args\"" \
+        "if [ \"\$*\" = \"-C ${repo_dir} ls-files -- .codegraph\" ]; then" \
+        "    printf '.codegraph/config.json\\n'" \
+        "fi" \
+        "exit 0"
+}
+
+# Fixture checkout with the tracked .codegraph/config.json the git stub reports.
+make_repo_tracking_codegraph() {
+    local repo_dir="$1"
+    mkdir -p "${repo_dir}/.git" "${repo_dir}/.codegraph"
+    printf '{"tracked":true}\n' > "${repo_dir}/.codegraph/config.json"
+    stub_git_tracking_codegraph "${repo_dir}"
+}
+
+TRACKED_CODEGRAPH_WARNING="The checkout tracks files under .codegraph, so CodeGraph is skipped for this session to leave them untouched: no index is built or cleared there and .codegraph/ is not excluded from git"
+
+@test "entrypoint skips codegraph init and keeps the tracked files when the checkout tracks .codegraph, even where init would fail" {
+    setup_entrypoint_stubs
+    # An init that would write into the tracked directory and then fail, so the failed-init
+    # clean-up would delete everything there if the entrypoint ever reached it.
+    # shellcheck disable=SC2016  # the stub body expands at stub run time
+    make_stub_multiline codegraph \
+        'printf '\''%s|%s\n'\'' "$(pwd)" "$*" >> "${TEST_TMP}/codegraph_calls"' \
+        'printf '\''{"rewritten":true}\n'\'' > .codegraph/config.json' \
+        'exit 3'
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    make_repo_tracking_codegraph "${repo_dir}"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ ! -e "${TEST_TMP}/codegraph_calls" ]
+    [ "$(cat "${repo_dir}/.codegraph/config.json")" = '{"tracked":true}' ]
+    [ "$(grep -cF "${TRACKED_CODEGRAPH_WARNING}" <<< "${output}")" -eq 1 ]
+    [[ "${output}" != *"codegraph init failed"* ]]
+    [ -e "${TEST_TMP}/claude_ran" ]
+}
+
+@test "entrypoint does not add .codegraph/ to .git/info/exclude when the checkout tracks .codegraph" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    make_repo_tracking_codegraph "${repo_dir}"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ ! -e "${repo_dir}/.git/info/exclude" ]
+}
+
+@test "entrypoint skips codegraph without reporting an existing index when the checkout tracks .codegraph/codegraph.db" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    make_repo_tracking_codegraph "${repo_dir}"
+    printf 'SQLite format 3\n' > "${repo_dir}/.codegraph/codegraph.db"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ ! -e "${TEST_TMP}/codegraph_calls" ]
+    [[ "${output}" != *"CodeGraph index already exists"* ]]
+    [ "$(cat "${repo_dir}/.codegraph/codegraph.db")" = "SQLite format 3" ]
+}
+
+@test "entrypoint warns once and adds no exclude entry in ORCHESTRATOR_PRECHECK mode when the checkout tracks .codegraph" {
+    setup_entrypoint_stubs
+    make_stub pre-commit-check 'exit 0'
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    make_repo_tracking_codegraph "${repo_dir}"
+
+    run_entrypoint_in_repo "${repo_dir}" ORCHESTRATOR_PRECHECK=1
+    [ "${status}" -eq 0 ]
+    [ "$(grep -cF "${TRACKED_CODEGRAPH_WARNING}" <<< "${output}")" -eq 1 ]
+    [ ! -e "${repo_dir}/.git/info/exclude" ]
+    [ ! -e "${TEST_TMP}/codegraph_calls" ]
+}
+
+# Replaces the git stub with one that fails, as a safe.directory refusal does, when asked exactly
+# `git -C <repo_dir> ls-files -- .codegraph`, and records and succeeds for every other call.
+stub_git_failing_codegraph_ls_files() {
+    local repo_dir="$1"
+    make_stub_multiline git \
+        "printf '%s\\n' \"\$*\" >> \"${TEST_TMP}/git_args\"" \
+        "if [ \"\$*\" = \"-C ${repo_dir} ls-files -- .codegraph\" ]; then" \
+        "    printf 'fatal: detected dubious ownership in repository at %s\\n' \"${repo_dir}\" >&2" \
+        "    exit 128" \
+        "fi" \
+        "exit 0"
+}
+
+@test "entrypoint skips codegraph and keeps the .codegraph files when git ls-files fails on the checkout" {
+    setup_entrypoint_stubs
+    # An init that would write into .codegraph and then fail, so the failed-init clean-up would
+    # delete everything there if the entrypoint ever reached it.
+    # shellcheck disable=SC2016  # the stub body expands at stub run time
+    make_stub_multiline codegraph \
+        'printf '\''%s|%s\n'\'' "$(pwd)" "$*" >> "${TEST_TMP}/codegraph_calls"' \
+        'printf '\''{"rewritten":true}\n'\'' > .codegraph/config.json' \
+        'exit 3'
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git" "${repo_dir}/.codegraph"
+    printf '{"tracked":true}\n' > "${repo_dir}/.codegraph/config.json"
+    stub_git_failing_codegraph_ls_files "${repo_dir}"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ ! -e "${TEST_TMP}/codegraph_calls" ]
+    [ ! -e "${repo_dir}/.git/info/exclude" ]
+    [ "$(cat "${repo_dir}/.codegraph/config.json")" = '{"tracked":true}' ]
+    [ "$(grep -cF "git ls-files -- .codegraph failed in ${repo_dir}, so CodeGraph is skipped for this session in case the checkout tracks files there: no index is built or cleared there and .codegraph/ is not excluded from git" <<< "${output}")" -eq 1 ]
+    [ "$(grep -cF "fatal: detected dubious ownership in repository at ${repo_dir}" <<< "${output}")" -eq 1 ]
+    [[ "${output}" != *"${TRACKED_CODEGRAPH_WARNING}"* ]]
+    [[ "${output}" != *"codegraph init failed"* ]]
+    [ -e "${TEST_TMP}/claude_ran" ]
+}
+
+# --- exclude_codegraph_from_git --------------------------------------------------
+
+@test "entrypoint adds .codegraph/ to the checkout's .git/info/exclude, creating .git/info" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${repo_dir}/.git/info/exclude")" = ".codegraph/" ]
+    [ ! -e "${repo_dir}/.gitignore" ]
+    [ -e "${TEST_TMP}/claude_ran" ]
+}
+
+@test "entrypoint does not duplicate the .codegraph/ exclude entry on a second run" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ "$(grep -cxF '.codegraph/' "${repo_dir}/.git/info/exclude")" -eq 1 ]
+}
+
+@test "entrypoint keeps existing exclude content and appends .codegraph/ on its own line" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git/info"
+    printf '# git ls-files --others --exclude-from=.git/info/exclude\n*.local' > "${repo_dir}/.git/info/exclude"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${repo_dir}/.git/info/exclude")" = "$(printf '# git ls-files --others --exclude-from=.git/info/exclude\n*.local\n.codegraph/')" ]
+}
+
+@test "entrypoint leaves the exclude file unchanged when it already lists .codegraph/" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git/info"
+    printf '.codegraph/\n*.local\n' > "${repo_dir}/.git/info/exclude"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${repo_dir}/.git/info/exclude")" = "$(printf '.codegraph/\n*.local')" ]
+}
+
+# Runs the entrypoint against a checkout whose exclude file holds only the given line, so a test
+# can check whether exclude_codegraph_from_git treats that line as already excluding .codegraph.
+run_entrypoint_with_exclude_line() {
+    local repo_dir="$1"
+    local existing_line="$2"
+    mkdir -p "${repo_dir}/.git/info"
+    printf '%s\n' "${existing_line}" > "${repo_dir}/.git/info/exclude"
+    run_entrypoint_in_repo "${repo_dir}"
+}
+
+@test "entrypoint does not append .codegraph/ when the exclude file already lists .codegraph" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+
+    run_entrypoint_with_exclude_line "${repo_dir}" '.codegraph'
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${repo_dir}/.git/info/exclude")" = ".codegraph" ]
+}
+
+@test "entrypoint does not append .codegraph/ when the exclude file already lists /.codegraph" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+
+    run_entrypoint_with_exclude_line "${repo_dir}" '/.codegraph'
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${repo_dir}/.git/info/exclude")" = "/.codegraph" ]
+}
+
+@test "entrypoint does not append .codegraph/ when the exclude file already lists /.codegraph/" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+
+    run_entrypoint_with_exclude_line "${repo_dir}" '/.codegraph/'
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${repo_dir}/.git/info/exclude")" = "/.codegraph/" ]
+}
+
+@test "entrypoint does not append .codegraph/ when the existing entry has trailing spaces" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+
+    run_entrypoint_with_exclude_line "${repo_dir}" '.codegraph/  '
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${repo_dir}/.git/info/exclude")" = ".codegraph/  " ]
+}
+
+# Git keeps leading spaces as part of the pattern, so " .codegraph/" does not exclude .codegraph.
+@test "entrypoint appends .codegraph/ when the existing entry has leading spaces" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+
+    run_entrypoint_with_exclude_line "${repo_dir}" ' .codegraph/'
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${repo_dir}/.git/info/exclude")" = "$(printf ' .codegraph/\n.codegraph/')" ]
+}
+
+@test "entrypoint appends .codegraph/ when the exclude file only lists a similar but different path" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+
+    run_entrypoint_with_exclude_line "${repo_dir}" '.codegraph-old/'
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${repo_dir}/.git/info/exclude")" = "$(printf '.codegraph-old/\n.codegraph/')" ]
+}
+
+@test "entrypoint warns and still starts claude when .git/info cannot be created" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git"
+    touch "${repo_dir}/.git/info"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to create ${repo_dir}/.git/info, .codegraph/ is not excluded from git"* ]]
+    [ -e "${TEST_TMP}/claude_ran" ]
+}
+
+@test "entrypoint warns and still starts claude when the exclude file cannot be written" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git/info/exclude"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to add .codegraph/ to ${repo_dir}/.git/info/exclude, .codegraph/ is not excluded from git"* ]]
+    [ -e "${TEST_TMP}/claude_ran" ]
+}
+
+@test "entrypoint adds the .codegraph/ exclude entry in ORCHESTRATOR_PRECHECK mode" {
+    setup_entrypoint_stubs
+    make_stub pre-commit-check 'exit 0'
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}/.git"
+
+    run_entrypoint_in_repo "${repo_dir}" ORCHESTRATOR_PRECHECK=1
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${repo_dir}/.git/info/exclude")" = ".codegraph/" ]
+}
+
+@test "entrypoint writes no exclude file when the repo directory is not a git checkout" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/codegraph-repo"
+    mkdir -p "${repo_dir}"
+
+    run_entrypoint_in_repo "${repo_dir}"
+    [ "${status}" -eq 0 ]
+    [ ! -e "${repo_dir}/.git" ]
+    [ -e "${TEST_TMP}/claude_ran" ]
 }

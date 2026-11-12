@@ -1643,6 +1643,54 @@ STUBEOF
     [ "${output}" = "160000" ]
 }
 
+@test "invoke_claude passes CODEGRAPH_INIT_TIMEOUT_SECS as container env var" {
+    local args_log="${TEST_TMP}/podman_args"
+    CODEGRAPH_INIT_TIMEOUT_SECS=1200
+    stub_podman_run_logging_args "${args_log}"
+
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
+    grep -qx 'CODEGRAPH_INIT_TIMEOUT_SECS=1200' "${args_log}"
+}
+
+@test "CODEGRAPH_INIT_TIMEOUT_SECS defaults to 900 and falls back to it for an invalid value" {
+    run bash -c 'BASEDIR="$1"; unset CODEGRAPH_INIT_TIMEOUT_SECS; source "$1/lib/globals"; printf "%s" "${CODEGRAPH_INIT_TIMEOUT_SECS}"' _ "${REPO_ROOT}"
+    [ "${output}" = "900" ]
+    run bash -c 'BASEDIR="$1"; CODEGRAPH_INIT_TIMEOUT_SECS=abc; source "$1/lib/globals"; printf "%s" "${CODEGRAPH_INIT_TIMEOUT_SECS}"' _ "${REPO_ROOT}"
+    [ "${output}" = "900" ]
+    run bash -c 'BASEDIR="$1"; CODEGRAPH_INIT_TIMEOUT_SECS=0; source "$1/lib/globals"; printf "%s" "${CODEGRAPH_INIT_TIMEOUT_SECS}"' _ "${REPO_ROOT}"
+    [ "${output}" = "900" ]
+}
+
+@test "CODEGRAPH_INIT_TIMEOUT_SECS above half of AGENT_TIMEOUT_SECS is clamped to half of it" {
+    run bash -c 'BASEDIR="$1"; AGENT_TIMEOUT_MINUTES=10; CODEGRAPH_INIT_TIMEOUT_SECS=3600; source "$1/lib/globals"; printf "%s" "${CODEGRAPH_INIT_TIMEOUT_SECS}"' _ "${REPO_ROOT}"
+    [ "${output}" = "300" ]
+    run bash -c 'BASEDIR="$1"; AGENT_TIMEOUT_MINUTES=10; CODEGRAPH_INIT_TIMEOUT_SECS=600; source "$1/lib/globals"; printf "%s" "${CODEGRAPH_INIT_TIMEOUT_SECS}"' _ "${REPO_ROOT}"
+    [ "${output}" = "300" ]
+    # just below the agent timeout: 599s plus the entrypoint's 10s --kill-after would outlive it
+    run bash -c 'BASEDIR="$1"; AGENT_TIMEOUT_MINUTES=10; CODEGRAPH_INIT_TIMEOUT_SECS=599; source "$1/lib/globals"; printf "%s" "${CODEGRAPH_INIT_TIMEOUT_SECS}"' _ "${REPO_ROOT}"
+    [ "${output}" = "300" ]
+    run bash -c 'BASEDIR="$1"; AGENT_TIMEOUT_MINUTES=10; CODEGRAPH_INIT_TIMEOUT_SECS=301; source "$1/lib/globals"; printf "%s" "${CODEGRAPH_INIT_TIMEOUT_SECS}"' _ "${REPO_ROOT}"
+    [ "${output}" = "300" ]
+    run bash -c 'BASEDIR="$1"; AGENT_TIMEOUT_MINUTES=10; unset CODEGRAPH_INIT_TIMEOUT_SECS; source "$1/lib/globals"; printf "%s" "${CODEGRAPH_INIT_TIMEOUT_SECS}"' _ "${REPO_ROOT}"
+    [ "${output}" = "300" ]
+}
+
+@test "CODEGRAPH_INIT_TIMEOUT_SECS at or below half of AGENT_TIMEOUT_SECS is kept" {
+    run bash -c 'BASEDIR="$1"; AGENT_TIMEOUT_MINUTES=10; CODEGRAPH_INIT_TIMEOUT_SECS=300; source "$1/lib/globals"; printf "%s" "${CODEGRAPH_INIT_TIMEOUT_SECS}"' _ "${REPO_ROOT}"
+    [ "${output}" = "300" ]
+    run bash -c 'BASEDIR="$1"; AGENT_TIMEOUT_MINUTES=10; CODEGRAPH_INIT_TIMEOUT_SECS=299; source "$1/lib/globals"; printf "%s" "${CODEGRAPH_INIT_TIMEOUT_SECS}"' _ "${REPO_ROOT}"
+    [ "${output}" = "299" ]
+}
+
+@test "CODEGRAPH_INIT_TIMEOUT_SECS clamped at the smallest AGENT_TIMEOUT_SECS still leaves room for the kill-after grace" {
+    run bash -c 'BASEDIR="$1"; AGENT_TIMEOUT_MINUTES=1; CODEGRAPH_INIT_TIMEOUT_SECS=59; source "$1/lib/globals"; printf "%s %s" "${CODEGRAPH_INIT_TIMEOUT_SECS}" "${AGENT_TIMEOUT_SECS}"' _ "${REPO_ROOT}"
+    [ "${output}" = "30 60" ]
+    local init_secs agent_secs
+    read -r init_secs agent_secs <<< "${output}"
+    # the entrypoint's timeout adds a 10s --kill-after grace before it kills a hung init
+    (( init_secs + 10 < agent_secs ))
+}
+
 @test "invoke_claude passes GIT_USER_EMAIL as container env var when set" {
     local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"

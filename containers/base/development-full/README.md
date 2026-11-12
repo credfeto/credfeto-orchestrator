@@ -25,10 +25,10 @@ READMEs for what they install and why they're split out.
 
 | Destination | Source | Notes |
 | --- | --- | --- |
-| `/opt/dotnet-claude-kit` | `github.com/codewithmukesh/dotnet-claude-kit` | Full shallow clone; developer:developer ownership |
-| `/opt/wshobson-agents` | `github.com/wshobson/agents` | Sparse checkout of three plugins only: `plugins/javascript-typescript`, `plugins/python-development`, `plugins/shell-scripting`; developer:developer ownership |
-| `/opt/cc-devops-skills` | `github.com/akin-ozer/cc-devops-skills` | Full shallow clone; developer:developer ownership |
-| `/opt/markdown-linter-fixer` | `github.com/s2005/markdown-linter-fixer-skill` | Shallow clone pinned to the tag in `MARKDOWN_LINTER_FIXER_REF` (default `v1.5.4`); developer:developer ownership |
+| `/opt/dotnet-claude-kit` | `github.com/codewithmukesh/dotnet-claude-kit` | Full shallow clone; root:root ownership |
+| `/opt/wshobson-agents` | `github.com/wshobson/agents` | Sparse checkout of three plugins only: `plugins/javascript-typescript`, `plugins/python-development`, `plugins/shell-scripting`; root:root ownership |
+| `/opt/cc-devops-skills` | `github.com/akin-ozer/cc-devops-skills` | Full shallow clone; root:root ownership |
+| `/opt/markdown-linter-fixer` | `github.com/s2005/markdown-linter-fixer-skill` | Shallow clone pinned to the tag in `MARKDOWN_LINTER_FIXER_REF` (default `v1.5.4`); root:root ownership |
 | `/opt/dotnet-skills` | `github.com/dotnet/skills` | Sparse checkout of seven plugins only: `plugins/dotnet`, `plugins/dotnet-advanced`, `plugins/dotnet-diag`, `plugins/dotnet-msbuild`, `plugins/dotnet-nuget`, `plugins/dotnet-test`, `plugins/dotnet-upgrade`; pinned to `DOTNET_SKILLS_COMMIT` (no usable tag, see pin-policy comment in the Dockerfile); root:root ownership |
 
 ### Linking skills into `~/.claude/skills`
@@ -165,7 +165,7 @@ per-work-item transcript directory (`projects/`) are mounted per invocation.
 `claude-mcp/cfwf-mcp-headers`, `claude-mcp/kb-mcp-headers` and `claude-mcp/build-dotnet-mcp` to `/etc/claude-code/mcp/` (root:root 0755). The file defines
 the only MCP servers Claude Code loads in the container: `cfwf`, an HTTP server at
 `https://workflow-mcp.markridgwell.com/mcp`, `kb`, an HTTP server at `https://memory.markridgwell.com/dev/mcp`
-(described below), and `build-dotnet` (also described below). Those three are required. The file
+(described below), `build-dotnet` and `codegraph` (both also described below). Those four are required. The file
 may list others, such as `rider` and `webstorm`, the JetBrains IDEs' own MCP servers on the loopback address, which are
 allowed and not checked (#1850). While the file exists it has exclusive control, so no user,
 project, plugin or `--mcp-config` server can be added. `mcp__cfwf__*` in `permissions.allow` lets every
@@ -218,6 +218,17 @@ under `~` directly, ignoring `DOTNET_CLI_HOME`, because the tool, `HOME` and the
 same file therefore works for every user on a host. The sanity block pins that exact entry, the wrapper's
 owner and mode, both `ENV` values and the global tool. See
 [docs/development/claude-hooks.md](../../../docs/development/claude-hooks.md#the-build-dotnet-mcp-server).
+
+`codegraph` is the code knowledge graph MCP server, a stdio server started as `codegraph serve --mcp` from
+`PATH` (the `codegraph` CLI installed by `development-tools`), with `alwaysLoad` set. The entry is exactly
+the one `codegraph install` writes for Claude Code, so a host's own entry merges as the same server in
+`install-claude-hooks`. It has no `env`, as the image already sets `CODEGRAPH_TELEMETRY=0`, and
+`mcp__codegraph__*` in `permissions.allow` allows all of its tools. Agents use only those MCP tools:
+`codegraph` is not on the hook `command-allowlist` and has no `Bash(codegraph ...)` allow entry, so the hooks
+reject it in an agent's shell. The entrypoint's own `codegraph init` builds a missing index before Claude
+starts, outside the hooks and permissions; the MCP server catches an existing index up when Claude connects.
+In a repository with no `.codegraph/` index its tools answer that the project is not indexed. See
+[docs/development/claude-hooks.md](../../../docs/development/claude-hooks.md#the-codegraph-mcp-server).
 
 The repo-root `install-claude-hooks` script installs this same layout onto the current host, so the
 hooks can be exercised directly outside the container: the managed settings and every hook/data file are
@@ -301,7 +312,7 @@ Paths locked down by this image. NuGet.Config and the .NET tool paths are locked
 | `/home/developer/.claude/policy-limits.json` | root:root | 0444 | Baked-in Claude Code policy limits (from `claude-policy-limits.json`); read-only for all users |
 | `/etc/claude-code/` | root:root | 0755 | Claude Code managed settings directory; agent can read but not modify |
 | `/etc/claude-code/managed-settings.json` | root:root | 0444 | Baked-in Claude Code managed settings: permissions, hooks, sandbox (from `claude-managed-settings.json`); read-only for all users |
-| `/etc/claude-code/managed-mcp.json` | root:root | 0444 | Baked-in MCP server list, the required `cfwf`, `kb` and `build-dotnet` servers and any others, with no token (from `claude-managed-mcp.json`); read-only for all users |
+| `/etc/claude-code/managed-mcp.json` | root:root | 0444 | Baked-in MCP server list, the required `cfwf`, `kb`, `build-dotnet` and `codegraph` servers and any others, with no token (from `claude-managed-mcp.json`); read-only for all users |
 | `/etc/claude-code/mcp/` | root:root | 0755 | MCP headers helper and wrapper directory; agent can read/execute but not modify |
 | `/etc/claude-code/mcp/cfwf-mcp-headers` | root:root | 0755 | `headersHelper` printing the `cfwf` server's `Authorization` header from the token broker while its socket exists, otherwise from the GitHub token in the environment (from `claude-mcp/cfwf-mcp-headers`); read/execute only |
 | `/etc/claude-code/mcp/kb-mcp-headers` | root:root | 0755 | `headersHelper` printing the `kb` server's `Authorization` header from the token broker while its socket exists, otherwise from `KB_MCP_TOKEN` or the user's 0600 token file (from `claude-mcp/kb-mcp-headers`); read/execute only |
@@ -389,12 +400,12 @@ Executed as root. Fails the build immediately if anything is missing or broken.
 `/home/developer/.claude/policy-limits.json`, `/etc/claude-code/managed-settings.json` and
 `/etc/claude-code/managed-mcp.json` must be root:root 0444, and `/etc/claude-code`, `/etc/claude-code/hooks`
 and `/etc/claude-code/mcp` root:root 0755; `managed-settings.json` must set
-the `allowManaged*Only` locks, disable bypass-permissions mode and allow `mcp__cfwf__*`, `mcp__kb__*` and `mcp__build-dotnet__*`;
+the `allowManaged*Only` locks, disable bypass-permissions mode and allow `mcp__cfwf__*`, `mcp__kb__*`, `mcp__build-dotnet__*` and `mcp__codegraph__*`;
 `managed-mcp.json` must hold the required servers: `cfwf`, `type` `http`, at
 `https://workflow-mcp.markridgwell.com/mcp`, with `headersHelper` `/etc/claude-code/mcp/cfwf-mcp-headers`,
 and `kb`, `type` `http`, at `https://memory.markridgwell.com/dev/mcp`, with `headersHelper`
-`/etc/claude-code/mcp/kb-mcp-headers`, neither with `headers` or `env`, and `build-dotnet` exactly its stdio entry
-starting `/etc/claude-code/mcp/build-dotnet-mcp` with no `env`;
+`/etc/claude-code/mcp/kb-mcp-headers`, neither with `headers` or `env`, and `build-dotnet` and `codegraph` exactly their stdio entries,
+`build-dotnet` starting `/etc/claude-code/mcp/build-dotnet-mcp` with no `env`;
 any other server is not checked, but the file must hold no `Authorization` text, both helpers and the wrapper must be
 root:root 0755, `BUILD_MCP_REPO_ROOT` must be `/workspace/repo`, `BUILD_MCP_TOOL` must be `global` and the global tool
 `/home/developer/.dotnet/tools/credfeto-build-dotnet` must be executable; `~/.claude/settings.json` must hold no

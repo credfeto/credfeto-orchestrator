@@ -356,6 +356,133 @@ seed_orchestrator_cache() {
     fi
 }
 
+# Builds the CodeGraph index that the managed codegraph MCP server reads, only when the checkout
+# has none. An existing index is left alone: the MCP server reconciles it with the working tree
+# when Claude connects, before it answers the first query, and its watcher keeps it current while
+# the session runs. It runs here, before claude starts, so the full build never overlaps the
+# agent's own builds and tests in the container's memory limit. The check is on a non-empty
+# database rather than the directory because a .codegraph/ without codegraph.db, or with an empty
+# one, is not a usable index, and `init` rebuilds it. `--yes` is required: without it `init` can
+# wait on a stdin select prompt even with no TTY. Non-fatal on failure: a missing index only
+# makes code lookups slower. Its output goes to stderr like every other step here, because
+# oneshot parses the container's stdout as Claude's JSON result. There is no `-v`: it only adds
+# progress and worker lines that flood the journal, and errors and the summary print without it.
+# The build is bounded by CODEGRAPH_INIT_TIMEOUT_SECS (oneshot passes lib/globals' value; the
+# same default and fallback apply here for manual runs), because it runs inside the session's
+# AGENT_TIMEOUT and a hung build would otherwise end the session as an agent timeout. A build
+# that ignores SIGTERM is killed 10 seconds later; timeout then exits 137. Exit 124 is logged as
+# a timeout, but 137 only as a kill, because the kernel OOM killer's SIGKILL gives the same status
+# and a fast out-of-memory kill logged as a timeout would point diagnosis at the wrong limit.
+# After any failed, timed-out or killed init the contents of .codegraph/ are deleted, because
+# the directory persists on the host and `init` treats a database that already has its schema as
+# initialized, so a half-built index would otherwise be kept by every later session. Only the
+# contents go: the directory itself is a bind mountpoint.
+# Skipped, silently, when the checkout tracks anything under .codegraph, or git cannot tell
+# whether it does (exclude_codegraph_from_git has already warned): init would rewrite the tracked
+# files and the clean-up after a failed init would delete them, and the agent's git add -A would
+# commit either change.
+# WORKSPACE_REPO_DIR overrides the repo path (used by tests).
+build_missing_codegraph_index() {
+    local repo_dir="${WORKSPACE_REPO_DIR:-/workspace/repo}"
+    [ -d "${repo_dir}/.git" ] || return 0
+    local tracking=0
+    checkout_tracks_codegraph "${repo_dir}" 2>/dev/null || tracking=$?
+    [ "${tracking}" -eq 1 ] || return 0
+
+    if [ -s "${repo_dir}/.codegraph/codegraph.db" ]; then
+        info "CodeGraph index already exists in ${repo_dir}, the MCP server catches it up on connect"
+        return 0
+    fi
+
+    local timeout_secs="${CODEGRAPH_INIT_TIMEOUT_SECS:-900}"
+    [[ "${timeout_secs}" =~ ^[1-9][0-9]*$ ]] || timeout_secs=900
+
+    info "Running codegraph init in ${repo_dir} (time limit ${timeout_secs}s)"
+    local init_status=0
+    (cd "${repo_dir}" && timeout --kill-after=10 "${timeout_secs}" codegraph init --yes < /dev/null) >&2 \
+        || init_status=$?
+    [ "${init_status}" -eq 0 ] && return 0
+
+    if [ "${init_status}" -eq 124 ]; then
+        warn "codegraph init timed out after ${timeout_secs}s in ${repo_dir}, continuing without a code index"
+    elif [ "${init_status}" -eq 137 ]; then
+        warn "codegraph init was killed (SIGKILL: the timeout's --kill-after, or the kernel OOM killer) in ${repo_dir}, continuing without a code index"
+    else
+        warn "codegraph init failed in ${repo_dir}, continuing without a code index"
+    fi
+    remove_incomplete_codegraph_index "${repo_dir}/.codegraph"
+}
+
+# Returns 0 when git tracks any file under the checkout's .codegraph, 1 when it tracks none, and
+# 2 when git ls-files fails, with git's own error on stderr (exclude_codegraph_from_git shows it;
+# build_missing_codegraph_index, which runs later, discards it). Checked here rather than passed
+# in by the host, so it always matches the checkout this container sees. Callers treat 2 as tracked
+# (fail closed), as add_codegraph_index_podman_args in lib/podman does with the host's copy in
+# lib/state before the mount. The checkout always exists here, so a git failure (a safe.directory
+# refusal, an unreadable index) is unexpected, and counting it as not tracked when the host saw
+# tracked files and skipped the mount would add the exclude entry and run init among those files,
+# and a failed init's clean-up would then delete them.
+checkout_tracks_codegraph() {
+    local tracked
+    tracked=$(git -C "$1" ls-files -- .codegraph) || return 2
+    [ -n "${tracked}" ]
+}
+
+# Deletes everything inside the given .codegraph directory but never the directory itself, which
+# is a bind mountpoint in the agent container, so the next session's init starts from empty.
+remove_incomplete_codegraph_index() {
+    local index_dir="$1"
+    [ -d "${index_dir}" ] || return 0
+    find "${index_dir}" -mindepth 1 -delete 2>/dev/null \
+        || warn "Failed to remove the incomplete CodeGraph index in ${index_dir}, the next session may keep it"
+}
+
+# Adds .codegraph/ to the checkout's .git/info/exclude, so a repository whose .gitignore does not
+# yet ignore it can never have the .codegraph/.gitignore that `codegraph init` writes committed by
+# a `git add -A`, and so oneshot's git clean -fdX removes the .codegraph mountpoint afterwards.
+# The repository's tracked .gitignore is never touched. It runs in both the agent and pre-check
+# containers, which share the checkout, and writes as the host user that owns .git (keep-id).
+# Idempotent: appends only when no line already names the directory as .codegraph, .codegraph/,
+# /.codegraph or /.codegraph/ (trailing spaces allowed, as git ignores them; leading spaces are
+# not, as git treats them as part of the pattern), after adding a final newline to an exclude
+# file that lacks one, so the entry never joins the last line. Non-fatal on failure:
+# the repository's own .gitignore may still ignore .codegraph/.
+# Skipped, with a warning, when the checkout tracks anything under .codegraph, or git ls-files
+# fails so it cannot tell: the entry would hide new files there from git, and
+# build_missing_codegraph_index then skips CodeGraph too, so the agent works without an index.
+# The warning is printed once per container start, not once per work item: the pre-check and the
+# agent container each run this, and the host's add_codegraph_index_podman_args (lib/podman)
+# warns about the same checkout before it starts the agent container.
+# WORKSPACE_REPO_DIR overrides the repo path (used by tests).
+exclude_codegraph_from_git() {
+    local repo_dir="${WORKSPACE_REPO_DIR:-/workspace/repo}"
+    [ -d "${repo_dir}/.git" ] || return 0
+    local tracking=0
+    checkout_tracks_codegraph "${repo_dir}" || tracking=$?
+    if [ "${tracking}" -eq 0 ]; then
+        warn "The checkout tracks files under .codegraph, so CodeGraph is skipped for this session to leave them untouched: no index is built or cleared there and .codegraph/ is not excluded from git"
+        return 0
+    fi
+    if [ "${tracking}" -eq 2 ]; then
+        warn "git ls-files -- .codegraph failed in ${repo_dir}, so CodeGraph is skipped for this session in case the checkout tracks files there: no index is built or cleared there and .codegraph/ is not excluded from git"
+        return 0
+    fi
+
+    local exclude_file="${repo_dir}/.git/info/exclude"
+    grep -qxE '/?\.codegraph/? *' "${exclude_file}" 2>/dev/null && return 0
+
+    if ! mkdir -p "${repo_dir}/.git/info" 2>/dev/null; then
+        warn "Failed to create ${repo_dir}/.git/info, .codegraph/ is not excluded from git"
+        return 0
+    fi
+    local separator=""
+    if [ -s "${exclude_file}" ] && [ -n "$(tail -c 1 "${exclude_file}" 2>/dev/null)" ]; then
+        separator=$'\n'
+    fi
+    printf '%s.codegraph/\n' "${separator}" 2>/dev/null >> "${exclude_file}" \
+        || warn "Failed to add .codegraph/ to ${exclude_file}, .codegraph/ is not excluded from git"
+}
+
 verify_gpg_signing
 ensure_github_known_hosts
 verify_ssh_signing
@@ -418,6 +545,8 @@ export XDG_RUNTIME_DIR="${WORKSPACE_TMP_DIR:-/workspace/tmp}"
 # CWD tracking files, still hardcode /tmp/claude-* regardless - anthropics/claude-code#31024).
 export CLAUDE_CODE_TMPDIR="${WORKSPACE_TMP_DIR:-/workspace/tmp}"
 
+exclude_codegraph_from_git
+
 # Pre-check mode (#1785): oneshot's run_precommit_precheck (lib/podman) launches this image
 # with ORCHESTRATOR_PRECHECK=1 to run pre-commit-check on the checked-out head before an agent
 # session, with the same mounts, environment and pre-flight checks as the agent itself, but no
@@ -428,5 +557,7 @@ if [ "${ORCHESTRATOR_PRECHECK:-}" = "1" ]; then
     info "orchestrator-precheck: running pre-commit-check"
     exec pre-commit-check
 fi
+
+build_missing_codegraph_index
 
 exec claude "$@"
