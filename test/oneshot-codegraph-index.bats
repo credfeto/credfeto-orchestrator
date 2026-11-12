@@ -29,6 +29,15 @@ age_codegraph_index_files() {
     find "${SESSION_BASE_DIR}/codegraph/${item_name}" -exec touch -d "${days} days ago" {} +
 }
 
+# Makes REPO_WORK_DIR a git checkout that tracks a file under .codegraph.
+track_codegraph_in_checkout() {
+    mkdir -p "${REPO_WORK_DIR}/.codegraph"
+    git -C "${REPO_WORK_DIR}" init -q
+    printf '*\n' > "${REPO_WORK_DIR}/.codegraph/.gitignore"
+    # -f because the file ignores itself, as the one codegraph init writes does.
+    git -C "${REPO_WORK_DIR}" add -f .codegraph/.gitignore
+}
+
 # The CodeGraph index mounts in a podman args log, one line each.
 codegraph_mounts() {
     local args_log="$1"
@@ -98,11 +107,7 @@ codegraph_mounts() {
 @test "invoke_claude warns and launches without the index mount when the checkout tracks files under .codegraph" {
     local args_log="${TEST_TMP}/podman_args"
     stub_podman_run_logging_args "${args_log}"
-    git -C "${REPO_WORK_DIR}" init -q
-    mkdir -p "${REPO_WORK_DIR}/.codegraph"
-    printf '*\n' > "${REPO_WORK_DIR}/.codegraph/.gitignore"
-    # -f because the file ignores itself, as the one codegraph init writes does.
-    git -C "${REPO_WORK_DIR}" add -f .codegraph/.gitignore
+    track_codegraph_in_checkout
     run invoke_claude "test prompt" "Issue" "42" "# per-item instructions"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"The checkout tracks files under .codegraph, so the CodeGraph index is not mounted over them - this session runs without a CodeGraph index"* ]]
@@ -286,6 +291,40 @@ codegraph_mounts() {
     [ ! -L "${SESSION_BASE_DIR}/codegraph/PullRequest_99" ]
 }
 
+@test "link_pivot_pr_codegraph_index creates and links nothing when the checkout tracks files under .codegraph" {
+    track_codegraph_in_checkout
+    run link_pivot_pr_codegraph_index "10" "99"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"The checkout tracks files under .codegraph, so PR #99 CodeGraph index is not linked to Issue #10"* ]]
+    [ ! -e "${SESSION_BASE_DIR}/codegraph/Issue_10" ]
+    [ ! -e "${SESSION_BASE_DIR}/codegraph/PullRequest_99" ]
+    [ ! -L "${SESSION_BASE_DIR}/codegraph/PullRequest_99" ]
+}
+
+@test "link_pivot_pr_codegraph_index leaves an existing idle Issue index untouched when the checkout tracks files under .codegraph" {
+    local issue_dir="${SESSION_BASE_DIR}/codegraph/Issue_10"
+    track_codegraph_in_checkout
+    make_codegraph_index "Issue_10"
+    age_codegraph_index_files "Issue_10" 15
+    run link_pivot_pr_codegraph_index "10" "99"
+    [ "${status}" -eq 0 ]
+    [ -z "$(find "${issue_dir}" -maxdepth 0 -mmin -1 -print)" ]
+    [ -z "$(find "${issue_dir}" -newermt '14 days ago' -print)" ]
+    [ ! -L "${SESSION_BASE_DIR}/codegraph/PullRequest_99" ]
+    [ ! -e "${SESSION_BASE_DIR}/codegraph/PullRequest_99" ]
+    # Not kept alive by the pivot, so the idle index is purged as usual.
+    run prune_codegraph_indexes
+    [ ! -e "${issue_dir}" ]
+}
+
+@test "link_pivot_pr_codegraph_index links as usual when the checkout cannot be read by git" {
+    # REPO_WORK_DIR is not a git checkout here, as before the first clone.
+    run link_pivot_pr_codegraph_index "10" "99"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"The checkout tracks files under .codegraph"* ]]
+    [ "$(readlink "${SESSION_BASE_DIR}/codegraph/PullRequest_99")" = "Issue_10" ]
+}
+
 @test "invoke_claude mounts a pivoted PR's linked index directory, so the PR reuses the Issue's index" {
     local args_log="${TEST_TMP}/podman_args"
     stub_podman_run_logging_args "${args_log}"
@@ -307,4 +346,18 @@ codegraph_mounts() {
     [ "${status}" -eq 0 ]
     [ "$(readlink "${SESSION_BASE_DIR}/codegraph/PullRequest_99")" = "Issue_10" ]
     [ -d "${SESSION_BASE_DIR}/codegraph/Issue_10" ]
+}
+
+@test "main links the PR's transcripts but no CodeGraph index on the pivot when the checkout tracks files under .codegraph" {
+    setup_main_pivot_mocks
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"closingIssuesReferences":[{"number":10}]}\n'; }
+    pr_json_has_blocked_label() { return 0; }
+    try_auto_unblock_env_diagnosed_pr() { return 1; }
+    track_codegraph_in_checkout
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_10" ]
+    [ ! -e "${SESSION_BASE_DIR}/codegraph/Issue_10" ]
+    [ ! -L "${SESSION_BASE_DIR}/codegraph/PullRequest_99" ]
 }
