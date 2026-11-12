@@ -55,9 +55,14 @@ blob sizes manageable and to avoid cascading cache invalidation.
 | `dotnet-ef` | `dotnet-ef` |
 | `ilspycmd` | `ilspycmd`, `dotnet-ilspycmd` |
 | `Microsoft.SqlPackage` | `sqlpackage`, `dotnet-sqlpackage` |
-| `PowerShell` | `pwsh` |
+| `PowerShell` | `pwsh`, `dotnet-pwsh` |
 | `dotnet-script` | `dotnet-script` |
 | `dotnet-reportgenerator-globaltool` | `reportgenerator`, `dotnet-reportgenerator` |
+
+`PowerShell` is pinned to an exact release through the `POWERSHELL_VERSION` build argument; the
+other tools install their latest release. PowerShell 7.7.0 ships as a per-RID tool whose
+`powershell.linux-x64` package is not published on nuget.org, so an unpinned install fails on
+Linux. Bump the pin by hand, only to a release whose `linux-x64` package exists.
 
 `dotnet <name>` subcommand aliases (e.g. `dotnet-tsqllint`) are created via `ln -sf` so the
 dotnet CLI can locate tools invoked through subcommand syntax.
@@ -86,6 +91,7 @@ the container at runtime) if anything is missing:
 - Each of the eight .NET tools above is present in `dotnet tool list -g`.
 - `cwm-roslyn-navigator --help` exits `0`.
 - `dotnet reportgenerator -h` exits `0`.
+- `pwsh --version` reports the pinned `POWERSHELL_VERSION`.
 - The `PSScriptAnalyzer` PowerShell module imports successfully under `pwsh`.
 
 `development-full`'s own build-time sanity check still probes the full inherited toolchain
