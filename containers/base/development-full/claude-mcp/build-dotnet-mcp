@@ -57,13 +57,10 @@ esac
 # ran in, so the tool could be anywhere. The image (BUILD_MCP_TOOL=global) bakes the tool in under
 # its fixed HOME, the path its sanity block checks, so there DOTNET_CLI_HOME is ignored: a runtime
 # value must not point the wrapper at a tool the image never checked.
-if [ "${BUILD_MCP_TOOL:-}" = global ]; then
-    dotnet_cli_home="${HOME}"
-elif [ -n "${DOTNET_CLI_HOME:-}" ]; then
+dotnet_cli_home="${HOME}"
+if [ "${BUILD_MCP_TOOL:-}" != global ] && [ -n "${DOTNET_CLI_HOME:-}" ]; then
     require_absolute "dotnet CLI home" "${DOTNET_CLI_HOME}" "DOTNET_CLI_HOME"
     dotnet_cli_home="${DOTNET_CLI_HOME}"
-else
-    dotnet_cli_home="${HOME}"
 fi
 global_tool="${dotnet_cli_home}/.dotnet/tools/${tool_command}"
 
