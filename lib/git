@@ -105,10 +105,16 @@ clean_local_git_url_rewrites() {
         | grep -iE '\.(insteadof|pushinsteadof)$' || true)
 }
 
-# Returns 0 on success. Returns 1 for a dirty/orphaned working tree — the existing "hand off to
-# agent to recover" signal. Returns 2 for a transient git-fetch failure specifically: unlike a
-# dirty tree, there is nothing for the agent to recover from a network blip, so the caller must
-# skip the item entirely rather than burning an agent invocation on stale local state (#1090).
+# Returns 0 on success. Returns 1 for a dirty working tree — the existing "hand off to agent to
+# recover" signal. Returns 2 for a transient git-fetch failure specifically: unlike a dirty tree,
+# there is nothing for the agent to recover from a network blip, so the caller must skip the item
+# entirely rather than burning an agent invocation on stale local state (#1090).
+# A clean checkout on any branch other than main (a previous session's branch, still live on
+# origin or deleted, or a detached HEAD) is switched back to main and rebased on origin/main
+# before every item (#1909). The agent checks out the item's own branch inside its session, but
+# the container's pre-flight (the .NET SDK check against global.json, for one) reads the host
+# checkout before that: a live branch left behind by another item's session would otherwise be
+# judged for every item in the repository, and an SDK-bump PR's branch then fails them all.
 ensure_repo_current() {
     if [ -d "${REPO_WORK_DIR}/.git" ]; then
         # Reset the remote URL to SSH on every iteration. The agent running inside
@@ -133,17 +139,19 @@ ensure_repo_current() {
             warn "Working tree has uncommitted changes on '${current_branch}' for ${REPO_FULL} — handing off to agent to recover"
             return 1
         fi
-        if [ "${current_branch}" != "main" ] \
-                && ! git -C "${REPO_WORK_DIR}" rev-parse --verify "refs/remotes/origin/${current_branch}" >/dev/null 2>&1; then
-            warn "Branch '${current_branch}' no longer exists on origin for ${REPO_FULL} — returning to main"
+        if [ "${current_branch}" != "main" ]; then
+            local left_on="${current_branch:-a detached HEAD}"
+            if [ -n "${current_branch}" ] \
+                    && git -C "${REPO_WORK_DIR}" rev-parse --verify "refs/remotes/origin/${current_branch}" >/dev/null 2>&1; then
+                info "Checkout for ${REPO_FULL} was left on '${left_on}' by an earlier session — returning to main"
+            else
+                warn "Branch '${left_on}' no longer exists on origin for ${REPO_FULL} — returning to main"
+            fi
             git -C "${REPO_WORK_DIR}" checkout main \
-                || die "Failed to switch to main after orphaned branch '${current_branch}' for ${REPO_FULL}"
-            current_branch="main"
+                || die "Failed to switch to main from '${left_on}' for ${REPO_FULL}"
         fi
-        if [ "${current_branch}" = "main" ]; then
-            info "Rebasing main with origin/main..."
-            git -C "${REPO_WORK_DIR}" rebase origin/main || die "Failed to rebase main with origin/main"
-        fi
+        info "Rebasing main with origin/main..."
+        git -C "${REPO_WORK_DIR}" rebase origin/main || die "Failed to rebase main with origin/main"
     else
         info "Cloning ${REPO_FULL} to ${REPO_WORK_DIR}..."
         mkdir -p "$(dirname "${REPO_WORK_DIR}")" || die "Failed to create parent directory for ${REPO_WORK_DIR}"
@@ -200,10 +208,11 @@ issue_branch_regex() {
 # Detects a branch on origin matching issue_branch_regex for this issue that has commits ahead
 # of origin/main — the signature of an agent session that pushed work for this issue and then
 # died before opening a pull request (#1262). Performs no fetch of its own: called both from the
-# fingerprint-unchanged skip decision (where recover_orphaned_branch has usually just fetched,
-# since the local checkout stays off main for as long as this stale branch remains unresolved)
-# and, for the authoritative answer, from the work block right after ensure_repo_current's own
-# fetch — see oneshot and its "#1262 review" comment for why the second call exists.
+# fingerprint-unchanged skip decision (where the remote refs are those of the last fetch: either
+# recover_orphaned_branch's own, when a session left the checkout off main, or the previous work
+# block's, since ensure_repo_current returns the checkout to main) and, for the authoritative
+# answer, from the work block right after ensure_repo_current's own fetch — see oneshot and its
+# "#1262 review" comment for why the second call exists.
 # Outputs the branch name (without the "origin/" prefix) and returns 0 when found; returns 1
 # when the repo has never been cloned locally, no branch matches the convention, or the only
 # match has no commits ahead of origin/main.

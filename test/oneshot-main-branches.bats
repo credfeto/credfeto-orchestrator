@@ -173,6 +173,105 @@ load oneshot_helper
     [[ "${output}" == *"new-untracked-file.txt"* ]]
 }
 
+# --- ensure_repo_current: return to main before every item (#1909) -------------
+
+# Real git against a local bare remote. ensure_repo_current rewrites origin to the canonical SSH
+# URL before fetching, so a global insteadOf rule in the isolated HOME (clean_local_git_url_rewrites
+# clears only --local rules) points that URL back at the local remote and the fetch stays offline.
+setup_ensure_repo_current_remote() {
+    local remote_dir
+    remote_dir=$(setup_local_git_remote)
+    git config --global "url.${remote_dir}.insteadOf" "git@github.com:${OWNER}/${REPO}.git"
+    printf '%s\n' "${remote_dir}"
+}
+
+@test "ensure_repo_current returns a clean checkout on a branch still live on origin to main (#1909)" {
+    local remote_dir
+    remote_dir=$(setup_ensure_repo_current_remote)
+    git -C "${REPO_WORK_DIR}" checkout -b feature/sdk-bump > /dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" -c commit.gpgsign=false commit --allow-empty -m "work" > /dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" push origin feature/sdk-bump > /dev/null 2>&1
+    advance_remote_main "${remote_dir}" 1
+
+    run ensure_repo_current
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"left on 'feature/sdk-bump'"* ]]
+
+    local current_branch
+    current_branch=$(git -C "${REPO_WORK_DIR}" branch --show-current)
+    [ "${current_branch}" = "main" ]
+    [ "$(git -C "${REPO_WORK_DIR}" rev-parse HEAD)" = "$(git -C "${REPO_WORK_DIR}" rev-parse origin/main)" ]
+    # The live branch itself is untouched, locally and on origin.
+    git -C "${REPO_WORK_DIR}" rev-parse --verify refs/heads/feature/sdk-bump > /dev/null
+    git -C "${remote_dir}" rev-parse --verify refs/heads/feature/sdk-bump > /dev/null
+}
+
+@test "ensure_repo_current returns a clean checkout on a branch deleted from origin to main" {
+    local remote_dir
+    remote_dir=$(setup_ensure_repo_current_remote)
+    git -C "${REPO_WORK_DIR}" checkout -b feature/merged > /dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" -c commit.gpgsign=false commit --allow-empty -m "work" > /dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" push origin feature/merged > /dev/null 2>&1
+    git -C "${remote_dir}" branch -D feature/merged > /dev/null 2>&1
+
+    run ensure_repo_current
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"no longer exists on origin"* ]]
+
+    local current_branch
+    current_branch=$(git -C "${REPO_WORK_DIR}" branch --show-current)
+    [ "${current_branch}" = "main" ]
+}
+
+@test "ensure_repo_current returns a clean detached HEAD to main" {
+    setup_ensure_repo_current_remote > /dev/null
+    git -C "${REPO_WORK_DIR}" checkout -q --detach HEAD > /dev/null 2>&1
+
+    run ensure_repo_current
+    [ "${status}" -eq 0 ]
+
+    local current_branch
+    current_branch=$(git -C "${REPO_WORK_DIR}" branch --show-current)
+    [ "${current_branch}" = "main" ]
+}
+
+@test "ensure_repo_current still returns 1 and keeps a dirty checkout on its live branch (#1909)" {
+    setup_ensure_repo_current_remote > /dev/null
+    git -C "${REPO_WORK_DIR}" checkout -b feature/in-progress > /dev/null 2>&1
+    printf 'tracked\n' > "${REPO_WORK_DIR}/work.txt"
+    git -C "${REPO_WORK_DIR}" add work.txt > /dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" -c commit.gpgsign=false commit -m "work" > /dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" push origin feature/in-progress > /dev/null 2>&1
+    printf 'unfinished\n' >> "${REPO_WORK_DIR}/work.txt"
+
+    DIRTY_BRANCH=""
+    local rc=0
+    ensure_repo_current || rc=$?
+    [ "${rc}" -eq 1 ]
+    [ "${DIRTY_BRANCH}" = "feature/in-progress" ]
+
+    local current_branch
+    current_branch=$(git -C "${REPO_WORK_DIR}" branch --show-current)
+    [ "${current_branch}" = "feature/in-progress" ]
+    [ "$(grep -c unfinished "${REPO_WORK_DIR}/work.txt")" -eq 1 ]
+}
+
+@test "ensure_repo_current still rebases a checkout already on main onto origin/main" {
+    local remote_dir
+    remote_dir=$(setup_ensure_repo_current_remote)
+    advance_remote_main "${remote_dir}" 2
+
+    run ensure_repo_current
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"returning to main"* ]]
+
+    local current_branch
+    current_branch=$(git -C "${REPO_WORK_DIR}" branch --show-current)
+    [ "${current_branch}" = "main" ]
+    [ "$(git -C "${REPO_WORK_DIR}" rev-parse HEAD)" = "$(git -C "${REPO_WORK_DIR}" rev-parse origin/main)" ]
+    [ "$(git -C "${REPO_WORK_DIR}" rev-list --count HEAD)" -eq 3 ]
+}
+
 # --- git_commits_behind unit tests (#1298) --------------------------------------
 
 @test "git_commits_behind reports 0 when ref and upstream are the same commit" {
