@@ -234,13 +234,10 @@ RUN mkdir -p /home/developer/.claude/agents \
 # below keeps its root at the repo mount wherever Claude Code is started.
 # BUILD_MCP_TOOL=global tells the wrapper to skip its git and dotnet tool list
 # probes and run the global tool directly, because in the image the tool, HOME
-# and the root are all fixed. codegraph, the code knowledge graph server installed
-# by development-tools
-# (this image's base chain), is pinned to the exact entry `codegraph install`
-# writes for Claude Code,
-# so a host's own entry merges as the same server in
-# install-claude-hooks rather
-# than colliding.
+# and the root are all fixed. codegraph, the code knowledge graph server
+# installed by development-tools (this image's base chain), is pinned to the
+# exact entry `codegraph install` writes for Claude Code, so a host's own entry
+# merges as the same server in install-claude-hooks rather than colliding.
 # Any other server (such as the JetBrains IDEs' rider and webstorm) is allowed
 # and not checked.
 COPY --chown=root:root --chmod=0444 claude-user-settings.json /home/developer/.claude/settings.json
