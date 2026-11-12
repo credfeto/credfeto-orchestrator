@@ -412,8 +412,8 @@ build_missing_codegraph_index() {
 
 # Succeeds when git tracks any file under the checkout's .codegraph. Checked here rather than
 # passed in by the host, so it always matches the checkout this container sees. When git cannot
-# read the checkout it fails, the same as lib/podman's add_codegraph_index_podman_args, because
-# the agent's git cannot commit from that checkout either.
+# read the checkout it fails, the same as the host's checkout_tracks_codegraph in lib/state,
+# because the agent's git cannot commit from that checkout either.
 checkout_tracks_codegraph() {
     [ -n "$(git -C "$1" ls-files -- .codegraph 2>/dev/null)" ]
 }

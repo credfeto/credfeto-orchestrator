@@ -867,8 +867,8 @@ codegraph_index_root_path() {
 # follows the transcript lifecycle: one per work item, shared by an Issue and the PR it pivots to
 # (link_pivot_pr_codegraph_index), and purged once no session has mounted it for
 # TRANSCRIPT_ITEM_RETENTION_DAYS (prune_codegraph_indexes, through the shared prune_idle_item_dirs
-# in lib/podman). A new
-# item therefore starts with an empty directory and the entrypoint runs a full codegraph init.
+# in lib/podman). A new item therefore starts with an empty directory and the entrypoint runs a
+# full codegraph init.
 # A checkout that tracks files under .codegraph gets no mount (add_codegraph_index_podman_args,
 # through checkout_tracks_codegraph).
 codegraph_index_dir_path() {
