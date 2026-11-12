@@ -141,6 +141,7 @@
       "Bash(npm rebuild *)",
       "Bash(npm run *)",
       "Bash(npm test *)",
+      "Bash(npm update *)",
       "Bash(npm view *)",
       "Bash(npx *)",
       "Bash(openssl *)",
