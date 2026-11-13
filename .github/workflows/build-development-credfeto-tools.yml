@@ -99,6 +99,7 @@ jobs:
             FunFair.BuildVersion
             Credfeto.DotNet.Repo.Formatter
             Credfeto.Build.Dotnet.Server
+            Credfeto.ChangeLog.Mcp
 
       - name: "Build and push"
         if: ${{ steps.relevance.outputs.relevant == 'true' }}
