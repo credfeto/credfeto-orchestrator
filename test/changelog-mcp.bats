@@ -26,6 +26,10 @@ setup() {
 
     WORK="$(cd "${TEST_TMP}" && pwd -P)/work"
     mkdir -p "${WORK}"
+    # A preset root that exists, as the image's mount does, for the cases that reach the global
+    # tool, which is started there.
+    PRESET_ROOT="${WORK}/preset/repo"
+    mkdir -p "${PRESET_ROOT}"
     # Every wrapper run gets these, so git never finds a repository above the test's own
     # directory (GIT_CEILING_DIRECTORIES) or reads the host's system config.
     GIT_ISOLATION_ENV=("GIT_CEILING_DIRECTORIES=${WORK}" GIT_CONFIG_NOSYSTEM=1)
@@ -130,11 +134,11 @@ make_git_repo() {
     [ "$(<"${DOTNET_STUB_STATE}/list-args")" = "tool list --local --format json" ]
 }
 
-@test "the global tool runs when dotnet tool list finds no manifest, and the list's stdout never reaches stdout" {
+@test "the global tool runs from the root when dotnet tool list finds no manifest, and the list's stdout never reaches stdout" {
     make_global_tool
     run_wrapper "${WORK}"
     [ "${status}" -eq 0 ]
-    [ "${output}" = "$(printf '%s\n' global "cwd=${USER_HOME}" "root=${WORK}" argc=0)" ]
+    [ "${output}" = "$(printf '%s\n' global "cwd=${WORK}" "root=${WORK}" argc=0)" ]
     [ -z "${stderr}" ]
 }
 
@@ -143,7 +147,7 @@ make_git_repo() {
     make_global_tool
     run_wrapper "${WORK}"
     [ "${status}" -eq 0 ]
-    [ "${output}" = "$(printf '%s\n' global "cwd=${USER_HOME}" "root=${WORK}" argc=0)" ]
+    [ "${output}" = "$(printf '%s\n' global "cwd=${WORK}" "root=${WORK}" argc=0)" ]
     [ -z "${stderr}" ]
 }
 
@@ -252,7 +256,7 @@ make_git_repo() {
     rm -f "${STUB_BIN}/dotnet"
     run_wrapper "${WORK}"
     [ "${status}" -eq 0 ]
-    [ "${output}" = "$(printf '%s\n' global "cwd=${USER_HOME}" "root=${WORK}" argc=0)" ]
+    [ "${output}" = "$(printf '%s\n' global "cwd=${WORK}" "root=${WORK}" argc=0)" ]
     [ -z "${stderr}" ]
 
     rm -f "${GLOBAL_TOOL}"
@@ -275,16 +279,32 @@ make_git_repo() {
 @test "a preset CHANGELOG_MCP_REPO_ROOT is kept" {
     make_global_tool
     make_git_repo "${WORK}/repo"
-    WRAPPER_ENV=(CHANGELOG_MCP_REPO_ROOT=/workspace/repo)
+    WRAPPER_ENV=("CHANGELOG_MCP_REPO_ROOT=${PRESET_ROOT}")
     run_wrapper "${WORK}/repo/src"
     [ "${status}" -eq 0 ]
-    [ "${lines[2]}" = "root=/workspace/repo" ]
+    [ "${lines[0]}" = "global" ]
+    [ "${lines[1]}" = "cwd=${PRESET_ROOT}" ]
+    [ "${lines[2]}" = "root=${PRESET_ROOT}" ]
 
+    # The local tool still runs from HOME, so it gets the preset root only through the variable.
     list_local_tool changelog-mcp
     run_wrapper "${WORK}/repo/src"
     [ "${status}" -eq 0 ]
     [ "${lines[0]}" = "dotnet" ]
-    [ "${lines[2]}" = "root=/workspace/repo" ]
+    [ "${lines[1]}" = "cwd=${USER_HOME}" ]
+    [ "${lines[2]}" = "root=${PRESET_ROOT}" ]
+}
+
+@test "a root that cannot be entered fails for the global tool, with a message on stderr and nothing on stdout" {
+    make_global_tool
+    local preset
+    for preset in CHANGELOG_MCP_TOOL= "CHANGELOG_MCP_TOOL=global"; do
+        WRAPPER_ENV=("${preset}" "CHANGELOG_MCP_REPO_ROOT=${WORK}/missing")
+        run_wrapper "${WORK}"
+        [ "${status}" -ne 0 ]
+        [ -z "${output}" ]
+        [[ "${stderr}" == *"changelog-mcp: cannot change to the repository root ${WORK}/missing to run the global changelog-mcp" ]]
+    done
 }
 
 @test "an empty CHANGELOG_MCP_REPO_ROOT is resolved like an unset one" {
@@ -304,6 +324,9 @@ make_git_repo() {
 
     run_wrapper "${WORK}/repo/src/deep"
     [ "${status}" -eq 0 ]
+    # The global tool starts in the top level, not the subfolder, so a server that walks up from its
+    # working directory finds the same repository.
+    [ "${lines[1]}" = "cwd=${WORK}/repo" ]
     [ "${lines[2]}" = "root=${WORK}/repo" ]
 }
 
@@ -378,17 +401,18 @@ make_git_repo() {
 
 @test "a preset CHANGELOG_MCP_REPO_ROOT is kept ahead of CLAUDE_PROJECT_DIR" {
     make_global_tool
-    WRAPPER_ENV=(CHANGELOG_MCP_REPO_ROOT=/workspace/repo "CLAUDE_PROJECT_DIR=${WORK}")
+    WRAPPER_ENV=("CHANGELOG_MCP_REPO_ROOT=${PRESET_ROOT}" "CLAUDE_PROJECT_DIR=${WORK}")
     run_wrapper "${WORK}"
     [ "${status}" -eq 0 ]
-    [ "${lines[2]}" = "root=/workspace/repo" ]
+    [ "${lines[1]}" = "cwd=${PRESET_ROOT}" ]
+    [ "${lines[2]}" = "root=${PRESET_ROOT}" ]
 }
 
 @test "arguments are passed through unchanged to either tool" {
     make_global_tool
     run_wrapper "${WORK}" --flag 'two words' ''
     [ "${status}" -eq 0 ]
-    [ "${output}" = "$(printf '%s\n' global "cwd=${USER_HOME}" "root=${WORK}" argc=3 --flag 'two words' '')" ]
+    [ "${output}" = "$(printf '%s\n' global "cwd=${WORK}" "root=${WORK}" argc=3 --flag 'two words' '')" ]
 
     list_local_tool changelog-mcp
     run_wrapper "${WORK}" --flag 'two words' ''
@@ -449,10 +473,10 @@ make_recording_probes() {
     make_recording_probes
     # A listed local tool would win without the setting; the stubs would also fail it.
     list_local_tool changelog-mcp
-    WRAPPER_ENV=(CHANGELOG_MCP_TOOL=global CHANGELOG_MCP_REPO_ROOT=/workspace/repo)
+    WRAPPER_ENV=(CHANGELOG_MCP_TOOL=global "CHANGELOG_MCP_REPO_ROOT=${PRESET_ROOT}")
     run_wrapper "${WORK}" --flag
     [ "${status}" -eq 0 ]
-    [ "${output}" = "$(printf '%s\n' global "cwd=${USER_HOME}" root=/workspace/repo argc=1 --flag)" ]
+    [ "${output}" = "$(printf '%s\n' global "cwd=${PRESET_ROOT}" "root=${PRESET_ROOT}" argc=1 --flag)" ]
     [ -z "${stderr}" ]
     [ ! -e "${TEST_TMP}/probe-calls" ]
 
@@ -466,7 +490,7 @@ make_recording_probes() {
     # shellcheck disable=SC2016  # expanded by the stub, not here
     make_global_tool 'printf "%s\n" "nologo=${DOTNET_NOLOGO-unset}" "workload=${DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE-unset}"'
     make_recording_probes
-    WRAPPER_ENV=(CHANGELOG_MCP_TOOL=global CHANGELOG_MCP_REPO_ROOT=/workspace/repo DOTNET_NOLOGO=0)
+    WRAPPER_ENV=(CHANGELOG_MCP_TOOL=global "CHANGELOG_MCP_REPO_ROOT=${PRESET_ROOT}" DOTNET_NOLOGO=0)
     run_wrapper "${WORK}"
     [ "${status}" -eq 0 ]
     [ "${output}" = "$(printf '%s\n' nologo=1 workload=true)" ]
@@ -530,14 +554,14 @@ make_recording_probes() {
     [[ "${stderr}" == "changelog-mcp: changelog-mcp not found"* ]]
 }
 
-@test "the global tool is found under DOTNET_CLI_HOME when it is set, and still started from HOME" {
+@test "the global tool is found under DOTNET_CLI_HOME when it is set, and still started from the root" {
     local cli_home="${USER_HOME}/cli-home"
     GLOBAL_TOOL="${cli_home}/.dotnet/tools/changelog-mcp"
     make_global_tool
     WRAPPER_ENV=("DOTNET_CLI_HOME=${cli_home}")
     run_wrapper "${WORK}"
     [ "${status}" -eq 0 ]
-    [ "${output}" = "$(printf '%s\n' global "cwd=${USER_HOME}" "root=${WORK}" argc=0)" ]
+    [ "${output}" = "$(printf '%s\n' global "cwd=${WORK}" "root=${WORK}" argc=0)" ]
     [ -z "${stderr}" ]
 
     # The one under HOME is not used in its place.
@@ -561,10 +585,10 @@ make_recording_probes() {
     make_recording_probes
     local value
     for value in "${cli_home}" cli-home ' '; do
-        WRAPPER_ENV=(CHANGELOG_MCP_TOOL=global CHANGELOG_MCP_REPO_ROOT=/workspace/repo "DOTNET_CLI_HOME=${value}")
+        WRAPPER_ENV=(CHANGELOG_MCP_TOOL=global "CHANGELOG_MCP_REPO_ROOT=${PRESET_ROOT}" "DOTNET_CLI_HOME=${value}")
         run_wrapper "${WORK}"
         [ "${status}" -eq 0 ]
-        [ "${output}" = "$(printf '%s\n' global "cwd=${USER_HOME}" root=/workspace/repo argc=0)" ]
+        [ "${output}" = "$(printf '%s\n' global "cwd=${PRESET_ROOT}" "root=${PRESET_ROOT}" argc=0)" ]
         [ -z "${stderr}" ]
     done
     [ ! -e "${TEST_TMP}/probe-calls" ]
@@ -575,7 +599,7 @@ make_recording_probes() {
     WRAPPER_ENV=(DOTNET_CLI_HOME=)
     run_wrapper "${WORK}"
     [ "${status}" -eq 0 ]
-    [ "${output}" = "$(printf '%s\n' global "cwd=${USER_HOME}" "root=${WORK}" argc=0)" ]
+    [ "${output}" = "$(printf '%s\n' global "cwd=${WORK}" "root=${WORK}" argc=0)" ]
     [ -z "${stderr}" ]
 }
 
@@ -610,7 +634,7 @@ make_recording_probes() {
 @test "a relative HOME fails before anything runs, on a host and with CHANGELOG_MCP_TOOL=global" {
     make_recording_probes
     # A global tool where the relative HOME resolves from the start directory, which the wrapper's
-    # global tool check would find before its cd to HOME ran the exec from somewhere else.
+    # global tool check would find although HOME names no directory the wrapper ever checked.
     mkdir -p "${WORK}/relative-home/.dotnet/tools"
     STUB_BIN="${WORK}/relative-home/.dotnet/tools" make_stub changelog-mcp 'printf "%s\n" global'
     local preset

@@ -224,8 +224,10 @@ owner and mode, both `ENV` values and the global tool. See
 `/etc/claude-code/mcp/changelog-mcp`, with no `env`, and `mcp__changelog__*` in `permissions.allow` allows all
 of its tools. It is registered for every session, whatever the repository's language. The wrapper is a copy of
 `build-dotnet-mcp` with `CHANGELOG_MCP_REPO_ROOT` and `CHANGELOG_MCP_TOOL` (both image `ENV`s, `/workspace/repo`
-and `global`) in place of `BUILD_MCP_REPO_ROOT` and `BUILD_MCP_TOOL`, and the server, started from `~`, takes
-the repository from `CHANGELOG_MCP_REPO_ROOT`. It has no log directory and does not set
+and `global`) in place of `BUILD_MCP_REPO_ROOT` and `BUILD_MCP_TOOL`, and it starts the global tool from
+`CHANGELOG_MCP_REPO_ROOT` rather than `~`, so a server that finds its repository from its working directory, as
+every released version does, works on that repository too; a local tool on a host still runs from `~` and
+relies on the variable. It has no log directory and does not set
 `SuppressNETCoreSdkPreviewMessage`, as the server runs no child builds; it runs
 `/home/developer/.dotnet/tools/changelog-mcp` here. The sanity block pins that exact entry, the wrapper's
 owner and mode and both `ENV` values; `development-credfeto-tools` checks the global tool, because this

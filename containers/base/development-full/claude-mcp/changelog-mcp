@@ -17,15 +17,19 @@
 # manifest would otherwise hide the user's, and asking dotnet means the check
 # finds exactly the manifest dotnet tool run will use. Otherwise it is the
 # global tool in .dotnet/tools under DOTNET_CLI_HOME, or under $HOME when that
-# is unset or empty, where dotnet tool install -g puts it. Either tool is
-# started from $HOME, so the server's working directory is the same whichever
-# one runs, and it finds the repository only through CHANGELOG_MCP_REPO_ROOT.
+# is unset or empty, where dotnet tool install -g puts it. The global tool is
+# started from CHANGELOG_MCP_REPO_ROOT: it needs no manifest, and a server that
+# finds its repository from its working directory then finds the root too, while
+# one that reads CHANGELOG_MCP_REPO_ROOT gets the same answer. The local tool has
+# to stay in $HOME for its manifest, so it finds the repository only through
+# CHANGELOG_MCP_REPO_ROOT.
 #
 # CHANGELOG_MCP_TOOL=global, which only the container image sets, skips both the
 # git and the dotnet tool list probes and runs the global tool under $HOME
-# directly, ignoring DOTNET_CLI_HOME: in the image the tool, HOME and the
-# repository root are all fixed, so there is nothing to choose. It then needs
-# CHANGELOG_MCP_REPO_ROOT set, as the image does.
+# directly, from CHANGELOG_MCP_REPO_ROOT, ignoring DOTNET_CLI_HOME: in the
+# image the tool, HOME and the repository root are all fixed, so there is
+# nothing to choose. It then needs CHANGELOG_MCP_REPO_ROOT set, as the image
+# does.
 #
 # stdout is the MCP stream, so only the server writes to it: every message here
 # goes to stderr.
@@ -46,9 +50,10 @@ require_absolute() {
 tool_command="changelog-mcp"
 
 [ -n "${HOME:-}" ] || fail "HOME is not set"
-# Every tool path below is built from HOME and every exec runs after a cd to it. A relative HOME
-# would make the global tool check resolve from the start directory but the exec from HOME itself,
-# and a relative cd consults CDPATH, which can print the directory to stdout, the MCP stream.
+# Every tool path below is built from HOME, and the list and the local tool run after a cd to it. A
+# relative HOME would make the global tool check resolve from the start directory but the local
+# tool's manifest from HOME itself, and a relative cd consults CDPATH, which can print the directory
+# to stdout, the MCP stream.
 require_absolute "home directory" "${HOME}" "HOME"
 
 case "${CHANGELOG_MCP_TOOL:-}" in
@@ -89,8 +94,10 @@ if [ -z "${CHANGELOG_MCP_REPO_ROOT:-}" ]; then
     CHANGELOG_MCP_REPO_ROOT=$(git -C "${start_dir}" rev-parse --show-toplevel </dev/null 2>/dev/null) \
         || CHANGELOG_MCP_REPO_ROOT="${start_dir}"
 fi
-# The server runs from HOME, so a root that is not absolute would name a directory under HOME
-# rather than the one it was resolved from.
+# The global tool is started by a cd to the root, which for a relative path would resolve from
+# the start directory and consult CDPATH (printing to stdout, the MCP stream), and the local tool
+# runs from HOME, where a relative root would name a directory under HOME. Either way it would not
+# be the directory it was resolved from.
 require_absolute "repository root" "${CHANGELOG_MCP_REPO_ROOT}" "${root_source}"
 export CHANGELOG_MCP_REPO_ROOT
 
@@ -139,14 +146,18 @@ if [ "${CHANGELOG_MCP_TOOL:-}" != global ] && local_tool_is_listed; then
     # The list above ran from HOME, so the cd only fails if HOME changes in between. That is fatal
     # rather than a fall through to the global tool, because the user's listed local tool is never
     # replaced, and dotnet never runs outside HOME. A listed tool that is not restored fails in
-    # dotnet tool run itself.
+    # dotnet tool run itself. Run from HOME, the server cannot find the repository from its working
+    # directory, so the local tool relies on CHANGELOG_MCP_REPO_ROOT.
     cd "${HOME}" || fail "cannot change to ${HOME} to run the local ${tool_command}"
     exec dotnet tool run "${tool_command}" "$@"
 fi
 
 if [ -f "${global_tool}" ] && [ -x "${global_tool}" ]; then
-    # From HOME, like the local tool, so the server starts in the same directory either way.
-    cd "${HOME}" || fail "cannot change to ${HOME} to run the global ${tool_command}"
+    # From the root, because a global tool needs no manifest and a server that finds its repository
+    # from its working directory, as every release without CHANGELOG_MCP_REPO_ROOT support does,
+    # would otherwise find HOME's, or none. The root is absolute, so the cd never consults CDPATH.
+    cd "${CHANGELOG_MCP_REPO_ROOT}" \
+        || fail "cannot change to the repository root ${CHANGELOG_MCP_REPO_ROOT} to run the global ${tool_command}"
     exec "${global_tool}" "$@"
 fi
 
