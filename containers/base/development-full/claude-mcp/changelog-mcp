@@ -163,4 +163,6 @@ fi
 
 [ "${CHANGELOG_MCP_TOOL:-}" != global ] \
     || fail "CHANGELOG_MCP_TOOL=global, but ${global_tool} is missing or not executable"
-fail "${tool_command} not found: install it as a local tool from ${HOME} with dotnet tool install --local, or as a global tool in ${global_tool%/*}"
+# The global tool is the one to recommend: released versions do not read CHANGELOG_MCP_REPO_ROOT,
+# so only the global tool, started from the root, works on the repository rather than on HOME.
+fail "${tool_command} not found: install the global tool with dotnet tool install -g Credfeto.ChangeLog.Mcp (into ${global_tool%/*}), which runs from the repository root; a local tool in ${HOME}'s manifest is used too, but released versions then work on ${HOME}, not the repository"
