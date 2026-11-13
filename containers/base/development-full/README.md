@@ -12,7 +12,7 @@ development-tools  →  development-node  →  development-python
 It layers a curated set of Claude Code skill repositories, the `credfeto-ai-skills`
 Claude Code agents, baked-in Claude Code settings/hooks, and a tamper-resistant
 global pre-commit hook chain on top of `development-credfeto-tools`. The NuGet
-configuration, `claude-code`, and all twelve .NET global tools (both stable
+configuration, `claude-code`, and all the .NET global tools (both stable
 third-party and first-party Credfeto.*/FunFair.*) are inherited from
 `development-dotnet-tools` / `development-credfeto-tools`. See those images' own
 READMEs for what they install and why they're split out.
@@ -374,11 +374,11 @@ Executed as root. Fails the build immediately if anything is missing or broken.
 
 **Binary presence and `--version` probe** — all of the following must be on `PATH` and exit 0 for `--version`:
 
-`git`, `gh`, `dotnet`, `python3`, `gpg`, `curl`, `sqlite3`, `shellcheck`, `bats`, `shfmt`, `checkbashisms`, `uv`, `ruff`, `sqlfluff`, `actionlint`, `markdownlint-cli2`, `pre-commit`, `trufflehog`, `hadolint`, `dotenv-linter`, `sqlcmd`, `composite-action-lint`, `pwsh`, `yamllint`, `ansible-lint`, `flake8`, `pylint`, `cfn-lint`, `markdownlint`, `stylelint`, `eslint`, `xmllint`, `codegraph`
+`git`, `gh`, `dotnet`, `python3`, `gpg`, `curl`, `sqlite3`, `shellcheck`, `bats`, `shfmt`, `checkbashisms`, `uv`, `ruff`, `sqlfluff`, `actionlint`, `markdownlint-cli2`, `pre-commit`, `trufflehog`, `hadolint`, `dotenv-linter`, `sqlcmd`, `composite-action-lint`, `yamllint`, `ansible-lint`, `flake8`, `pylint`, `cfn-lint`, `markdownlint`, `stylelint`, `eslint`, `xmllint`, `codegraph`
 
 **dotnet global tool verification** — `dotnet tool list -g` is run as `developer` and each of the following package IDs must appear (case-insensitive):
 
-`credfeto.changelog.cmd`, `credfeto.dotnet.code.analysis.overrides.cmd`, `tsqllint`, `funfair.buildcheck`, `funfair.buildversion`, `cwm.roslynnavigator`, `dotnet-ef`, `ilspycmd`, `microsoft.sqlpackage`, `powershell`, `credfeto.dotnet.repo.formatter`, `dotnet-script`, `dotnet-reportgenerator-globaltool`, `credfeto.build.dotnet.server`
+`credfeto.changelog.cmd`, `credfeto.dotnet.code.analysis.overrides.cmd`, `tsqllint`, `funfair.buildcheck`, `funfair.buildversion`, `cwm.roslynnavigator`, `dotnet-ef`, `ilspycmd`, `microsoft.sqlpackage`, `credfeto.dotnet.repo.formatter`, `dotnet-script`, `dotnet-reportgenerator-globaltool`, `credfeto.build.dotnet.server`
 
 **cwm-roslyn-navigator functional probe** — `cwm-roslyn-navigator --help` is run as `developer` and must exit 0.
 

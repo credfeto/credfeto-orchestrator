@@ -55,29 +55,20 @@ blob sizes manageable and to avoid cascading cache invalidation.
 | `dotnet-ef` | `dotnet-ef` |
 | `ilspycmd` | `ilspycmd`, `dotnet-ilspycmd` |
 | `Microsoft.SqlPackage` | `sqlpackage`, `dotnet-sqlpackage` |
-| `PowerShell` | `pwsh`, `dotnet-pwsh` |
 | `dotnet-script` | `dotnet-script` |
 | `dotnet-reportgenerator-globaltool` | `reportgenerator`, `dotnet-reportgenerator` |
 
-`PowerShell` is pinned to an exact release through the `POWERSHELL_VERSION` build argument; the
-other tools install their latest release. PowerShell 7.7.0 ships as a per-RID tool whose
-`powershell.linux-x64` package is not published on nuget.org, so an unpinned install fails on
-Linux. Bump the pin by hand, only to a release whose `linux-x64` package exists.
+Each tool installs its latest release.
 
 `dotnet <name>` subcommand aliases (e.g. `dotnet-tsqllint`) are created via `ln -sf` so the
 dotnet CLI can locate tools invoked through subcommand syntax.
-
-### PSScriptAnalyzer
-
-Installed via `Install-PSResource` for the `developer` user's PowerShell profile —
-`check-setup` (in `development-full`) imports it to validate the `VALIDATE_POWERSHELL` hook.
 
 ## Cache-bust mechanism
 
 `STABLE_TOOLS_CACHE_BUST` is resolved by `build-development-dotnet-tools.yml` via the
 `.github/actions/nuget-latest-versions` composite action: it queries the NuGet flat-container
 API for the latest published version of every package this image installs (`TSQLLint`,
-`CWM.RoslynNavigator`, `dotnet-ef`, `ilspycmd`, `Microsoft.SqlPackage`, `PowerShell`,
+`CWM.RoslynNavigator`, `dotnet-ef`, `ilspycmd`, `Microsoft.SqlPackage`,
 `dotnet-script`, `dotnet-reportgenerator-globaltool`) and hashes them together. The value only
 changes when one of those packages actually ships a new release, so an unchanged day is a full
 build-cache hit rather than a blind reinstall.
@@ -88,11 +79,9 @@ The build-time sanity `RUN` step verifies everything this stage adds and fails t
 the container at runtime) if anything is missing:
 
 - `claude` is present and responds to `--version`/`--help`.
-- Each of the eight .NET tools above is present in `dotnet tool list -g`.
+- Each of the seven .NET tools above is present in `dotnet tool list -g`.
 - `cwm-roslyn-navigator --help` exits `0`.
 - `dotnet reportgenerator -h` exits `0`.
-- `pwsh --version` reports the pinned `POWERSHELL_VERSION`.
-- The `PSScriptAnalyzer` PowerShell module imports successfully under `pwsh`.
 
 `development-full`'s own build-time sanity check still probes the full inherited toolchain
 end-to-end as an integration test — this stage's check exists to fail fast, at this layer,

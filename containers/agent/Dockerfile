@@ -199,7 +199,7 @@ RUN set -e; \
     echo "== re-verify inherited binaries (binary presence + version probe) =="; \
     for cmd in git gh dotnet python3 gpg curl sqlite3 timeout \
                shellcheck bats shfmt checkbashisms uv ruff sqlfluff actionlint markdownlint-cli2 pre-commit \
-               trufflehog hadolint dotenv-linter sqlcmd pwsh \
+               trufflehog hadolint dotenv-linter sqlcmd \
                yamllint ansible-lint flake8 pylint cfn-lint \
                markdownlint stylelint eslint \
                xmllint; do \
@@ -254,7 +254,7 @@ USER developer
 
 # hadolint ignore=DL3059
 RUN set -e; \
-    for wrapper in run-eslint run-stylelint run-psscriptanalyzer run-bats; do \
+    for wrapper in run-eslint run-stylelint run-bats; do \
         command -v "$wrapper" >/dev/null 2>&1 \
             || { echo "FATAL sanity: $wrapper not on PATH for the developer user — /opt/pre-commit/src/scripts/ missing from PATH?" >&2; exit 1; }; \
     done; \
