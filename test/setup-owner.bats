@@ -878,6 +878,61 @@ stub_host_lookups() {
     [ "${status}" -eq 0 ]
 }
 
+@test "validate_source_config accepts a 400 token file owned by the running user" {
+    write_source_config
+    stub_host_lookups "${TEST_TMP}/owner_home"
+    chmod 400 "${XDG_CONFIG_HOME}/orchestrator/tokens/testowner"
+
+    run validate_source_config "testowner"
+    [ "${status}" -eq 0 ]
+}
+
+@test "validate_source_config refuses a symlinked token file, naming the path" {
+    write_source_config
+    stub_host_lookups "${TEST_TMP}/owner_home"
+    local tf="${XDG_CONFIG_HOME}/orchestrator/tokens/testowner"
+    mv "${tf}" "${TEST_TMP}/real-token"
+    ln -s "${TEST_TMP}/real-token" "${tf}"
+
+    run validate_source_config "testowner"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"${tf} is unsafe (symlink)"* ]]
+    [[ "${output}" == *"Pre-flight checks failed"* ]]
+    [ ! -e "${TEST_TMP}/calls.log" ]
+}
+
+@test "validate_source_config refuses a token file with the wrong mode" {
+    write_source_config
+    stub_host_lookups "${TEST_TMP}/owner_home"
+    local tf="${XDG_CONFIG_HOME}/orchestrator/tokens/testowner"
+    chmod 644 "${tf}"
+
+    run validate_source_config "testowner"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"${tf} is unsafe (wrong mode: permissions 644)"* ]]
+    [ ! -e "${TEST_TMP}/calls.log" ]
+}
+
+@test "validate_source_config refuses a token file not owned by the invoking admin" {
+    write_source_config
+    stub_host_lookups "${TEST_TMP}/owner_home"
+    export SUDO_USER="admin"
+    ADMIN_UID=$((EUID + 1))
+    export ADMIN_UID
+    # shellcheck disable=SC2329
+    id() {
+        case "$*" in
+            "-u admin") echo "${ADMIN_UID}" ;;
+            *) echo "1001" ;;
+        esac
+    }
+    export -f id
+
+    run validate_source_config "testowner"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"orchestrator/tokens/testowner is unsafe (wrong owner: uid ${EUID}, expected uid ${ADMIN_UID})"* ]]
+}
+
 @test "validate_source_config reports every failed host check before dying" {
     write_source_config
     stub_host_lookups "${TEST_TMP}/owner_home"

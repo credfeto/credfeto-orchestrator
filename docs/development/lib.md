@@ -22,7 +22,7 @@ Configuration and state declarations, and nothing else. Environment-backed defau
 
 ### core
 
-`die`, `success`, `info`, `warn`, `is_ai_agent`, `check_required_tools`, `hash_sha256`, token loading (`read_token_if_safe`, `load_token_for_owner`, token files must be mode 600 or 400), `load_env_config` and `validate_config`, `check_disk_space`, and `migrate_legacy_orchestrator_state`. Depends on: nothing. Most other libraries use it.
+`die`, `success`, `info`, `warn`, `is_ai_agent`, `check_required_tools`, `hash_sha256`, token loading (`read_token_if_safe`, `load_token_for_owner`; `token_file_problem` is the one check `read_token_if_safe`, `validate_config` and `setup-owner` share: a token file must be a regular file, not a symlink, owned by the expected uid, with mode 600 or 400, and the refusal message names the reason), `load_env_config` and `validate_config`, `check_disk_space`, and `migrate_legacy_orchestrator_state`. Depends on: nothing. Most other libraries use it.
 
 ### git
 
