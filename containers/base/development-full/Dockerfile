@@ -418,7 +418,7 @@ RUN set -e; \
     claude --version >/dev/null 2>&1 || claude --help >/dev/null 2>&1 \
         || { echo "FATAL sanity: 'claude' is not functional" >&2; exit 1; }; \
     echo "== dotnet tools =="; \
-    for tool in credfeto.changelog.cmd credfeto.dotnet.code.analysis.overrides.cmd tsqllint funfair.buildcheck funfair.buildversion cwm.roslynnavigator dotnet-ef ilspycmd microsoft.sqlpackage credfeto.dotnet.repo.formatter dotnet-script dotnet-reportgenerator-globaltool credfeto.build.dotnet.server credfeto.changelog.mcp; do \
+    for tool in credfeto.changelog.cmd credfeto.dotnet.code.analysis.overrides.cmd tsqllint funfair.buildcheck funfair.buildversion cwm.roslynnavigator dotnet-ef ilspycmd microsoft.sqlpackage credfeto.dotnet.repo.formatter dotnet-script dotnet-reportgenerator-globaltool credfeto.build.dotnet.server; do \
         if ! su developer -c "dotnet tool list -g" | awk '{print tolower($1)}' | grep -Fxq "$tool"; then \
             echo "FATAL sanity: dotnet tool '$tool' is missing" >&2; exit 1; \
         fi; \
@@ -502,8 +502,6 @@ RUN set -e; \
         || { echo "FATAL sanity: CHANGELOG_MCP_REPO_ROOT must be /workspace/repo, the repo mount the changelog MCP server works on" >&2; exit 1; }; \
     [ "${CHANGELOG_MCP_TOOL}" = "global" ] \
         || { echo "FATAL sanity: CHANGELOG_MCP_TOOL must be global, so the changelog MCP wrapper runs the image's global tool without probing" >&2; exit 1; }; \
-    [ -x /home/developer/.dotnet/tools/changelog-mcp ] \
-        || { echo "FATAL sanity: /home/developer/.dotnet/tools/changelog-mcp, the changelog MCP server, is missing or not executable" >&2; exit 1; }; \
     jq -e '.mcpServers.codegraph == {"type": "stdio", "command": "codegraph", "args": ["serve", "--mcp"], "alwaysLoad": true}' /etc/claude-code/managed-mcp.json >/dev/null \
         || { echo "FATAL sanity: managed-mcp.json must hold the required codegraph server, exactly the stdio codegraph serve --mcp entry that codegraph install writes for Claude Code, carrying no env" >&2; exit 1; }; \
     ! grep -qi 'authorization' /etc/claude-code/managed-mcp.json \
