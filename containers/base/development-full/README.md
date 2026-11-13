@@ -228,7 +228,9 @@ and `global`) in place of `BUILD_MCP_REPO_ROOT` and `BUILD_MCP_TOOL`, and the se
 the repository from `CHANGELOG_MCP_REPO_ROOT`. It has no log directory and does not set
 `SuppressNETCoreSdkPreviewMessage`, as the server runs no child builds; it runs
 `/home/developer/.dotnet/tools/changelog-mcp` here. The sanity block pins that exact entry, the wrapper's
-owner and mode, both `ENV` values and the global tool. See
+owner and mode and both `ENV` values; `development-credfeto-tools` checks the global tool, because this
+image's pull-request build starts from the published `development-credfeto-tools:latest`, which only gains it
+once this change is on main. See
 [docs/development/claude-hooks.md](../../../docs/development/claude-hooks.md#the-changelog-mcp-server).
 
 `codegraph` is the code knowledge graph MCP server, a stdio server started as `codegraph serve --mcp` from
@@ -391,7 +393,7 @@ Executed as root. Fails the build immediately if anything is missing or broken.
 
 **dotnet global tool verification** — `dotnet tool list -g` is run as `developer` and each of the following package IDs must appear (case-insensitive):
 
-`credfeto.changelog.cmd`, `credfeto.dotnet.code.analysis.overrides.cmd`, `tsqllint`, `funfair.buildcheck`, `funfair.buildversion`, `cwm.roslynnavigator`, `dotnet-ef`, `ilspycmd`, `microsoft.sqlpackage`, `credfeto.dotnet.repo.formatter`, `dotnet-script`, `dotnet-reportgenerator-globaltool`, `credfeto.build.dotnet.server`, `credfeto.changelog.mcp`
+`credfeto.changelog.cmd`, `credfeto.dotnet.code.analysis.overrides.cmd`, `tsqllint`, `funfair.buildcheck`, `funfair.buildversion`, `cwm.roslynnavigator`, `dotnet-ef`, `ilspycmd`, `microsoft.sqlpackage`, `credfeto.dotnet.repo.formatter`, `dotnet-script`, `dotnet-reportgenerator-globaltool`, `credfeto.build.dotnet.server`
 
 **cwm-roslyn-navigator functional probe** — `cwm-roslyn-navigator --help` is run as `developer` and must exit 0.
 
@@ -422,8 +424,9 @@ and `kb`, `type` `http`, at `https://memory.markridgwell.com/dev/mcp`, with `hea
 `/etc/claude-code/mcp/changelog-mcp`, both with no `env`;
 any other server is not checked, but the file must hold no `Authorization` text, both helpers and both wrappers must be
 root:root 0755, `BUILD_MCP_REPO_ROOT` and `CHANGELOG_MCP_REPO_ROOT` must be `/workspace/repo`, `BUILD_MCP_TOOL` and
-`CHANGELOG_MCP_TOOL` must be `global` and the global tools `/home/developer/.dotnet/tools/credfeto-build-dotnet` and
-`/home/developer/.dotnet/tools/changelog-mcp` must be executable; `~/.claude/settings.json` must hold no
+`CHANGELOG_MCP_TOOL` must be `global` and the global tool `/home/developer/.dotnet/tools/credfeto-build-dotnet`
+must be executable (`/home/developer/.dotnet/tools/changelog-mcp` is checked only in `development-credfeto-tools`
+for now); `~/.claude/settings.json` must hold no
 permissions, hooks, sandbox or MCP configuration, and every `PreToolUse` hook command must be
 under `/etc/claude-code/hooks/`; `/etc/claude-code/hooks/reject-obfuscated-commands`,
 `.../enforce-allowed-dirs`, `.../block-config-skills`, `.../enforce-git-identity`, `.../enforce-git-policy`,
