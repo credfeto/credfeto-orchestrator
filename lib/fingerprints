@@ -81,6 +81,39 @@ _finalize_fingerprint() {
     printf '%s:%s' "${FINGERPRINT_SCHEMA_VERSION}" "${hash}"
 }
 
+# Computes a fingerprint with Credfeto.Orchestrator.Cmd (ORCHESTRATOR_CMD) instead of jq, for
+# fingerprint_pr_json / fingerprint_issue_json when ORCHESTRATOR_DOTNET_FINGERPRINTS=1 (#252). The
+# tool produces exactly what the jq path does (test/fixtures/fingerprint-parity.json holds the cases
+# both sides are tested against). The item JSON goes on stdin and the trusted logins and review
+# comments in files, so no value meets the per-argument size limit (#1254). kind is pr or issue;
+# extra is the review comments JSON for pr and the plan-approval value for issue. Outputs the
+# fingerprint; returns non-zero, printing nothing, if the tool fails or prints nothing.
+_fingerprint_with_orchestrator_cmd() {
+    local kind="$1" item_json="$2" trusted_logins="$3" extra="$4"
+    local trusted_file extra_file="" fingerprint status
+    local -a args=(fingerprint "${kind}" --schema-version "${FINGERPRINT_SCHEMA_VERSION}")
+
+    trusted_file=$(mktemp --suffix=.json) || return 1
+    printf '%s' "${trusted_logins}" > "${trusted_file}"
+    args+=(--trusted-file "${trusted_file}")
+    if [ "${kind}" = pr ]; then
+        extra_file=$(mktemp --suffix=.json) || {
+            rm -f "${trusted_file}"
+            return 1
+        }
+        printf '%s' "${extra}" > "${extra_file}"
+        args+=(--review-comments-file "${extra_file}")
+    else
+        args+=(--plan-approved "${extra}")
+    fi
+
+    fingerprint=$(printf '%s' "${item_json}" | "${ORCHESTRATOR_CMD}" "${args[@]}")
+    status=$?
+    rm -f "${trusted_file}" ${extra_file:+"${extra_file}"}
+    [ "${status}" -eq 0 ] && [ -n "${fingerprint}" ] || return 1
+    printf '%s' "${fingerprint}"
+}
+
 # Computes a deterministic fingerprint from pre-fetched PR state JSON.
 # Optional second argument: JSON array of trusted logins; when provided, only comments,
 # reviews, and inline review comments from those users are included so untrusted activity does
@@ -105,6 +138,11 @@ fingerprint_pr_json() {
     local trusted_logins="${2:-null}"
     local review_comments_json="${3:-[]}"
     local canonical review_comments_file
+
+    if [ "${ORCHESTRATOR_DOTNET_FINGERPRINTS}" = 1 ]; then
+        _fingerprint_with_orchestrator_cmd pr "${pr_json}" "${trusted_logins}" "${review_comments_json}"
+        return
+    fi
 
     review_comments_file=$(mktemp --suffix=.json) || return 1
     printf '%s' "${review_comments_json}" > "${review_comments_file}"
@@ -397,6 +435,11 @@ fingerprint_issue_json() {
     local trusted_logins="${2:-null}"
     local plan_approved="${3:-false}"
     local canonical
+
+    if [ "${ORCHESTRATOR_DOTNET_FINGERPRINTS}" = 1 ]; then
+        _fingerprint_with_orchestrator_cmd issue "${issue_json}" "${trusted_logins}" "${plan_approved}"
+        return
+    fi
     canonical=$(printf '%s' "${issue_json}" | jq -r --argjson trusted "${trusted_logins}" --arg planApproved "${plan_approved}" '
         def tc(cs): if $trusted == null then cs else (cs | map(select(.author.login as $l | ($trusted | index($l)) != null))) end;
         .title,

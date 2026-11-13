@@ -62,6 +62,15 @@ CONTAINER_SCRATCH_PATH="/workspace/tmp"
 # shellcheck disable=SC2034  # read by lib/fingerprints after sourcing
 FINGERPRINT_SCHEMA_VERSION=2
 
+# The .NET rewrite, Credfeto.Orchestrator.Cmd (src/), takes over oneshot one area at a time (#252).
+# ORCHESTRATOR_CMD is the tool to run, and each ORCHESTRATOR_DOTNET_<AREA>=1 hands that area to it.
+# Every area is off unless set to exactly 1 in the environment, so nothing changes until an operator
+# opts in. ORCHESTRATOR_DOTNET_FINGERPRINTS: fingerprint_pr_json / fingerprint_issue_json.
+# shellcheck disable=SC2034  # read by lib/fingerprints after sourcing
+ORCHESTRATOR_CMD="${ORCHESTRATOR_CMD:-credfeto-orchestrator}"
+# shellcheck disable=SC2034  # read by lib/fingerprints after sourcing
+ORCHESTRATOR_DOTNET_FINGERPRINTS="${ORCHESTRATOR_DOTNET_FINGERPRINTS:-0}"
+
 # Conservative pre-send guard against grossly oversized prompts.
 # The launch prompt is deliberately tiny ("Work on <item> in <repo>") — everything of
 # substance lives in the generated CLAUDE.md — so this cap is only a sanity backstop and

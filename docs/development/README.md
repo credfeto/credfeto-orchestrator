@@ -49,7 +49,7 @@ link in these pages is broken.
 | `test/` | The bats suites, one per script plus the hook and parity tests, and `test_helper.bash`. |
 | `docs/` | User-level documentation and these guides. |
 | `ai/local/`, `ai/global/` | Instructions for AI agents working on this repository; local ones are ours, global ones come from `cs-template`. |
-| `src/` | Build and packaging props inherited from the template; there is no application code here. |
+| `src/` | The .NET rewrite of `oneshot`, `Credfeto.Orchestrator.Cmd`, which takes over one area at a time; see [The .NET tool](#the-net-tool). |
 
 ## Writing the shell scripts
 
@@ -114,6 +114,17 @@ link in these pages is broken.
 - Run `git commit` in the background when it will run the suite, and do not edit files while it
   runs: pre-commit stashes unstaged changes for the duration, and an edit made meanwhile can
   make its linters fail. `git push` runs no tests.
+
+## The .NET tool
+
+`oneshot` is being rewritten as a .NET 11 tool, `Credfeto.Orchestrator.Cmd` (command `credfeto-orchestrator`), one area at a time behind a switch that is off by default, so the shell version keeps working unchanged until an area is switched on.
+
+- The solution is `src/Credfeto.Orchestrator.slnx`. `Credfeto.Orchestrator.Cmd` is only the entry point; the logic lives in libraries, each with a `.Tests` project: `Credfeto.Orchestrator.Commands` (argument parsing and dispatch), `Credfeto.Orchestrator.Config` (the `lib/globals` settings read from the environment), `Credfeto.Orchestrator.Jq` (the jq 1.7+ semantics the ported filters rely on: value ordering, number formatting, `@tsv`, `join` and the builtins' failures) and `Credfeto.Orchestrator.Fingerprints` (`fingerprint_pr_json`, `fingerprint_issue_json` and the fingerprint state files).
+- The tool is packed as a trimmed Native AOT dotnet tool, like the other credfeto tools. It builds and tests with `dotnet build` and `dotnet test` in `src/`; a Native AOT publish needs `clang` and `zlib1g-dev`.
+- Each area has a switch in `lib/globals`, `ORCHESTRATOR_DOTNET_<AREA>`, which hands the area to the tool only when it is exactly `1` in the environment. `ORCHESTRATOR_CMD` names the tool (default `credfeto-orchestrator` on `PATH`). The shell function keeps its inputs, output and failure contract and passes large values in files, as the jq path does. Today there is one switch, `ORCHESTRATOR_DOTNET_FINGERPRINTS`.
+- Parity is held by shared golden cases: `test/fixtures/fingerprint-parity.json` lists inputs and the fingerprint each must produce. `test/oneshot-fingerprint-parity.bats` checks the shell functions against it and `Credfeto.Orchestrator.Fingerprints.Tests` checks the .NET port against the same file, so a change to either side fails its own suite until both sides and the fixture agree. `test/oneshot-dotnet.bats` covers the switches themselves.
+- A commit that touches `.cs`, `.csproj`, `.slnx` or `.props` files runs the global hook's `buildcheck` and `buildtest` (format, build and test); one that touches shell files runs the bats tests they affect. Keep the .NET and shell parts of a change in separate commits where they can be, so each commit runs only one of them.
+- CI builds and tests the solution through the shared build action, which finds it from `src/global.json` and the `.slnx`.
 
 ## Making a change
 
