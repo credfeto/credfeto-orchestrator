@@ -41,6 +41,8 @@ If a schema field changes without a version bump, the practical symptom is that 
 
 Keep this section in sync with `fingerprint_issue_json`/`fingerprint_pr_json`'s actual field lists (`lib/fingerprints`) - if you add a field there, add it here too, in the same PR.
 
+Make the same change to the .NET port (`FingerprintCalculator` in `src/Credfeto.Orchestrator.Fingerprints`, and `FingerprintSchema.Version` for a version bump) and update the golden fingerprints in `test/fixtures/fingerprint-parity.json` in the same PR, because `test/oneshot-fingerprint-parity.bats` and `Credfeto.Orchestrator.Fingerprints.Tests` both check against that file and fail until the shell version, the .NET port and the fixture agree.
+
 - **Issue**: title, body, state, labels (sorted), trusted-filtered comments (count + timestamp/body pairs), assignees, milestone title, plan-approval status (whether this item's card on the Workflow board currently reads "Approved", matched by the Approved option's id rather than by field name, so which field carries the board's workflow is not part of what is hashed; see `fetch_board_approved_items`, `lib/workflow-board`).
 - **PR**: title, body, draft state, labels (sorted), head commit SHA, base branch, trusted-filtered comments, trusted-filtered reviews (state, latest timestamp, body pairs), review decision, review requests, assignees, milestone title, trusted-filtered inline review comments, status check rollup (each check's name plus its `.conclusion`, falling back to `.status`, falling back to `.state` for legacy StatusContext checks that have neither), mergeable/mergeStateStatus, whether auto-merge is enabled.
 
