@@ -1,0 +1,1863 @@
+{
+  "pullRequests": [
+    {
+      "name": "minimal with empty body",
+      "pr": {
+        "title": "T",
+        "body": "",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "expected": "2:fabb5c7a78ae31ff3ed5bd9eaeb48414f80454284e0b0ecfb2977b6ebe437f09"
+    },
+    {
+      "name": "base",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "expected": "2:5042b8f4b180e82b197ae39a0a3a899b6938fc0d9cc46a830f948311ec72c6fe"
+    },
+    {
+      "name": "base with trusted logins",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "trusted": [
+        "owner"
+      ],
+      "expected": "2:5042b8f4b180e82b197ae39a0a3a899b6938fc0d9cc46a830f948311ec72c6fe"
+    },
+    {
+      "name": "trusted comment",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [
+          {
+            "author": {
+              "login": "owner"
+            },
+            "body": "lgtm",
+            "updatedAt": "2024-01-01T00:00:00Z"
+          }
+        ],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "trusted": [
+        "owner"
+      ],
+      "expected": "2:9d85400374d7482a34e5e370c9f912051fcaf4062a1dbfe9a281091055b24980"
+    },
+    {
+      "name": "untrusted comment is ignored",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [
+          {
+            "author": {
+              "login": "randomer"
+            },
+            "body": "spam",
+            "updatedAt": "2024-01-01T00:00:00Z"
+          }
+        ],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "trusted": [
+        "owner"
+      ],
+      "expected": "2:5042b8f4b180e82b197ae39a0a3a899b6938fc0d9cc46a830f948311ec72c6fe"
+    },
+    {
+      "name": "trusted review",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [
+          {
+            "author": {
+              "login": "owner"
+            },
+            "state": "APPROVED",
+            "submittedAt": "2024-01-01T00:00:00Z"
+          }
+        ],
+        "statusCheckRollup": []
+      },
+      "trusted": [
+        "owner"
+      ],
+      "expected": "2:ecd017bdcb0b69591b1eba9017c9520216d7a691c39fefc70d703cf65ce80edd"
+    },
+    {
+      "name": "untrusted review is ignored",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [
+          {
+            "author": {
+              "login": "spammer"
+            },
+            "state": "CHANGES_REQUESTED",
+            "submittedAt": "2024-01-01T00:00:00Z"
+          }
+        ],
+        "statusCheckRollup": []
+      },
+      "trusted": [
+        "owner"
+      ],
+      "expected": "2:5042b8f4b180e82b197ae39a0a3a899b6938fc0d9cc46a830f948311ec72c6fe"
+    },
+    {
+      "name": "review with no trusted logins",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [
+          {
+            "author": {
+              "login": "anyone"
+            },
+            "state": "APPROVED",
+            "submittedAt": "2024-01-01T00:00:00Z"
+          }
+        ],
+        "statusCheckRollup": []
+      },
+      "expected": "2:ecd017bdcb0b69591b1eba9017c9520216d7a691c39fefc70d703cf65ce80edd"
+    },
+    {
+      "name": "review decision approved",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": [],
+        "reviewDecision": "APPROVED"
+      },
+      "expected": "2:9a86776f5f3f7f36eb2cf66dd942ce26b12d08a4abc741c98ff4e1890b9272ad"
+    },
+    {
+      "name": "review decision required",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": [],
+        "reviewDecision": "REVIEW_REQUIRED"
+      },
+      "expected": "2:1493c4df084310ed388319bd669f3adcd1b21eefa026f3eb3dce3bb2259f582b"
+    },
+    {
+      "name": "base branch main",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": [],
+        "baseRefName": "main"
+      },
+      "expected": "2:6221e8520c8ef5265448f0649daa77f1724d14a611fa228dbaebcec275eb76b6"
+    },
+    {
+      "name": "base branch develop",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": [],
+        "baseRefName": "develop"
+      },
+      "expected": "2:8a15cdd632bbb682c720188b4b732516abe4bc07a53453daf58903214e5da75b"
+    },
+    {
+      "name": "no review requests",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": [],
+        "reviewRequests": []
+      },
+      "expected": "2:5042b8f4b180e82b197ae39a0a3a899b6938fc0d9cc46a830f948311ec72c6fe"
+    },
+    {
+      "name": "user review request",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": [],
+        "reviewRequests": [
+          {
+            "login": "alice"
+          }
+        ]
+      },
+      "expected": "2:5378970d45743396042db2bc9bbee8909ba505eaff86229e5cda429379694c11"
+    },
+    {
+      "name": "team review request a",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": [],
+        "reviewRequests": [
+          {
+            "slug": "team-a"
+          }
+        ]
+      },
+      "expected": "2:cd22686a275c14bca6a0db59eb5c4db37c57a112fa7b38eac1acceb59340ff9d"
+    },
+    {
+      "name": "team review request b",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": [],
+        "reviewRequests": [
+          {
+            "slug": "team-b"
+          }
+        ]
+      },
+      "expected": "2:0dfbb131de30dfa8ef38b0609def916508be984340d5e97534b58cb7f78c500d"
+    },
+    {
+      "name": "review requests by name, unknown and sorted",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": [],
+        "reviewRequests": [
+          {
+            "name": "zed"
+          },
+          {},
+          {
+            "login": "bob"
+          },
+          {
+            "slug": "alpha",
+            "name": "ignored"
+          }
+        ]
+      },
+      "expected": "2:5cec294b642c8dd002a305d55e6b7987065f0674dd0bd7759dac957dff51729d"
+    },
+    {
+      "name": "assigned",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": [],
+        "assignees": [
+          {
+            "login": "bob"
+          }
+        ]
+      },
+      "expected": "2:17340d3bda1b894e8cd8511e52ccb9a472c87d12048c4781fb6f47027cbaa0d3"
+    },
+    {
+      "name": "assignees sorted, one without login",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": [],
+        "assignees": [
+          {
+            "login": "zoe"
+          },
+          {},
+          {
+            "login": "amy"
+          }
+        ]
+      },
+      "expected": "2:8b73a94520add51424559e1cb68224769dfe49bb45d37d53105149647b0c22cf"
+    },
+    {
+      "name": "milestone null",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": [],
+        "milestone": null
+      },
+      "expected": "2:5042b8f4b180e82b197ae39a0a3a899b6938fc0d9cc46a830f948311ec72c6fe"
+    },
+    {
+      "name": "milestone v1",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": [],
+        "milestone": {
+          "title": "v1"
+        }
+      },
+      "expected": "2:9ea242056b51e8e0f64ee6e7807b3605c59c392b7b2c6dfc329449e0aa80f4bf"
+    },
+    {
+      "name": "milestone v2",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": [],
+        "milestone": {
+          "title": "v2"
+        }
+      },
+      "expected": "2:b4ed5c02d2bb54171661f784b1be0ed8124cdaeec9f036696a98c56a9f73e74f"
+    },
+    {
+      "name": "trusted comment with null updatedAt",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [
+          {
+            "author": {
+              "login": "owner"
+            },
+            "body": "original",
+            "updatedAt": null
+          }
+        ],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "trusted": [
+        "owner"
+      ],
+      "expected": "2:a3457d5e01eb5d9341ea8f556851fd09aceb5a81f07fc911821574ec43aaab24"
+    },
+    {
+      "name": "trusted comment edited with null updatedAt",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [
+          {
+            "author": {
+              "login": "owner"
+            },
+            "body": "edited",
+            "updatedAt": null
+          }
+        ],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "trusted": [
+        "owner"
+      ],
+      "expected": "2:93e053ac713d6efc33f1402c682d431c67e3a654b9d34b9e5d5969e00e856d89"
+    },
+    {
+      "name": "trusted review terse",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [
+          {
+            "author": {
+              "login": "owner"
+            },
+            "state": "CHANGES_REQUESTED",
+            "submittedAt": "2024-01-01T00:00:00Z",
+            "body": "terse"
+          }
+        ],
+        "statusCheckRollup": []
+      },
+      "trusted": [
+        "owner"
+      ],
+      "expected": "2:f8bf2af44b332f69d69ac53b3161e7c587e89bb49cef204ce2320d0a22dab937"
+    },
+    {
+      "name": "trusted review full",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [
+          {
+            "author": {
+              "login": "owner"
+            },
+            "state": "CHANGES_REQUESTED",
+            "submittedAt": "2024-01-01T00:00:00Z",
+            "body": "full required-changes list"
+          }
+        ],
+        "statusCheckRollup": []
+      },
+      "trusted": [
+        "owner"
+      ],
+      "expected": "2:9134a590f9681a23160ff2f541f6e826da73e841cc78d51268cae23402abc4da"
+    },
+    {
+      "name": "comment and review order a",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [
+          {
+            "author": {
+              "login": "a"
+            },
+            "body": "first",
+            "updatedAt": null
+          },
+          {
+            "author": {
+              "login": "b"
+            },
+            "body": "second",
+            "updatedAt": null
+          }
+        ],
+        "reviews": [
+          {
+            "author": {
+              "login": "a"
+            },
+            "state": "APPROVED",
+            "submittedAt": "2024-01-01T00:00:00Z",
+            "body": "lgtm"
+          },
+          {
+            "author": {
+              "login": "b"
+            },
+            "state": "COMMENTED",
+            "submittedAt": "2024-01-02T00:00:00Z",
+            "body": "nit"
+          }
+        ],
+        "statusCheckRollup": []
+      },
+      "expected": "2:8f32d3b0ccdddf7acba10667c2593b14696645ec4ce7caf9566cd515dc411d25"
+    },
+    {
+      "name": "comment and review order b",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [
+          {
+            "author": {
+              "login": "b"
+            },
+            "body": "second",
+            "updatedAt": null
+          },
+          {
+            "author": {
+              "login": "a"
+            },
+            "body": "first",
+            "updatedAt": null
+          }
+        ],
+        "reviews": [
+          {
+            "author": {
+              "login": "b"
+            },
+            "state": "COMMENTED",
+            "submittedAt": "2024-01-02T00:00:00Z",
+            "body": "nit"
+          },
+          {
+            "author": {
+              "login": "a"
+            },
+            "state": "APPROVED",
+            "submittedAt": "2024-01-01T00:00:00Z",
+            "body": "lgtm"
+          }
+        ],
+        "statusCheckRollup": []
+      },
+      "expected": "2:8f32d3b0ccdddf7acba10667c2593b14696645ec4ce7caf9566cd515dc411d25"
+    },
+    {
+      "name": "no inline review comments",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "trusted": null,
+      "reviewComments": [],
+      "expected": "2:5042b8f4b180e82b197ae39a0a3a899b6938fc0d9cc46a830f948311ec72c6fe"
+    },
+    {
+      "name": "inline review comment",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "trusted": null,
+      "reviewComments": [
+        {
+          "user": {
+            "login": "anyone"
+          },
+          "body": "Why this change?",
+          "updated_at": "2024-01-01T00:00:00Z"
+        }
+      ],
+      "expected": "2:9b6ae4d91e0a197c4e09f1b2079767a08868b6232952898f60ff2fbc005526a9"
+    },
+    {
+      "name": "trusted inline review comment",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "trusted": [
+        "owner"
+      ],
+      "reviewComments": [
+        {
+          "user": {
+            "login": "owner"
+          },
+          "body": "Why this change?",
+          "updated_at": "2024-01-01T00:00:00Z"
+        }
+      ],
+      "expected": "2:9b6ae4d91e0a197c4e09f1b2079767a08868b6232952898f60ff2fbc005526a9"
+    },
+    {
+      "name": "untrusted inline review comment is ignored",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "trusted": [
+        "owner"
+      ],
+      "reviewComments": [
+        {
+          "user": {
+            "login": "randomer"
+          },
+          "body": "spam",
+          "updated_at": "2024-01-01T00:00:00Z"
+        }
+      ],
+      "expected": "2:5042b8f4b180e82b197ae39a0a3a899b6938fc0d9cc46a830f948311ec72c6fe"
+    },
+    {
+      "name": "inline review comments latest timestamp, nulls first",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "reviewComments": [
+        {
+          "user": {
+            "login": "a"
+          },
+          "updated_at": "2024-03-01T00:00:00Z"
+        },
+        {
+          "user": {
+            "login": "b"
+          },
+          "updated_at": null
+        },
+        {
+          "user": {
+            "login": "c"
+          },
+          "updated_at": "2024-02-01T00:00:00Z"
+        }
+      ],
+      "expected": "2:36cd58526d51a070953d76ea56da695fa7488222d3636e5c3d51be1ad3be815a"
+    },
+    {
+      "name": "labels",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [
+          {
+            "name": "bug"
+          }
+        ],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "expected": "2:b12435663b4cbb7a8dd1384b1a7a70a475cf1de0a8a8206fe0d10109ea11b62e"
+    },
+    {
+      "name": "title changed",
+      "pr": {
+        "title": "T2",
+        "body": "B",
+        "isDraft": false,
+        "labels": [
+          {
+            "name": "bug"
+          }
+        ],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "expected": "2:e35c47d3fde623a918733037b91abaec749741a0fca296fbc6ae48b589e79008"
+    },
+    {
+      "name": "labels sorted by code point",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [
+          {
+            "name": "z"
+          },
+          {
+            "name": "é"
+          },
+          {
+            "name": "A"
+          },
+          {
+            "name": "😀"
+          },
+          {
+            "name": "～"
+          },
+          {
+            "name": null
+          }
+        ],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "expected": "2:e2b76fd99c195e7dfacd8720ede923f7d98d984f7a8a56691baedb545e5687d1"
+    },
+    {
+      "name": "auto-merge null",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": [],
+        "autoMergeRequest": null
+      },
+      "expected": "2:5042b8f4b180e82b197ae39a0a3a899b6938fc0d9cc46a830f948311ec72c6fe"
+    },
+    {
+      "name": "auto-merge set",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": [],
+        "autoMergeRequest": {
+          "mergeMethod": "MERGE"
+        }
+      },
+      "expected": "2:28f15934c0a7369f39d1eb2ed8c491eb03d0ba1c323070e64d2ff93d7771cb11"
+    },
+    {
+      "name": "auto-merge false counts as set",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": [],
+        "autoMergeRequest": false
+      },
+      "expected": "2:28f15934c0a7369f39d1eb2ed8c491eb03d0ba1c323070e64d2ff93d7771cb11"
+    },
+    {
+      "name": "status context pending",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": [
+          {
+            "name": "codecov/project",
+            "state": "PENDING"
+          }
+        ]
+      },
+      "expected": "2:d495bdbd8b99bd749043c0cfd2241157db62103584bcc133051b9eda62a0ab2d"
+    },
+    {
+      "name": "status context failure",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": [
+          {
+            "name": "codecov/project",
+            "state": "FAILURE"
+          }
+        ]
+      },
+      "expected": "2:eada93ca60a0df562bc858214464f8cec20dfdfe421b349a8dd0696163fae2f1"
+    },
+    {
+      "name": "check runs sorted with fallbacks",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": [
+          {
+            "name": "build",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS"
+          },
+          {
+            "name": "lint",
+            "status": "IN_PROGRESS",
+            "conclusion": null
+          },
+          {
+            "conclusion": "FAILURE"
+          },
+          {
+            "name": "x"
+          },
+          {
+            "name": 3,
+            "state": true
+          }
+        ]
+      },
+      "expected": "2:f25b8ce4ac05acf6c1348c64bf8ae19c898e46773bbfc47f4c72c583c6bf7650"
+    },
+    {
+      "name": "mergeable and merge state",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": [],
+        "mergeable": "MERGEABLE",
+        "mergeStateStatus": "CLEAN"
+      },
+      "expected": "2:a1997ce9a2084fed101a6f1901369512711234371b110d2c485ef856c9173bad"
+    },
+    {
+      "name": "summary comment base",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "trusted": [
+        "credfeto"
+      ],
+      "expected": "2:5042b8f4b180e82b197ae39a0a3a899b6938fc0d9cc46a830f948311ec72c6fe"
+    },
+    {
+      "name": "automated summary comment is ignored",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [
+          {
+            "author": {
+              "login": "credfeto"
+            },
+            "updatedAt": "2026-10-20T07:00:00Z",
+            "body": "<!-- sarif-summary -->\nfindings"
+          }
+        ],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "trusted": [
+        "credfeto"
+      ],
+      "expected": "2:5042b8f4b180e82b197ae39a0a3a899b6938fc0d9cc46a830f948311ec72c6fe"
+    },
+    {
+      "name": "human comment",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [
+          {
+            "author": {
+              "login": "credfeto"
+            },
+            "updatedAt": "2026-10-20T07:00:00Z",
+            "body": "please fix"
+          }
+        ],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "trusted": [
+        "credfeto"
+      ],
+      "expected": "2:4c919150b1840ce8f4e72dd76a39e7cc8aef10ed22966e3c51a7df75264e4b69"
+    },
+    {
+      "name": "summary marker variants",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [
+          {
+            "author": {
+              "login": "x"
+            },
+            "updatedAt": "1",
+            "body": "  \n <!-- super-linter-summary-comment -->"
+          },
+          {
+            "author": {
+              "login": "x"
+            },
+            "updatedAt": "2",
+            "body": "<!--x-summary-->"
+          },
+          {
+            "author": {
+              "login": "x"
+            },
+            "updatedAt": "3",
+            "body": "<!-- a-summaryX -->"
+          },
+          {
+            "author": {
+              "login": "x"
+            },
+            "updatedAt": "4",
+            "body": "<!-- a-summary_ -->"
+          },
+          {
+            "author": {
+              "login": "x"
+            },
+            "updatedAt": "5",
+            "body": "x <!-- a-summary -->"
+          },
+          {
+            "author": {
+              "login": "x"
+            },
+            "updatedAt": "6",
+            "body": null
+          },
+          {
+            "author": {
+              "login": "x"
+            },
+            "updatedAt": "7",
+            "body": "<!-- a-summary"
+          },
+          {
+            "author": {
+              "login": "x"
+            },
+            "updatedAt": "8",
+            "body": "<!-- -summary-comment-x"
+          },
+          {
+            "author": {
+              "login": "x"
+            },
+            "updatedAt": "9",
+            "body": " <!-- a.b-summary\n"
+          }
+        ],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "expected": "2:84dd75f98670f0bdc2636bf678afd9ab098395ff0aafb9e7a9d3cf832b54652a"
+    },
+    {
+      "name": "comment bodies with tabs, newlines and backslashes",
+      "pr": {
+        "title": "T",
+        "body": "line1\nline2\ttab\\back\r\n",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [
+          {
+            "author": {
+              "login": "x"
+            },
+            "updatedAt": "2024-01-01T00:00:00Z",
+            "body": "a\tb\\c\nd\re"
+          },
+          {
+            "author": {
+              "login": "y"
+            },
+            "updatedAt": "2024-01-01T00:00:00Z",
+            "body": "a\tb"
+          }
+        ],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "expected": "2:0384e85eb117940ddd2ecaf9e23f8e7751320e9ef28d1cbd6648105f0aeb41dc"
+    },
+    {
+      "name": "body with a NUL byte",
+      "pr": {
+        "title": "T",
+        "body": "a\u0000b",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [
+          {
+            "author": {
+              "login": "x"
+            },
+            "updatedAt": "t",
+            "body": "c\u0000d"
+          }
+        ],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "expected": "2:c2c7641f863e5076be4729a3fe9ab5005378458daea940ea100e974242f2e49f"
+    },
+    {
+      "name": "trailing newlines in the last values are stripped",
+      "pr": {
+        "title": "T\n\n",
+        "mergeStateStatus": "x"
+      },
+      "expected": "2:a6aa2f7dbb80424da895afba40641671f1915a98a9372920e16a55fec94de8fa"
+    },
+    {
+      "name": "numbers in jq canonical form",
+      "prText": "{\"title\":1E2,\"body\":0.1e1,\"headRefOid\":1.50,\"isDraft\":-0,\"baseRefName\":100000000000000000001,\"labels\":[{\"name\":2},{\"name\":10},{\"name\":1.0},{\"name\":-3e-7},{\"name\":0.00}],\"assignees\":[{\"login\":7}],\"milestone\":{\"title\":12.5e3}}",
+      "expected": "2:3f386e603e7463d362601915ee18c29905559b0205b84e2dafef460158bf569a"
+    },
+    {
+      "name": "empty object uses every default",
+      "pr": {},
+      "expected": "2:110d6329a927215f9d603d1bacbe73b400b8d1746090eb187667532932e375da"
+    },
+    {
+      "name": "top-level null",
+      "prText": "null",
+      "expected": "2:110d6329a927215f9d603d1bacbe73b400b8d1746090eb187667532932e375da"
+    },
+    {
+      "name": "top-level array fails",
+      "prText": "[1,2]",
+      "expected": null
+    },
+    {
+      "name": "invalid JSON fails",
+      "prText": "not valid json",
+      "expected": null
+    },
+    {
+      "name": "empty input fails",
+      "prText": "",
+      "expected": null
+    },
+    {
+      "name": "duplicate keys keep the last value",
+      "prText": "{\"title\":\"first\",\"body\":\"x\",\"title\":\"second\"}",
+      "expected": "2:4a5b20529ca2d51ce83ec860bb1ea8dd53c24be8636724473ed85b1f02633222"
+    },
+    {
+      "name": "reviews with equal timestamps keep the last",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [
+          {
+            "author": {
+              "login": "a"
+            },
+            "state": "APPROVED",
+            "submittedAt": "2024-01-01T00:00:00Z"
+          },
+          {
+            "author": {
+              "login": "b"
+            },
+            "state": "COMMENTED",
+            "submittedAt": "2024-01-01T00:00:00Z"
+          }
+        ],
+        "statusCheckRollup": []
+      },
+      "expected": "2:65eae4dda58a59f19b20689075ade8e9a37881a7f85c58f4ce191e90bbc2099d"
+    },
+    {
+      "name": "reviews by updatedAt and with no timestamp",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [
+          {
+            "author": {
+              "login": "a"
+            },
+            "state": "APPROVED",
+            "updatedAt": "2024-05-01T00:00:00Z",
+            "body": "u"
+          },
+          {
+            "author": {
+              "login": "b"
+            },
+            "state": "DISMISSED"
+          },
+          {
+            "author": {
+              "login": "c"
+            },
+            "state": "COMMENTED",
+            "submittedAt": "2024-04-01T00:00:00Z"
+          }
+        ],
+        "statusCheckRollup": []
+      },
+      "expected": "2:564676fff63acc054fd99f5491d4213c5d395176ca8036676f0715d1b8dd624d"
+    },
+    {
+      "name": "review without state",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [
+          {
+            "author": {
+              "login": "a"
+            },
+            "submittedAt": "2024-01-01T00:00:00Z"
+          }
+        ],
+        "statusCheckRollup": []
+      },
+      "expected": "2:4280310de562115eda7ee4f2b726c955fefeccc35c3cfcfc2e00744d3a0215dc"
+    },
+    {
+      "name": "draft",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": true,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "expected": "2:27acc23e67753dcd126dcde2e142fc9cc976d9348abf7f271c1802b926ab24f8"
+    },
+    {
+      "name": "draft missing",
+      "pr": {
+        "title": "T",
+        "body": "B"
+      },
+      "expected": "2:aa890b05fbb4f5cdd4d57331c5e3e4ca6dbef9f47507da7c639a2ac506e542cd"
+    },
+    {
+      "name": "comments as an object",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": {
+          "k1": {
+            "author": {
+              "login": "x"
+            },
+            "body": "one",
+            "updatedAt": "1"
+          },
+          "k2": {
+            "author": {
+              "login": "y"
+            },
+            "body": "two",
+            "updatedAt": "2"
+          }
+        },
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "expected": "2:8d8184705972eb8bfd01776d50798f8aa66a2537e3dea8dbd82adda21f1f40fa"
+    },
+    {
+      "name": "comments as a string fails",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": "nope",
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "expected": null
+    },
+    {
+      "name": "comment body that is a number fails",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [
+          {
+            "author": {
+              "login": "x"
+            },
+            "updatedAt": "1",
+            "body": 5
+          }
+        ],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "expected": null
+    },
+    {
+      "name": "reviews as an object fails",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": {
+          "a": {
+            "state": "X"
+          }
+        },
+        "statusCheckRollup": []
+      },
+      "expected": null
+    },
+    {
+      "name": "label that is a string fails",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [
+          "bug"
+        ],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "expected": null
+    },
+    {
+      "name": "milestone that is a string fails",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": [],
+        "milestone": "m"
+      },
+      "expected": null
+    },
+    {
+      "name": "comment with an object body fails in the tsv row",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [
+          {
+            "author": {
+              "login": "x"
+            },
+            "updatedAt": "1",
+            "body": {
+              "a": 1
+            }
+          }
+        ],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "trusted": null,
+      "expected": null
+    },
+    {
+      "name": "invalid trusted logins fail",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "trustedText": "[not json",
+      "expected": null
+    },
+    {
+      "name": "invalid review comments fail",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "reviewCommentsText": "{oops",
+      "expected": null
+    },
+    {
+      "name": "review comments as null",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "reviewCommentsText": "null",
+      "expected": null
+    },
+    {
+      "name": "trusted comment author without login",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [
+          {
+            "author": null,
+            "body": "x",
+            "updatedAt": "1"
+          },
+          {
+            "body": "y",
+            "updatedAt": "2"
+          }
+        ],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "trusted": [
+        "owner"
+      ],
+      "expected": "2:5042b8f4b180e82b197ae39a0a3a899b6938fc0d9cc46a830f948311ec72c6fe"
+    },
+    {
+      "name": "empty trusted list ignores everyone",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [
+          {
+            "author": {
+              "login": "owner"
+            },
+            "body": "x",
+            "updatedAt": "1"
+          }
+        ],
+        "reviews": [
+          {
+            "author": {
+              "login": "owner"
+            },
+            "state": "APPROVED",
+            "submittedAt": "1"
+          }
+        ],
+        "statusCheckRollup": []
+      },
+      "trusted": [],
+      "reviewComments": [
+        {
+          "user": {
+            "login": "owner"
+          },
+          "updated_at": "1"
+        }
+      ],
+      "expected": "2:5042b8f4b180e82b197ae39a0a3a899b6938fc0d9cc46a830f948311ec72c6fe"
+    },
+    {
+      "name": "comment with a numeric timestamp",
+      "pr": {
+        "title": "T",
+        "body": "B",
+        "isDraft": false,
+        "labels": [],
+        "headRefOid": "abc",
+        "comments": [
+          {
+            "author": {
+              "login": "x"
+            },
+            "updatedAt": 1700000000,
+            "body": true
+          }
+        ],
+        "reviews": [],
+        "statusCheckRollup": []
+      },
+      "expected": null
+    }
+  ],
+  "issues": [
+    {
+      "name": "base",
+      "issue": {
+        "title": "T",
+        "body": "B",
+        "state": "OPEN",
+        "labels": [],
+        "comments": [],
+        "assignees": [],
+        "milestone": null
+      },
+      "trusted": null,
+      "planApproved": "false",
+      "expected": "2:36d5acf9d9297f831145e17ec71ce45fcbd20d60b9af5b25ef6773cacbdc5116"
+    },
+    {
+      "name": "base with defaults",
+      "issue": {
+        "title": "T",
+        "body": "B",
+        "state": "OPEN",
+        "labels": [],
+        "comments": [],
+        "assignees": [],
+        "milestone": null
+      },
+      "expected": "2:36d5acf9d9297f831145e17ec71ce45fcbd20d60b9af5b25ef6773cacbdc5116"
+    },
+    {
+      "name": "base with trusted logins",
+      "issue": {
+        "title": "T",
+        "body": "B",
+        "state": "OPEN",
+        "labels": [],
+        "comments": [],
+        "assignees": [],
+        "milestone": null
+      },
+      "trusted": [
+        "owner"
+      ],
+      "expected": "2:36d5acf9d9297f831145e17ec71ce45fcbd20d60b9af5b25ef6773cacbdc5116"
+    },
+    {
+      "name": "trusted comment",
+      "issue": {
+        "title": "T",
+        "body": "B",
+        "state": "OPEN",
+        "labels": [],
+        "comments": [
+          {
+            "author": {
+              "login": "owner"
+            },
+            "body": "hello",
+            "updatedAt": "2024-01-01T00:00:00Z"
+          }
+        ],
+        "assignees": [],
+        "milestone": null
+      },
+      "trusted": [
+        "owner"
+      ],
+      "expected": "2:ca0bad9f910a5c4f4f741f6ba9275b61ab664d2f4f6e873ac2b88016e48f96c2"
+    },
+    {
+      "name": "untrusted comment is ignored",
+      "issue": {
+        "title": "T",
+        "body": "B",
+        "state": "OPEN",
+        "labels": [],
+        "comments": [
+          {
+            "author": {
+              "login": "randomer"
+            },
+            "body": "hello",
+            "updatedAt": "2024-01-01T00:00:00Z"
+          }
+        ],
+        "assignees": [],
+        "milestone": null
+      },
+      "trusted": [
+        "owner"
+      ],
+      "expected": "2:36d5acf9d9297f831145e17ec71ce45fcbd20d60b9af5b25ef6773cacbdc5116"
+    },
+    {
+      "name": "comment with no trusted logins",
+      "issue": {
+        "title": "T",
+        "body": "B",
+        "state": "OPEN",
+        "labels": [],
+        "comments": [
+          {
+            "author": {
+              "login": "anyone"
+            },
+            "body": "hi",
+            "updatedAt": "2024-01-01T00:00:00Z"
+          }
+        ],
+        "assignees": [],
+        "milestone": null
+      },
+      "expected": "2:a9c818b18f62c0cf4a610db26fc2bfe3f74b8ec183d21989bf049358abbdb228"
+    },
+    {
+      "name": "plan approved",
+      "issue": {
+        "title": "T",
+        "body": "B",
+        "state": "OPEN",
+        "labels": [],
+        "comments": [],
+        "assignees": [],
+        "milestone": null
+      },
+      "trusted": null,
+      "planApproved": "true",
+      "expected": "2:1cfc696841191fee901ea1c0170b7a7184a52475e627b6228ce1d5861fd04bb1"
+    },
+    {
+      "name": "plan approval empty defaults to false",
+      "issue": {
+        "title": "T",
+        "body": "B",
+        "state": "OPEN",
+        "labels": [],
+        "comments": [],
+        "assignees": [],
+        "milestone": null
+      },
+      "planApproved": "",
+      "expected": "2:36d5acf9d9297f831145e17ec71ce45fcbd20d60b9af5b25ef6773cacbdc5116"
+    },
+    {
+      "name": "plan approval passed through as text",
+      "issue": {
+        "title": "T",
+        "body": "B",
+        "state": "OPEN",
+        "labels": [],
+        "comments": [],
+        "assignees": [],
+        "milestone": null
+      },
+      "planApproved": "yes",
+      "expected": "2:042db61959fbfab98c705288342126a7c0236d26f15d84ba95339dd4a349f846"
+    },
+    {
+      "name": "body changed",
+      "issue": {
+        "title": "T",
+        "body": "CHANGED",
+        "state": "OPEN",
+        "labels": [],
+        "comments": [],
+        "assignees": [],
+        "milestone": null
+      },
+      "expected": "2:2b65c5f6817f3d56c29b03d814cc9c12fb06448f7281cab1f48fb8b4ad0b1ec7"
+    },
+    {
+      "name": "labels, assignees and milestone",
+      "issue": {
+        "title": "T",
+        "body": "B",
+        "state": "OPEN",
+        "labels": [
+          {
+            "name": "b"
+          },
+          {
+            "name": "a"
+          }
+        ],
+        "comments": [],
+        "assignees": [
+          {
+            "login": "y"
+          },
+          {
+            "login": "x"
+          }
+        ],
+        "milestone": {
+          "title": "v3"
+        }
+      },
+      "expected": "2:3381c9ba138ace538871233fb5b3aa9e196cc50e2b1e9da210473653335b7dbd"
+    },
+    {
+      "name": "closed",
+      "issue": {
+        "title": "T",
+        "body": "B",
+        "state": "CLOSED",
+        "labels": [],
+        "comments": [],
+        "assignees": [],
+        "milestone": null
+      },
+      "expected": "2:2c8ec9b66761f51f42c5ae2663dd41c8d543ac6accb266f935991dd7e77bc650"
+    },
+    {
+      "name": "summary comment still counts on an issue",
+      "issue": {
+        "title": "T",
+        "body": "B",
+        "state": "OPEN",
+        "labels": [],
+        "comments": [
+          {
+            "author": {
+              "login": "x"
+            },
+            "body": "<!-- sarif-summary -->",
+            "updatedAt": "1"
+          }
+        ],
+        "assignees": [],
+        "milestone": null
+      },
+      "expected": "2:81f74c274e7dfecb86c0be79cfd9aab67e8ec5266fa6f1e2c505a9111f469f65"
+    },
+    {
+      "name": "comment bodies with tabs and newlines",
+      "issue": {
+        "title": "T",
+        "body": "B",
+        "state": "OPEN",
+        "labels": [],
+        "comments": [
+          {
+            "author": {
+              "login": "x"
+            },
+            "body": "a\tb\nc",
+            "updatedAt": "1"
+          },
+          {
+            "author": {
+              "login": "x"
+            },
+            "body": "\\",
+            "updatedAt": null
+          }
+        ],
+        "assignees": [],
+        "milestone": null
+      },
+      "expected": "2:5b3aa41eed1cfdae2aab07c34aaa9ecbb701005935fe61265d2911d4ed1471b3"
+    },
+    {
+      "name": "empty object uses every default",
+      "issue": {},
+      "expected": "2:a9fbb61fadc49c3983355d16ac9bf71d8c35f092f84dc8ec9ba808e5bcd1fa4c"
+    },
+    {
+      "name": "invalid JSON fails",
+      "issueText": "not valid json",
+      "expected": null
+    },
+    {
+      "name": "top-level string fails",
+      "issueText": "\"issue\"",
+      "expected": null
+    },
+    {
+      "name": "comment body that is a number is fine on an issue",
+      "issue": {
+        "title": "T",
+        "body": "B",
+        "state": "OPEN",
+        "labels": [],
+        "comments": [
+          {
+            "author": {
+              "login": "x"
+            },
+            "body": 5,
+            "updatedAt": "1"
+          }
+        ],
+        "assignees": [],
+        "milestone": null
+      },
+      "expected": "2:d5a811cf0141f9c3e4f943c3cce00021c70fc16ba63c0d36dea587a002c958a3"
+    }
+  ]
+}
