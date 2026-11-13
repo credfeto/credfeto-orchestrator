@@ -427,8 +427,8 @@ and `kb`, `type` `http`, at `https://memory.markridgwell.com/dev/mcp`, with `hea
 any other server is not checked, but the file must hold no `Authorization` text, both helpers and both wrappers must be
 root:root 0755, `BUILD_MCP_REPO_ROOT` and `CHANGELOG_MCP_REPO_ROOT` must be `/workspace/repo`, `BUILD_MCP_TOOL` and
 `CHANGELOG_MCP_TOOL` must be `global` and the global tool `/home/developer/.dotnet/tools/credfeto-build-dotnet`
-must be executable (`/home/developer/.dotnet/tools/changelog-mcp` is checked only in `development-credfeto-tools`
-for now); `~/.claude/settings.json` must hold no
+must be executable (`/home/developer/.dotnet/tools/changelog-mcp` is not checked here, because the `development-credfeto-tools`
+base image checks it); `~/.claude/settings.json` must hold no
 permissions, hooks, sandbox or MCP configuration, and every `PreToolUse` hook command must be
 under `/etc/claude-code/hooks/`; `/etc/claude-code/hooks/reject-obfuscated-commands`,
 `.../enforce-allowed-dirs`, `.../block-config-skills`, `.../enforce-git-identity`, `.../enforce-git-policy`,
