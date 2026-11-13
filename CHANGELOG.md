@@ -45,6 +45,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - The enforce-git-dash-c hook and its bats test are renamed to enforce-git-policy, with all references updated, so the name reflects everything the hook enforces (#1678)
 ### Deprecated
 ### Removed
+- The agent images no longer install PowerShell or the PSScriptAnalyzer module, now that the global pre-commit has dropped its PSScriptAnalyzer hook: the development-dotnet-tools PowerShell install and its version pin, the module install, their sanity and installed-versions checks, the pwsh and run-psscriptanalyzer checks in development-full and the agent image, and the run-psscriptanalyzer agent allow rules are gone (#1925)
 ### Deployment Changes
 
 <!--

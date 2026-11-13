@@ -36,10 +36,9 @@ ARG CC_DEVOPS_SKILLS_COMMIT=7fe7595e4512f8ce43dcf956aa5190b96d627dd1
 ARG MARKDOWN_LINTER_FIXER_COMMIT=72aedc7915a0918d897b63b28d935989c054585e
 ARG DOTNET_SKILLS_COMMIT=874ff14cff1015104cf343ed480a6879020b4820
 
-# NuGet.Config, NUGET_PACKAGES, claude-code, all twelve .NET global tools, their
-# dotnet-* subcommand aliases, and the PSScriptAnalyzer module are already baked
-# in by development-dotnet-tools / development-credfeto-tools (this image's
-# base chain) — nothing to redo here.
+# NuGet.Config, NUGET_PACKAGES, claude-code, all the .NET global tools and their
+# dotnet-* subcommand aliases are already baked in by development-dotnet-tools /
+# development-credfeto-tools (this image's base chain) — nothing to redo here.
 
 # ---- dotnet-claude-kit repo (cloned for the Claude Code plugin side) ---------
 # Fetches the exact pinned commit directly (not the moving default-branch
@@ -387,7 +386,7 @@ RUN set -e; \
     echo "== binary presence + version probe (stage 1+2+3 inherited binaries) =="; \
     for cmd in git gh dotnet python3 gpg curl jq sqlite3 \
                shellcheck bats shfmt checkbashisms uv ruff sqlfluff actionlint markdownlint-cli2 pre-commit \
-               trufflehog hadolint dotenv-linter sqlcmd pwsh \
+               trufflehog hadolint dotenv-linter sqlcmd \
                yamllint ansible-lint flake8 pylint cfn-lint \
                markdownlint stylelint eslint \
                xmllint codegraph; do \
@@ -412,7 +411,7 @@ RUN set -e; \
     claude --version >/dev/null 2>&1 || claude --help >/dev/null 2>&1 \
         || { echo "FATAL sanity: 'claude' is not functional" >&2; exit 1; }; \
     echo "== dotnet tools =="; \
-    for tool in credfeto.changelog.cmd credfeto.dotnet.code.analysis.overrides.cmd tsqllint funfair.buildcheck funfair.buildversion cwm.roslynnavigator dotnet-ef ilspycmd microsoft.sqlpackage powershell credfeto.dotnet.repo.formatter dotnet-script dotnet-reportgenerator-globaltool credfeto.build.dotnet.server; do \
+    for tool in credfeto.changelog.cmd credfeto.dotnet.code.analysis.overrides.cmd tsqllint funfair.buildcheck funfair.buildversion cwm.roslynnavigator dotnet-ef ilspycmd microsoft.sqlpackage credfeto.dotnet.repo.formatter dotnet-script dotnet-reportgenerator-globaltool credfeto.build.dotnet.server; do \
         if ! su developer -c "dotnet tool list -g" | awk '{print tolower($1)}' | grep -Fxq "$tool"; then \
             echo "FATAL sanity: dotnet tool '$tool' is missing" >&2; exit 1; \
         fi; \
@@ -453,7 +452,7 @@ RUN set -e; \
         || { echo "FATAL sanity: /opt/git-global-hooks/pre-commit is not executable" >&2; exit 1; }; \
     test -x /opt/git-global-hooks/pre-push \
         || { echo "FATAL sanity: /opt/git-global-hooks/pre-push is not executable" >&2; exit 1; }; \
-    for wrapper in run-eslint run-stylelint run-psscriptanalyzer run-bats; do \
+    for wrapper in run-eslint run-stylelint run-bats; do \
         command -v "$wrapper" >/dev/null 2>&1 \
             || { echo "FATAL sanity: $wrapper not on PATH — /opt/pre-commit/src/scripts/ missing from PATH?" >&2; exit 1; }; \
     done; \
@@ -596,7 +595,7 @@ RUN set -e; \
 # some tools are legitimately absent, so its non-zero exit is tolerated there — but
 # this image installs the full toolchain by design, so a non-zero exit here means a
 # tool or config regression and MUST fail the build. Run as the developer user so it
-# sees the same PATH and per-user dotnet global tools (cscleanup, pwsh, …) that exist
+# sees the same PATH and per-user dotnet global tools (cscleanup, …) that exist
 # at runtime; check-setup performs no network/.env access, so no /tmp copy is needed.
 # hadolint ignore=DL3059
 RUN su developer -c /opt/pre-commit/check-setup

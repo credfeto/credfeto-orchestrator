@@ -131,7 +131,6 @@ create-project                        writer
 # basename via a PATH prepend from src/hooks/pre-commit
 run-eslint                            writer
 run-stylelint                         writer
-run-psscriptanalyzer                  writer
 run-bats                              writer
 run-formatter                         writer
 

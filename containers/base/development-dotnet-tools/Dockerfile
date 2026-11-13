@@ -12,11 +12,6 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # image installs, so the layers below only re-run when one of them actually
 # ships a new release (not on a blind daily schedule).
 ARG STABLE_TOOLS_CACHE_BUST
-# PowerShell: pinned to an exact release instead of floating to the latest.
-# 7.7.0 is published as a per-RID tool whose platform package
-# (powershell.linux-x64) is not on nuget.org, so an unpinned install fails on
-# Linux. Bump deliberately, only to a release whose linux-x64 package exists.
-ARG POWERSHELL_VERSION=7.6.10
 
 # ---- NuGet package sources (FunFair private feeds) ---------------------------
 # NuGet.Config is baked in root:root mode 0444 so the agent (running as the
@@ -109,8 +104,6 @@ RUN su developer -c ": ${STABLE_TOOLS_CACHE_BUST}; dotnet tool install -g ilspyc
 # hadolint ignore=DL3059
 RUN su developer -c ": ${STABLE_TOOLS_CACHE_BUST}; dotnet tool install -g Microsoft.SqlPackage"
 # hadolint ignore=DL3059
-RUN su developer -c ": ${STABLE_TOOLS_CACHE_BUST}; dotnet tool install -g PowerShell --version ${POWERSHELL_VERSION}"
-# hadolint ignore=DL3059
 RUN su developer -c ": ${STABLE_TOOLS_CACHE_BUST}; dotnet tool install -g dotnet-script"
 # hadolint ignore=DL3059
 RUN su developer -c ": ${STABLE_TOOLS_CACHE_BUST}; dotnet tool install -g dotnet-reportgenerator-globaltool"
@@ -126,23 +119,7 @@ RUN su developer -c '\
     ln -sf ilspycmd              /home/developer/.dotnet/tools/dotnet-ilspycmd && \
     ln -sf sqlpackage            /home/developer/.dotnet/tools/dotnet-sqlpackage && \
     ln -sf tsqllint              /home/developer/.dotnet/tools/dotnet-tsqllint && \
-    ln -sf pwsh                  /home/developer/.dotnet/tools/dotnet-pwsh && \
     ln -sf reportgenerator       /home/developer/.dotnet/tools/dotnet-reportgenerator'
-
-# PSScriptAnalyzer PowerShell module — check-setup (in development-full)
-# imports it (`dotnet pwsh -Command "Import-Module PSScriptAnalyzer ..."`) to
-# validate the VALIDATE_POWERSHELL hook, so it must be present for the
-# developer user in addition to the pwsh binary/alias above. Installed via
-# Install-PSResource (Microsoft.PowerShell.PSResourceGet, bundled with pwsh
-# 7.4+) rather than the legacy Install-Module: the latter needs the old
-# PackageManagement "NuGet" provider bootstrapped first, which fails
-# non-interactively here ("No match was found for the specified search
-# criteria for the provider 'NuGet'") even though the PSGallery endpoint
-# itself is reachable. PSResourceGet talks to the gallery directly and needs
-# no such bootstrap.
-# hadolint ignore=DL3059
-RUN su developer -c 'dotnet pwsh -NoProfile -NonInteractive -Command \
-    "Install-PSResource -Name PSScriptAnalyzer -Scope CurrentUser -TrustRepository -ErrorAction Stop"'
 
 # ---- Installed-versions report ------------------------------------------------
 # Overwrites (not appends) the report inherited from development-python, so
@@ -154,11 +131,9 @@ RUN su developer -c "dotnet tool list -g" > /tmp/dotnet-tools-list.txt \
     && { \
       claude_version="$(claude --version 2>&1)" || claude_version="version unknown"; \
       echo "claude-code: ${claude_version}"; \
-      for tool in tsqllint cwm.roslynnavigator dotnet-ef ilspycmd microsoft.sqlpackage powershell dotnet-script dotnet-reportgenerator-globaltool; do \
+      for tool in tsqllint cwm.roslynnavigator dotnet-ef ilspycmd microsoft.sqlpackage dotnet-script dotnet-reportgenerator-globaltool; do \
         awk -v t="$tool" '{if (tolower($1)==t) print $1": "$2}' /tmp/dotnet-tools-list.txt; \
       done; \
-      psa_version=$(su developer -c 'dotnet pwsh -NoProfile -NonInteractive -Command "(Get-InstalledPSResource -Name PSScriptAnalyzer).Version.ToString()"' 2>/dev/null | tr -d '\r') || psa_version="version unknown"; \
-      echo "PSScriptAnalyzer: ${psa_version:-version unknown}"; \
     } > /opt/installed-versions.txt \
     && rm /tmp/dotnet-tools-list.txt \
     && chown root:root /opt/installed-versions.txt \
@@ -177,23 +152,15 @@ RUN set -e; \
     claude --version >/dev/null 2>&1 || claude --help >/dev/null 2>&1 \
         || { echo "FATAL sanity: 'claude' is not functional" >&2; exit 1; }; \
     echo "== dotnet tools =="; \
-    for tool in tsqllint cwm.roslynnavigator dotnet-ef ilspycmd microsoft.sqlpackage powershell dotnet-script dotnet-reportgenerator-globaltool; do \
+    for tool in tsqllint cwm.roslynnavigator dotnet-ef ilspycmd microsoft.sqlpackage dotnet-script dotnet-reportgenerator-globaltool; do \
         if ! su developer -c "dotnet tool list -g" | awk '{print tolower($1)}' | grep -Fxq "$tool"; then \
             echo "FATAL sanity: dotnet tool '$tool' is missing" >&2; exit 1; \
         fi; \
     done; \
-    echo "== PowerShell pinned version =="; \
-    pwsh_version="$(su developer -c 'pwsh --version' | tr -d '\r')"; \
-    if [ "$pwsh_version" != "PowerShell ${POWERSHELL_VERSION}" ]; then \
-        echo "FATAL sanity: pwsh reports '$pwsh_version', expected PowerShell ${POWERSHELL_VERSION}" >&2; exit 1; \
-    fi; \
     echo "== cwm-roslyn-navigator functional probe =="; \
     su developer -c "cwm-roslyn-navigator --help >/dev/null 2>&1" \
         || { echo "FATAL sanity: cwm-roslyn-navigator --help did not exit 0" >&2; exit 1; }; \
     echo "== reportgenerator functional probe =="; \
     su developer -c "dotnet reportgenerator -h >/dev/null 2>&1" \
         || { echo "FATAL sanity: dotnet reportgenerator -h did not exit 0" >&2; exit 1; }; \
-    echo "== pwsh + PSScriptAnalyzer functional probe =="; \
-    su developer -c 'dotnet pwsh -NoProfile -NonInteractive -Command "Import-Module PSScriptAnalyzer -ErrorAction Stop"' \
-        || { echo "FATAL sanity: PSScriptAnalyzer module did not import" >&2; exit 1; }; \
     echo "== all build-time checks passed =="
