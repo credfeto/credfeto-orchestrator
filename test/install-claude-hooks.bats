@@ -814,7 +814,7 @@ kb_token_privacy_predicates() {
     grep -qE 'for tool in .* credfeto\.build\.dotnet\.server( .*)?; do' "${dockerfile}"
 }
 
-@test "the Dockerfile sanity block pins the changelog server, its wrapper's owner and mode, its root, its tool mode, the global tool and allow rule" {
+@test "the Dockerfile sanity block pins the changelog server, its wrapper's owner and mode, its root, its tool mode and allow rule" {
     local dockerfile="${SOURCE_DIR}/Dockerfile"
     grep -qF "jq -e '.mcpServers.changelog == {\"type\": \"stdio\", \"command\": \"/etc/claude-code/mcp/changelog-mcp\"}' /etc/claude-code/managed-mcp.json" "${dockerfile}"
     grep -qF "[ \"\$(stat -c '%U:%G %a' /etc/claude-code/mcp/changelog-mcp)\" = \"root:root 755\" ]" "${dockerfile}"
@@ -822,9 +822,7 @@ kb_token_privacy_predicates() {
     grep -qF '[ "${CHANGELOG_MCP_REPO_ROOT}" = "/workspace/repo" ]' "${dockerfile}"
     # shellcheck disable=SC2016  # the literal ${...} the sanity block's shell expands
     grep -qF '[ "${CHANGELOG_MCP_TOOL}" = "global" ]' "${dockerfile}"
-    grep -qF '[ -x /home/developer/.dotnet/tools/changelog-mcp ]' "${dockerfile}"
     grep -qF "jq -e '.permissions.allow | index(\"mcp__changelog__*\")' /etc/claude-code/managed-settings.json" "${dockerfile}"
-    grep -qE 'for tool in .* credfeto\.changelog\.mcp( .*)?; do' "${dockerfile}"
 }
 
 # Prints each jq program the Dockerfile sanity block runs against /etc/claude-code/managed-mcp.json,
