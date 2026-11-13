@@ -114,7 +114,10 @@ export DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE
 
 local_tool_is_listed() {
     # A local tool cannot run without dotnet, so with no dotnet there is no local tool to choose
-    # and the global tool, which dotnet does not start, is tried instead.
+    # and the global tool is tried instead. It is not native (Credfeto.ChangeLog.Mcp is
+    # framework-dependent), but its shim finds a .NET runtime itself, through DOTNET_ROOT or the
+    # default install locations, so dotnet need not be on PATH; with no runtime it fails with its
+    # own runtime error rather than a message from here.
     command -v dotnet >/dev/null 2>&1 || return 1
     # Without jq the list cannot be read, and guessing "not listed" would start the global tool, or
     # report it missing, when the user's own local one is there.
