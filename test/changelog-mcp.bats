@@ -571,7 +571,7 @@ make_recording_probes() {
     run_wrapper "${WORK}"
     [ "${status}" -ne 0 ]
     [ -z "${output}" ]
-    [ "${stderr}" = "changelog-mcp: changelog-mcp not found: install it as a local tool from ${USER_HOME} with dotnet tool install --local, or as a global tool in ${cli_home}/.dotnet/tools" ]
+    [ "${stderr}" = "changelog-mcp: changelog-mcp not found: install the global tool with dotnet tool install -g Credfeto.ChangeLog.Mcp (into ${cli_home}/.dotnet/tools), which runs from the repository root; a local tool in ${USER_HOME}'s manifest is used too, but released versions then work on ${USER_HOME}, not the repository" ]
 }
 
 @test "with CHANGELOG_MCP_TOOL=global, DOTNET_CLI_HOME is ignored and the tool under HOME runs" {
