@@ -37,8 +37,8 @@ CodeGraph needs. Nothing has to be done by hand.
   `sha256sum -c` before unpacking it. The archive is a directory holding a launcher, a bundled Node
   runtime and the app, so no system Node.js is needed. It is unpacked into `/opt/codegraph`, owned
   by root, and `/usr/local/bin/codegraph` links to the launcher. `development-full` inherits it
-  through its base image chain. The `development-tools` sanity stage checks that `codegraph` is
-  on `PATH` and that `codegraph --version` runs.
+  through its base image chain. The sanity stages of both images check that `codegraph` is on
+  `PATH` and that `codegraph --version` runs.
 - **The pin.** The version is pinned by `ARG CODEGRAPH_VERSION`, with one checksum per
   architecture in `CODEGRAPH_SHA256_AMD64` and `CODEGRAPH_SHA256_ARM64`. The Dockerfile is the only
   place these values are kept; this guide does not copy them.

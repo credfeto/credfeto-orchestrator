@@ -374,7 +374,7 @@ Executed as root. Fails the build immediately if anything is missing or broken.
 
 **Binary presence and `--version` probe** — all of the following must be on `PATH` and exit 0 for `--version`:
 
-`git`, `gh`, `dotnet`, `python3`, `gpg`, `curl`, `sqlite3`, `shellcheck`, `bats`, `shfmt`, `checkbashisms`, `uv`, `ruff`, `sqlfluff`, `actionlint`, `markdownlint-cli2`, `pre-commit`, `trufflehog`, `hadolint`, `dotenv-linter`, `sqlcmd`, `composite-action-lint`, `pwsh`, `yamllint`, `ansible-lint`, `flake8`, `pylint`, `cfn-lint`, `markdownlint`, `stylelint`, `eslint`, `xmllint`
+`git`, `gh`, `dotnet`, `python3`, `gpg`, `curl`, `sqlite3`, `shellcheck`, `bats`, `shfmt`, `checkbashisms`, `uv`, `ruff`, `sqlfluff`, `actionlint`, `markdownlint-cli2`, `pre-commit`, `trufflehog`, `hadolint`, `dotenv-linter`, `sqlcmd`, `composite-action-lint`, `pwsh`, `yamllint`, `ansible-lint`, `flake8`, `pylint`, `cfn-lint`, `markdownlint`, `stylelint`, `eslint`, `xmllint`, `codegraph`
 
 **dotnet global tool verification** — `dotnet tool list -g` is run as `developer` and each of the following package IDs must appear (case-insensitive):
 
