@@ -1079,7 +1079,7 @@
               "login": "x"
             },
             "updatedAt": "9",
-            "body": " <!-- a.b-summary\n"
+            "body": "\u00a0<!--\u2003a.b-summary\n"
           }
         ],
         "reviews": [],
