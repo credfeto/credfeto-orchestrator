@@ -188,6 +188,7 @@ declare -gA _WF_OPTION_IDS
     [[ "${output}" == *"Container-vs-GitHub rule"* ]]
     [[ "${output}" == *"killed the instant your turn ends"* ]]
     [[ "${output}" == *"survives independently of this container"* ]]
+    [[ "${output}" == *"Never call ScheduleWakeup, CronCreate or /loop to come back to it later"* ]]
 }
 
 @test "build_issue_claude_md omits the background-stall warning by default" {

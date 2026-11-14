@@ -215,6 +215,10 @@
     ],
     "deny": [
       "mcp__webstorm__execute_sql_query",
+      "ScheduleWakeup",
+      "CronCreate",
+      "CronDelete",
+      "CronList",
       "mcp__cfwf__issue_approve",
       "mcp__cfwf__issue_unblock",
       "mcp__cfwf__pr_unblock",
