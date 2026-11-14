@@ -17861,6 +17861,15 @@ Approved ${APPROVE_ISSUE_URL}" ]
     [ ! -f "${GH_LOG}" ]
 }
 
+@test "the agents' permissions deny ScheduleWakeup and the cron tools, so a finished session cannot idle in the container" {
+    local settings="${REPO_ROOT}/containers/base/development-full/claude-managed-settings.json"
+    local entry
+    for entry in ScheduleWakeup CronCreate CronDelete CronList; do
+        jq -r '.permissions.deny[]' "${settings}" | grep -qxF "${entry}"
+        ! jq -r '.permissions.allow[]' "${settings}" | grep -qxF "${entry}"
+    done
+}
+
 @test "the agents' permissions deny the human-only commands and their MCP tools, while cfwf as a whole stays allowed" {
     local settings="${REPO_ROOT}/containers/base/development-full/claude-managed-settings.json"
     local entry
