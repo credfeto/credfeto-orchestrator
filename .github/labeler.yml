@@ -26,6 +26,10 @@
   - any: ['src/Credfeto.Orchestrator.Fingerprints/**/*']
 "credfeto-orchestrator-fingerprints-tests":
   - any: ['src/Credfeto.Orchestrator.Fingerprints.Tests/**/*']
+"credfeto-orchestrator-github":
+  - any: ['src/Credfeto.Orchestrator.GitHub/**/*']
+"credfeto-orchestrator-github-tests":
+  - any: ['src/Credfeto.Orchestrator.GitHub.Tests/**/*']
 "credfeto-orchestrator-jq":
   - any: ['src/Credfeto.Orchestrator.Jq/**/*']
 "credfeto-orchestrator-jq-tests":
