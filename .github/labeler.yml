@@ -12,6 +12,24 @@
   - any: ['CHANGELOG.md']
 "Config Change":
   - any: ['src/**/*.json', '!src/global.json']
+"credfeto-orchestrator-cmd":
+  - any: ['src/Credfeto.Orchestrator.Cmd/**/*']
+"credfeto-orchestrator-commands":
+  - any: ['src/Credfeto.Orchestrator.Commands/**/*']
+"credfeto-orchestrator-commands-tests":
+  - any: ['src/Credfeto.Orchestrator.Commands.Tests/**/*']
+"credfeto-orchestrator-config":
+  - any: ['src/Credfeto.Orchestrator.Config/**/*']
+"credfeto-orchestrator-config-tests":
+  - any: ['src/Credfeto.Orchestrator.Config.Tests/**/*']
+"credfeto-orchestrator-fingerprints":
+  - any: ['src/Credfeto.Orchestrator.Fingerprints/**/*']
+"credfeto-orchestrator-fingerprints-tests":
+  - any: ['src/Credfeto.Orchestrator.Fingerprints.Tests/**/*']
+"credfeto-orchestrator-jq":
+  - any: ['src/Credfeto.Orchestrator.Jq/**/*']
+"credfeto-orchestrator-jq-tests":
+  - any: ['src/Credfeto.Orchestrator.Jq.Tests/**/*']
 "dotnet":
   - any: ['src/**/*.csproj']
 "Editorconfig":

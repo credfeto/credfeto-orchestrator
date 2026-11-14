@@ -44,6 +44,42 @@
   color: "d8bb50"
   description: "Configuration files changes"
 
+- name: "credfeto-orchestrator-cmd"
+  color: "96f7d2"
+  description: "Changes in Credfeto.Orchestrator.Cmd project"
+
+- name: "credfeto-orchestrator-commands"
+  color: "96f7d2"
+  description: "Changes in Credfeto.Orchestrator.Commands project"
+
+- name: "credfeto-orchestrator-commands-tests"
+  color: "0e8a16"
+  description: "Changes in Credfeto.Orchestrator.Commands.Tests project"
+
+- name: "credfeto-orchestrator-config"
+  color: "96f7d2"
+  description: "Changes in Credfeto.Orchestrator.Config project"
+
+- name: "credfeto-orchestrator-config-tests"
+  color: "0e8a16"
+  description: "Changes in Credfeto.Orchestrator.Config.Tests project"
+
+- name: "credfeto-orchestrator-fingerprints"
+  color: "96f7d2"
+  description: "Changes in Credfeto.Orchestrator.Fingerprints project"
+
+- name: "credfeto-orchestrator-fingerprints-tests"
+  color: "0e8a16"
+  description: "Changes in Credfeto.Orchestrator.Fingerprints.Tests project"
+
+- name: "credfeto-orchestrator-jq"
+  color: "96f7d2"
+  description: "Changes in Credfeto.Orchestrator.Jq project"
+
+- name: "credfeto-orchestrator-jq-tests"
+  color: "0e8a16"
+  description: "Changes in Credfeto.Orchestrator.Jq.Tests project"
+
 - name: "dependencies"
   color: "0366d6"
   description: "Updates to dependencies"
