@@ -1,0 +1,489 @@
+{
+  "openPullRequests": [
+    {
+      "name": "no open pull request on the branch",
+      "repo": "org/repo",
+      "head": "chore/42-fix",
+      "gh": [],
+      "mcp": {
+        "repository": "org/repo",
+        "pullRequests": []
+      },
+      "numbers": "",
+      "count": "0"
+    },
+    {
+      "name": "one open pull request on the branch",
+      "repo": "org/repo",
+      "head": "chore/42-fix",
+      "gh": [
+        {
+          "number": 57
+        }
+      ],
+      "mcp": {
+        "repository": "org/repo",
+        "pullRequests": [
+          {
+            "number": 57,
+            "head": "chore/42-fix",
+            "base": "main",
+            "author": "dnyw4l3n13",
+            "state": "ready",
+            "flags": [],
+            "url": "https://github.com/org/repo/pull/57",
+            "title": "A change"
+          }
+        ]
+      },
+      "numbers": "57",
+      "count": "1"
+    },
+    {
+      "name": "a fork's pull request on a branch of the same name is listed too, newest first",
+      "repo": "org/repo",
+      "head": "fix/7-typo",
+      "gh": [
+        {
+          "number": 31
+        },
+        {
+          "number": 12
+        }
+      ],
+      "mcp": {
+        "repository": "org/repo",
+        "pullRequests": [
+          {
+            "number": 12,
+            "head": "fix/7-typo",
+            "base": "main",
+            "author": "someone",
+            "state": "ready",
+            "flags": [
+              "fork"
+            ],
+            "url": "https://github.com/org/repo/pull/12",
+            "title": "A change"
+          },
+          {
+            "number": 31,
+            "head": "fix/7-typo",
+            "base": "main",
+            "author": "dnyw4l3n13",
+            "state": "ready",
+            "flags": [],
+            "url": "https://github.com/org/repo/pull/31",
+            "title": "A change"
+          }
+        ]
+      },
+      "numbers": "31\n12",
+      "count": "2"
+    },
+    {
+      "name": "three pull requests, the server's order reversed to gh's",
+      "repo": "org/repo",
+      "head": "main",
+      "gh": [
+        {
+          "number": 300
+        },
+        {
+          "number": 41
+        },
+        {
+          "number": 9
+        }
+      ],
+      "mcp": {
+        "repository": "org/repo",
+        "pullRequests": [
+          {
+            "number": 9,
+            "head": "main",
+            "base": "main",
+            "author": "dnyw4l3n13",
+            "state": "ready",
+            "flags": [
+              "fork"
+            ],
+            "url": "https://github.com/org/repo/pull/9",
+            "title": "A change"
+          },
+          {
+            "number": 41,
+            "head": "main",
+            "base": "main",
+            "author": "dnyw4l3n13",
+            "state": "ready",
+            "flags": [
+              "fork"
+            ],
+            "url": "https://github.com/org/repo/pull/41",
+            "title": "A change"
+          },
+          {
+            "number": 300,
+            "head": "main",
+            "base": "main",
+            "author": "dnyw4l3n13",
+            "state": "ready",
+            "flags": [
+              "fork"
+            ],
+            "url": "https://github.com/org/repo/pull/300",
+            "title": "A change"
+          }
+        ]
+      },
+      "numbers": "300\n41\n9",
+      "count": "3"
+    },
+    {
+      "name": "a branch name with slashes and dots",
+      "repo": "org/repo",
+      "head": "release/v1.2/hotfix",
+      "gh": [
+        {
+          "number": 8
+        }
+      ],
+      "mcp": {
+        "repository": "org/repo",
+        "pullRequests": [
+          {
+            "number": 8,
+            "head": "release/v1.2/hotfix",
+            "base": "main",
+            "author": "dnyw4l3n13",
+            "state": "ready",
+            "flags": [],
+            "url": "https://github.com/org/repo/pull/8",
+            "title": "A change"
+          }
+        ]
+      },
+      "numbers": "8",
+      "count": "1"
+    },
+    {
+      "name": "the list cannot be read",
+      "repo": "org/missing",
+      "head": "chore/42-fix",
+      "gh": null,
+      "mcpError": "the repository org/missing was not found, or the caller cannot see it",
+      "numbers": null,
+      "count": null
+    }
+  ],
+  "branchRequiresStatusChecks": [
+    {
+      "name": "classic protection requires a check",
+      "repo": "org/repo",
+      "branch": "main",
+      "ghBranch": {
+        "name": "main",
+        "protected": true,
+        "protection": {
+          "enabled": true,
+          "required_status_checks": {
+            "enforcement_level": "non_admins",
+            "contexts": [
+              "build"
+            ],
+            "checks": [
+              {
+                "context": "build",
+                "app_id": 1
+              }
+            ]
+          }
+        }
+      },
+      "ghRules": [],
+      "mcp": {
+        "repo": "org/repo",
+        "branch": "main",
+        "checks": [
+          "build"
+        ]
+      },
+      "expected": "true"
+    },
+    {
+      "name": "classic protection lists only legacy contexts",
+      "repo": "org/repo",
+      "branch": "main",
+      "ghBranch": {
+        "name": "main",
+        "protected": true,
+        "protection": {
+          "enabled": true,
+          "required_status_checks": {
+            "enforcement_level": "everyone",
+            "contexts": [
+              "ci",
+              "lint"
+            ],
+            "checks": []
+          }
+        }
+      },
+      "ghRules": [],
+      "mcp": {
+        "repo": "org/repo",
+        "branch": "main",
+        "checks": [
+          "ci",
+          "lint"
+        ]
+      },
+      "expected": "true"
+    },
+    {
+      "name": "an unprotected branch with no rulesets",
+      "repo": "org/repo",
+      "branch": "main",
+      "ghBranch": {
+        "name": "main",
+        "protected": false,
+        "protection": {
+          "enabled": false,
+          "required_status_checks": {
+            "enforcement_level": "off",
+            "contexts": [],
+            "checks": []
+          }
+        }
+      },
+      "ghRules": [],
+      "mcp": {
+        "repo": "org/repo",
+        "branch": "main",
+        "checks": []
+      },
+      "expected": "false"
+    },
+    {
+      "name": "a branch with no protection object at all",
+      "repo": "org/repo",
+      "branch": "dev",
+      "ghBranch": {
+        "name": "dev",
+        "protected": false
+      },
+      "ghRules": [],
+      "mcp": {
+        "repo": "org/repo",
+        "branch": "dev",
+        "checks": []
+      },
+      "expected": "false"
+    },
+    {
+      "name": "protection switched off still lists checks",
+      "repo": "org/repo",
+      "branch": "main",
+      "ghBranch": {
+        "name": "main",
+        "protected": true,
+        "protection": {
+          "enabled": true,
+          "required_status_checks": {
+            "enforcement_level": "off",
+            "contexts": [
+              "build"
+            ],
+            "checks": [
+              {
+                "context": "build",
+                "app_id": 1
+              }
+            ]
+          }
+        }
+      },
+      "ghRules": [],
+      "mcp": {
+        "repo": "org/repo",
+        "branch": "main",
+        "checks": []
+      },
+      "expected": "false"
+    },
+    {
+      "name": "protection on with no checks listed",
+      "repo": "org/repo",
+      "branch": "main",
+      "ghBranch": {
+        "name": "main",
+        "protected": true,
+        "protection": {
+          "enabled": true,
+          "required_status_checks": {
+            "enforcement_level": "non_admins",
+            "contexts": [],
+            "checks": []
+          }
+        }
+      },
+      "ghRules": [],
+      "mcp": {
+        "repo": "org/repo",
+        "branch": "main",
+        "checks": []
+      },
+      "expected": "false"
+    },
+    {
+      "name": "a ruleset requires a check on an unprotected branch",
+      "repo": "org/repo",
+      "branch": "main",
+      "ghBranch": {
+        "name": "main",
+        "protected": false,
+        "protection": {
+          "enabled": false,
+          "required_status_checks": {
+            "enforcement_level": "off",
+            "contexts": [],
+            "checks": []
+          }
+        }
+      },
+      "ghRules": [
+        {
+          "type": "pull_request"
+        },
+        {
+          "type": "required_status_checks",
+          "parameters": {
+            "required_status_checks": [
+              {
+                "context": "build"
+              }
+            ]
+          }
+        }
+      ],
+      "mcp": {
+        "repo": "org/repo",
+        "branch": "main",
+        "checks": [
+          "build"
+        ]
+      },
+      "expected": "true"
+    },
+    {
+      "name": "rulesets with no status check rule",
+      "repo": "org/repo",
+      "branch": "main",
+      "ghBranch": {
+        "name": "main",
+        "protected": false,
+        "protection": {
+          "enabled": false,
+          "required_status_checks": {
+            "enforcement_level": "off",
+            "contexts": [],
+            "checks": []
+          }
+        }
+      },
+      "ghRules": [
+        {
+          "type": "deletion"
+        },
+        {
+          "type": "pull_request",
+          "parameters": {
+            "required_approving_review_count": 1
+          }
+        }
+      ],
+      "mcp": {
+        "repo": "org/repo",
+        "branch": "main",
+        "checks": []
+      },
+      "expected": "false"
+    },
+    {
+      "name": "both protection and a ruleset require checks",
+      "repo": "org/repo",
+      "branch": "release/1.0",
+      "ghBranch": {
+        "name": "release/1.0",
+        "protected": true,
+        "protection": {
+          "enabled": true,
+          "required_status_checks": {
+            "enforcement_level": "everyone",
+            "contexts": [
+              "build"
+            ],
+            "checks": [
+              {
+                "context": "build",
+                "app_id": 15368
+              }
+            ]
+          }
+        }
+      },
+      "ghRules": [
+        {
+          "type": "required_status_checks",
+          "parameters": {
+            "required_status_checks": [
+              {
+                "context": "test",
+                "integration_id": 15368
+              }
+            ]
+          }
+        }
+      ],
+      "mcp": {
+        "repo": "org/repo",
+        "branch": "release/1.0",
+        "checks": [
+          "build",
+          "test"
+        ]
+      },
+      "expected": "true"
+    },
+    {
+      "name": "the branch does not exist",
+      "repo": "org/repo",
+      "branch": "gone",
+      "ghBranch": null,
+      "ghRules": [],
+      "mcpError": "the branch gone was not found in org/repo",
+      "expected": null
+    },
+    {
+      "name": "the rulesets cannot be read",
+      "repo": "org/repo",
+      "branch": "main",
+      "ghBranch": {
+        "name": "main",
+        "protected": false,
+        "protection": {
+          "enabled": false,
+          "required_status_checks": {
+            "enforcement_level": "off",
+            "contexts": [],
+            "checks": []
+          }
+        }
+      },
+      "ghRules": null,
+      "mcpError": "could not read the required checks of org/repo branch main",
+      "expected": null
+    }
+  ]
+}

@@ -23,4 +23,8 @@
     <Project Path="Credfeto.Orchestrator.Fingerprints.Tests/Credfeto.Orchestrator.Fingerprints.Tests.csproj" />
     <Project Path="Credfeto.Orchestrator.Fingerprints/Credfeto.Orchestrator.Fingerprints.csproj" />
   </Folder>
+  <Folder Name="/GitHub/">
+    <Project Path="Credfeto.Orchestrator.GitHub.Tests/Credfeto.Orchestrator.GitHub.Tests.csproj" />
+    <Project Path="Credfeto.Orchestrator.GitHub/Credfeto.Orchestrator.GitHub.csproj" />
+  </Folder>
 </Solution>
