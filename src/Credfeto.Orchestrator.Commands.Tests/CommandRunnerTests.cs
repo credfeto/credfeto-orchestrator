@@ -4,6 +4,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Credfeto.Orchestrator.Fingerprints;
+using Credfeto.Orchestrator.GitHub;
 using FunFair.Test.Common;
 using Xunit;
 
@@ -22,7 +23,11 @@ public sealed class CommandRunnerTests : TestBase
     public CommandRunnerTests()
     {
         this._files = new();
-        this._runner = new(fingerprints: new FingerprintCalculator(), files: this._files);
+        this._runner = new(
+            fingerprints: new FingerprintCalculator(),
+            files: this._files,
+            github: new GitHubReader(new FakeMcpToolCaller(result: null, error: "not expected"))
+        );
     }
 
     [Theory]

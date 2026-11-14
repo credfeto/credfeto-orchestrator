@@ -1,10 +1,12 @@
 using System;
 using System.IO;
+using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Credfeto.Orchestrator.Commands;
 using Credfeto.Orchestrator.Fingerprints;
+using Credfeto.Orchestrator.GitHub;
 
 namespace Credfeto.Orchestrator.Cmd;
 
@@ -25,7 +27,17 @@ public static class Program
 
         using CancellationTokenSource shutdown = new();
         await using Stream input = Console.OpenStandardInput();
-        CommandRunner runner = new(fingerprints: new FingerprintCalculator(), files: new FileContentReader());
+        using HttpClient httpClient = new();
+        CommandRunner runner = new(
+            fingerprints: new FingerprintCalculator(),
+            files: new FileContentReader(),
+            github: new GitHubReader(
+                new McpToolCaller(
+                    httpClient: httpClient,
+                    settings: static () => CfwfMcpSettingsLoader.Load(Environment.GetEnvironmentVariable)
+                )
+            )
+        );
 
         Task<int> run = runner
             .RunAsync(

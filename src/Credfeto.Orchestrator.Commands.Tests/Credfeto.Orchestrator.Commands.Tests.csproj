@@ -34,6 +34,10 @@
   </PropertyGroup>
   <Import Project="$(SolutionDir)UnitTests.props" Condition="Exists('$(SolutionDir)UnitTests.props')" />
   <ItemGroup>
+    <!-- The golden cases test/oneshot-github-parity.bats checks the shell version against -->
+    <EmbeddedResource Include="../../test/fixtures/github-parity.json" LogicalName="github-parity.json" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="../Credfeto.Orchestrator.Commands/Credfeto.Orchestrator.Commands.csproj" />
   </ItemGroup>
   <ItemGroup>
