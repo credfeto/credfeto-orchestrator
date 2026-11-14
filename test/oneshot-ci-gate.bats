@@ -1530,17 +1530,77 @@ cat "'"${TEST_TMP}"'/behind"'
     [ "${status}" -ne 0 ]
 }
 
-@test "main treats a handed-off BEHIND PR that only waits on human review as settled, with no rebase and no agent (#1654)" {
-    # The live case: a push to main left every handed-off PR in the repository BEHIND, and each
-    # one was re-run on every tick although nothing needed doing.
+@test "main rebases a handed-off BEHIND PR that only waits on human review non-agentically, with no agent session (#1889)" {
+    # Settled means no agent session, not no rebase: a base that requires up-to-date branches never
+    # merges a BEHIND PR, so it takes the same non-agentic rebase as any other BEHIND PR (#1889).
     setup_main_mocks
     fetch_all_priorities() {
         printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
     }
-    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true}],"mergeable":"MERGEABLE","mergeStateStatus":"BEHIND","autoMergeRequest":{"enabledAt":"now"}}\n'; }
+    fetch_pr_json() { printf '%s\n' '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true}],"mergeable":"MERGEABLE","mergeStateStatus":"BEHIND","autoMergeRequest":{"enabledAt":"now"}}'; }
     local fp_case
     for fp_case in changed unchanged; do
-        rm -f "${TEST_TMP}/rebase_log" "${TEST_TMP}/claude_log"
+        rm -f "${TEST_TMP}/rebase_log" "${TEST_TMP}/claude_log" "${TEST_TMP}/approval_log" "${TEST_TMP}/waiting_log"
+        if [ "${fp_case}" = "changed" ]; then
+            fingerprint_pr_json() { printf 'fp-new\n'; }
+        else
+            fingerprint_pr_json() { printf 'fp-old\n'; }
+        fi
+        load_pr_fingerprint() { printf 'fp-old\n'; }
+        try_nonagentic_rebase() { printf 'rebased %s\n' "$1" >> "${TEST_TMP}/rebase_log"; return 0; }
+        invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+        notify_discord_pr_needs_approval() { printf 'needs approval %s\n' "$1" >> "${TEST_TMP}/approval_log"; }
+        notify_discord_pr_waiting() { printf '%s %s\n' "$1" "$4" >> "${TEST_TMP}/waiting_log"; }
+        save_pr_invocation_counts 5 3 2
+
+        run main
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == *"PR #5 in org/repo: settled (ready to merge, nothing failed/pending) but BEHIND — trying the non-agentic rebase"* ]]
+        [[ "${output}" != *"no agent needed"* ]]
+        [[ "${output}" == *"PR #5 in org/repo rebased non-agentically — idle budget reset"* ]]
+        if [ "${fp_case}" = "unchanged" ]; then
+            [[ "${output}" == *"PR #5 in org/repo unchanged but BEHIND — re-running (idle budget 2/${MAX_PR_IDLE_INVOCATIONS})"* ]]
+        else
+            [[ "${output}" != *"re-running"* ]]
+        fi
+        grep -qx 'rebased feat/test' "${TEST_TMP}/rebase_log"
+        [ ! -f "${TEST_TMP}/claude_log" ]
+        grep -qx 'needs approval 5' "${TEST_TMP}/approval_log"
+        grep -qx '5 Waiting on human review' "${TEST_TMP}/waiting_log"
+        load_pr_invocation_counts 5
+        [ "${PR_INVOCATION_IDLE}" -eq 0 ]
+        [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
+    done
+}
+
+@test "main hands a handed-off BEHIND PR that only waits on human review to the agent when its non-agentic rebase conflicts (#1889)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '%s\n' '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true}],"mergeable":"MERGEABLE","mergeStateStatus":"BEHIND","autoMergeRequest":{"enabledAt":"now"}}'; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint() { printf 'fp-old\n'; }
+    try_nonagentic_rebase() { printf 'rebased\n' >> "${TEST_TMP}/rebase_log"; return 1; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #5 in org/repo: settled (ready to merge, nothing failed/pending) but BEHIND — trying the non-agentic rebase"* ]]
+    [[ "${output}" == *"Non-agentic rebase of PR #5 in org/repo had conflicts — handing off to agent"* ]]
+    [ -f "${TEST_TMP}/rebase_log" ]
+    [ -f "${TEST_TMP}/claude_log" ]
+}
+
+@test "main still leaves a handed-off CLEAN PR that only waits on human review alone, with no rebase and no agent (#1889)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '%s\n' '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","autoMergeRequest":{"enabledAt":"now"}}'; }
+    local fp_case
+    for fp_case in changed unchanged; do
+        rm -f "${TEST_TMP}/rebase_log" "${TEST_TMP}/claude_log" "${TEST_TMP}/waiting_log"
         if [ "${fp_case}" = "changed" ]; then
             fingerprint_pr_json() { printf 'fp-new\n'; }
         else
@@ -1549,16 +1609,16 @@ cat "'"${TEST_TMP}"'/behind"'
         load_pr_fingerprint() { printf 'fp-old\n'; }
         try_nonagentic_rebase() { printf 'rebased\n' >> "${TEST_TMP}/rebase_log"; return 0; }
         invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
-        notify_discord_pr_needs_approval() { printf 'needs approval %s\n' "$1" >> "${TEST_TMP}/approval_log"; }
+        notify_discord_pr_waiting() { printf '%s %s\n' "$1" "$4" >> "${TEST_TMP}/waiting_log"; }
         save_pr_invocation_counts 5 3 2
 
         run main
         [ "${status}" -eq 0 ]
-        [[ "${output}" == *"PR #5 in org/repo: settled (ready to merge, nothing failed/pending; BEHIND, left for auto-merge or a human to update) — no agent needed"* ]]
+        [[ "${output}" == *"PR #5 in org/repo: settled (ready to merge, nothing failed/pending) — no agent needed"* ]]
         [[ "${output}" != *"re-running"* ]]
         [ ! -f "${TEST_TMP}/rebase_log" ]
         [ ! -f "${TEST_TMP}/claude_log" ]
-        grep -qx 'needs approval 5' "${TEST_TMP}/approval_log"
+        grep -qx '5 Waiting on human review' "${TEST_TMP}/waiting_log"
         load_pr_invocation_counts 5
         [ "${PR_INVOCATION_IDLE}" -eq 2 ]
         [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
