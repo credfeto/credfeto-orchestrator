@@ -22,6 +22,13 @@ labels_file_lines() {
     ' "${LABELS_FILE}"
 }
 
+# The labels every repository shares. The label sync also writes one label per .NET project in
+# this repository ("Changes in <Project> project"); those belong to this repository alone, so they
+# are not standard labels and cfwf does not copy them.
+standard_label_lines() {
+    labels_file_lines | grep -v '|Changes in [^|]* project$'
+}
+
 # cfwf's copy, run in a subshell so sourcing cfwf cannot replace this shell's own functions.
 cfwf_lines() {
     (
@@ -41,13 +48,21 @@ cfwf_lines() {
     [ "${output}" -eq 0 ]
 }
 
-@test "cfwf's standard labels are exactly the labels in .github/labels.yml, with the same colour and description" {
-    run diff <(labels_file_lines) <(cfwf_lines)
+@test "cfwf's standard labels are exactly the shared labels in .github/labels.yml, with the same colour and description" {
+    run diff <(standard_label_lines) <(cfwf_lines)
     [ "${status}" -eq 0 ] || {
         echo "cfwf's STANDARD_LABELS and .github/labels.yml differ (< labels.yml, > cfwf):" >&2
         echo "${output}" >&2
         return 1
     }
+}
+
+@test "the per-project labels the label sync writes are left out of the standard labels" {
+    local _project_labels
+    _project_labels="$(labels_file_lines | grep -c '|Changes in [^|]* project$' || true)"
+    [ "$(standard_label_lines | wc -l)" -eq "$(($(labels_file_lines | wc -l) - _project_labels))" ]
+    run grep -c 'Changes in [^|]* project$' <(cfwf_lines)
+    [ "${output}" -eq 0 ]
 }
 
 @test "every priority label cfwf issue create accepts is a standard label" {
