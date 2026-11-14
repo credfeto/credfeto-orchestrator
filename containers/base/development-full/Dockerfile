@@ -221,7 +221,7 @@ RUN mkdir -p /home/developer/.claude/agents \
 # link step above). oneshot does not (and must not) bind-mount over these
 # paths - see containers/agent/Dockerfile.
 # managed-mcp.json pins the only MCP servers Claude Code loads and is
-# world-readable, so it holds no token. The sanity check requires the four the
+# world-readable, so it holds no token. The sanity check requires the five the
 # image depends on: cfwf and kb, whose Authorization headers come at connect
 # time from their own root-owned headersHelpers (mcp/cfwf-mcp-headers and
 # mcp/kb-mcp-headers, which ask the token broker below for the header while it
@@ -233,7 +233,11 @@ RUN mkdir -p /home/developer/.claude/agents \
 # below keeps its root at the repo mount wherever Claude Code is started.
 # BUILD_MCP_TOOL=global tells the wrapper to skip its git and dotnet tool list
 # probes and run the global tool directly, because in the image the tool, HOME
-# and the root are all fixed. codegraph, the code knowledge graph server
+# and the root are all fixed. changelog, the CHANGELOG.md server installed by
+# development-credfeto-tools, is started the same way through the root-owned
+# mcp/changelog-mcp wrapper, with CHANGELOG_MCP_REPO_ROOT and
+# CHANGELOG_MCP_TOOL=global in place of BUILD_MCP_REPO_ROOT and BUILD_MCP_TOOL.
+# codegraph, the code knowledge graph server
 # installed by development-tools (this image's base chain), is pinned to the
 # exact entry `codegraph install` writes for Claude Code, so a host's own entry
 # merges as the same server in install-claude-hooks rather than colliding.
@@ -248,6 +252,9 @@ COPY --chown=root:root --chmod=0755 claude-mcp/kb-mcp-headers /etc/claude-code/m
 COPY --chown=root:root --chmod=0755 claude-mcp/build-dotnet-mcp /etc/claude-code/mcp/build-dotnet-mcp
 ENV BUILD_MCP_REPO_ROOT=/workspace/repo
 ENV BUILD_MCP_TOOL=global
+COPY --chown=root:root --chmod=0755 claude-mcp/changelog-mcp /etc/claude-code/mcp/changelog-mcp
+ENV CHANGELOG_MCP_REPO_ROOT=/workspace/repo
+ENV CHANGELOG_MCP_TOOL=global
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-policy /etc/claude-code/hooks/enforce-git-policy
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-identity /etc/claude-code/hooks/enforce-git-identity
 COPY --chown=root:root --chmod=0755 claude-hooks/reject-obfuscated-commands /etc/claude-code/hooks/reject-obfuscated-commands
@@ -489,6 +496,12 @@ RUN set -e; \
         || { echo "FATAL sanity: BUILD_MCP_TOOL must be global, so the build-dotnet MCP wrapper runs the image's global tool without probing" >&2; exit 1; }; \
     [ -x /home/developer/.dotnet/tools/credfeto-build-dotnet ] \
         || { echo "FATAL sanity: /home/developer/.dotnet/tools/credfeto-build-dotnet, the build-dotnet MCP server, is missing or not executable" >&2; exit 1; }; \
+    jq -e '.mcpServers.changelog == {"type": "stdio", "command": "/etc/claude-code/mcp/changelog-mcp"}' /etc/claude-code/managed-mcp.json >/dev/null \
+        || { echo "FATAL sanity: managed-mcp.json must hold the required changelog server, and as the file is world-readable it must be exactly the stdio server started by /etc/claude-code/mcp/changelog-mcp, with no env" >&2; exit 1; }; \
+    [ "${CHANGELOG_MCP_REPO_ROOT}" = "/workspace/repo" ] \
+        || { echo "FATAL sanity: CHANGELOG_MCP_REPO_ROOT must be /workspace/repo, the repo mount the changelog MCP server works on" >&2; exit 1; }; \
+    [ "${CHANGELOG_MCP_TOOL}" = "global" ] \
+        || { echo "FATAL sanity: CHANGELOG_MCP_TOOL must be global, so the changelog MCP wrapper runs the image's global tool without probing" >&2; exit 1; }; \
     jq -e '.mcpServers.codegraph == {"type": "stdio", "command": "codegraph", "args": ["serve", "--mcp"], "alwaysLoad": true}' /etc/claude-code/managed-mcp.json >/dev/null \
         || { echo "FATAL sanity: managed-mcp.json must hold the required codegraph server, exactly the stdio codegraph serve --mcp entry that codegraph install writes for Claude Code, carrying no env" >&2; exit 1; }; \
     ! grep -qi 'authorization' /etc/claude-code/managed-mcp.json \
@@ -499,10 +512,14 @@ RUN set -e; \
         || { echo "FATAL sanity: kb-mcp-headers missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
     [ "$(stat -c '%U:%G %a' /etc/claude-code/mcp/build-dotnet-mcp)" = "root:root 755" ] \
         || { echo "FATAL sanity: build-dotnet-mcp missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
+    [ "$(stat -c '%U:%G %a' /etc/claude-code/mcp/changelog-mcp)" = "root:root 755" ] \
+        || { echo "FATAL sanity: changelog-mcp missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
     jq -e '.permissions.allow | index("mcp__cfwf__*")' /etc/claude-code/managed-settings.json >/dev/null \
         || { echo "FATAL sanity: managed-settings.json does not allow the cfwf MCP tools (mcp__cfwf__*)" >&2; exit 1; }; \
     jq -e '.permissions.allow | index("mcp__build-dotnet__*")' /etc/claude-code/managed-settings.json >/dev/null \
         || { echo "FATAL sanity: managed-settings.json does not allow the build-dotnet MCP tools (mcp__build-dotnet__*)" >&2; exit 1; }; \
+    jq -e '.permissions.allow | index("mcp__changelog__*")' /etc/claude-code/managed-settings.json >/dev/null \
+        || { echo "FATAL sanity: managed-settings.json does not allow the changelog MCP tools (mcp__changelog__*)" >&2; exit 1; }; \
     jq -e '.permissions.allow | index("mcp__kb__*")' /etc/claude-code/managed-settings.json >/dev/null \
         || { echo "FATAL sanity: managed-settings.json does not allow the kb MCP tools (mcp__kb__*)" >&2; exit 1; }; \
     jq -e '.permissions.allow | index("mcp__codegraph__*")' /etc/claude-code/managed-settings.json >/dev/null \

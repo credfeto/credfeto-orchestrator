@@ -14,6 +14,10 @@
       "type": "stdio",
       "command": "/etc/claude-code/mcp/build-dotnet-mcp"
     },
+    "changelog": {
+      "type": "stdio",
+      "command": "/etc/claude-code/mcp/changelog-mcp"
+    },
     "codegraph": {
       "type": "stdio",
       "command": "codegraph",

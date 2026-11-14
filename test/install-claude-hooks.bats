@@ -202,7 +202,7 @@ expected_mcp_names() {
         | sed '/^$/d' | LC_ALL=C sort -u | paste -sd ' ' -
 }
 
-@test "the headers helpers, the build-dotnet wrapper and managed-mcp.json are installed via sudo, 0755 and 0444" {
+@test "the headers helpers, the build-dotnet and changelog wrappers and managed-mcp.json are installed via sudo, 0755 and 0444" {
     allow_sudo
     main
 
@@ -214,6 +214,9 @@ expected_mcp_names() {
     diff "${SOURCE_BUILD_DOTNET_MCP}" "${CLAUDE_MANAGED_DIR}/mcp/build-dotnet-mcp"
     [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/mcp/build-dotnet-mcp")" = "755" ]
     grep -qxF "install -o root -g root -m 0755 ${SOURCE_BUILD_DOTNET_MCP} ${CLAUDE_MANAGED_DIR}/mcp/build-dotnet-mcp" "${SUDO_LOG}"
+    diff "${SOURCE_CHANGELOG_MCP}" "${CLAUDE_MANAGED_DIR}/mcp/changelog-mcp"
+    [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/mcp/changelog-mcp")" = "755" ]
+    grep -qxF "install -o root -g root -m 0755 ${SOURCE_CHANGELOG_MCP} ${CLAUDE_MANAGED_DIR}/mcp/changelog-mcp" "${SUDO_LOG}"
     [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "444" ]
     [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/mcp")" = "755" ]
     grep -qxF "install -o root -g root -m 0755 ${SOURCE_CFWF_MCP_HEADERS} ${CLAUDE_MANAGED_DIR}/mcp/cfwf-mcp-headers" "${SUDO_LOG}"
@@ -256,6 +259,7 @@ expected_mcp_names() {
     [ "$(jq -r '.mcpServers["tool-a"].args[0]' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "--serve" ]
     [ "$(jq -c '.mcpServers.cfwf' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "$(jq -c '.mcpServers.cfwf' "${SOURCE_MANAGED_MCP}")" ]
     [ "$(jq -c '.mcpServers["build-dotnet"]' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "$(jq -c '.mcpServers["build-dotnet"]' "${SOURCE_MANAGED_MCP}")" ]
+    [ "$(jq -c '.mcpServers.changelog' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "$(jq -c '.mcpServers.changelog' "${SOURCE_MANAGED_MCP}")" ]
 }
 
 @test "a host server at cfwf's URL is left out as a duplicate, and its removal is suggested" {
@@ -443,6 +447,15 @@ expected_mcp_names() {
     [ ! -e "${CLAUDE_MANAGED_DIR}" ]
 }
 
+@test "a host server named changelog with another definition collides with the shipped one and is fatal" {
+    allow_sudo
+    write_host_claude_json '{"mcpServers": {"changelog": {"type": "stdio", "command": "/usr/bin/other-changelog"}}}'
+    run main
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"used for two different servers"*": changelog."* ]]
+    [ ! -e "${CLAUDE_MANAGED_DIR}" ]
+}
+
 # `codegraph install` writes this exact entry into a host's ~/.claude.json, so the shipped one must
 # match it for the merge to treat the two as the same server.
 @test "a host codegraph server as codegraph install writes it is installed once, and with another definition is fatal" {
@@ -522,6 +535,15 @@ expected_mcp_names() {
     run main
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"Source build-dotnet MCP wrapper not found: ${TEST_TMP}/build-dotnet-does-not-exist"* ]]
+    [ ! -e "${CLAUDE_MANAGED_DIR}" ]
+}
+
+@test "dies when the changelog MCP wrapper is missing, before anything is installed" {
+    allow_sudo
+    SOURCE_CHANGELOG_MCP="${TEST_TMP}/changelog-does-not-exist"
+    run main
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"Source changelog MCP wrapper not found: ${TEST_TMP}/changelog-does-not-exist"* ]]
     [ ! -e "${CLAUDE_MANAGED_DIR}" ]
 }
 
@@ -719,6 +741,12 @@ kb_token_privacy_predicates() {
     [ "${output}" = '{"type":"stdio","command":"/etc/claude-code/mcp/build-dotnet-mcp"}' ]
 }
 
+@test "the shipped changelog server is the stdio server started by the root-owned wrapper, with no env" {
+    run jq -c '.mcpServers.changelog' "${SOURCE_MANAGED_MCP}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = '{"type":"stdio","command":"/etc/claude-code/mcp/changelog-mcp"}' ]
+}
+
 @test "the shipped codegraph server is the stdio codegraph serve --mcp entry codegraph install writes, with no env" {
     run jq -c '.mcpServers.codegraph' "${SOURCE_MANAGED_MCP}"
     [ "${status}" -eq 0 ]
@@ -747,6 +775,10 @@ kb_token_privacy_predicates() {
 
 @test "the managed settings allow every build-dotnet MCP tool (#1818)" {
     jq -r '.permissions.allow[]' "${SOURCE_MANAGED_SETTINGS}" | grep -qxF 'mcp__build-dotnet__*'
+}
+
+@test "the managed settings allow every changelog MCP tool" {
+    jq -r '.permissions.allow[]' "${SOURCE_MANAGED_SETTINGS}" | grep -qxF 'mcp__changelog__*'
 }
 
 @test "the managed settings allow every codegraph MCP tool and deny none of them" {
@@ -779,7 +811,18 @@ kb_token_privacy_predicates() {
     grep -qF '[ "${BUILD_MCP_TOOL}" = "global" ]' "${dockerfile}"
     grep -qF '[ -x /home/developer/.dotnet/tools/credfeto-build-dotnet ]' "${dockerfile}"
     grep -qF "jq -e '.permissions.allow | index(\"mcp__build-dotnet__*\")' /etc/claude-code/managed-settings.json" "${dockerfile}"
-    grep -qE 'for tool in .* credfeto\.build\.dotnet\.server; do' "${dockerfile}"
+    grep -qE 'for tool in .* credfeto\.build\.dotnet\.server( .*)?; do' "${dockerfile}"
+}
+
+@test "the Dockerfile sanity block pins the changelog server, its wrapper's owner and mode, its root, its tool mode and allow rule" {
+    local dockerfile="${SOURCE_DIR}/Dockerfile"
+    grep -qF "jq -e '.mcpServers.changelog == {\"type\": \"stdio\", \"command\": \"/etc/claude-code/mcp/changelog-mcp\"}' /etc/claude-code/managed-mcp.json" "${dockerfile}"
+    grep -qF "[ \"\$(stat -c '%U:%G %a' /etc/claude-code/mcp/changelog-mcp)\" = \"root:root 755\" ]" "${dockerfile}"
+    # shellcheck disable=SC2016  # the literal ${...} the sanity block's shell expands
+    grep -qF '[ "${CHANGELOG_MCP_REPO_ROOT}" = "/workspace/repo" ]' "${dockerfile}"
+    # shellcheck disable=SC2016  # the literal ${...} the sanity block's shell expands
+    grep -qF '[ "${CHANGELOG_MCP_TOOL}" = "global" ]' "${dockerfile}"
+    grep -qF "jq -e '.permissions.allow | index(\"mcp__changelog__*\")' /etc/claude-code/managed-settings.json" "${dockerfile}"
 }
 
 # Prints each jq program the Dockerfile sanity block runs against /etc/claude-code/managed-mcp.json,
@@ -797,14 +840,14 @@ run_dockerfile_mcp_checks() {
 }
 
 @test "the Dockerfile managed-mcp.json checks pass the shipped file and a copy with extra servers (#1850)" {
-    [ "$(dockerfile_mcp_programs | wc -l)" -ge 4 ]
+    [ "$(dockerfile_mcp_programs | wc -l)" -ge 5 ]
     run_dockerfile_mcp_checks "${SOURCE_MANAGED_MCP}"
 
     jq '.mcpServers += {"extra-ide": {"type": "http", "url": "http://127.0.0.1:65000/stream"}, "extra-tool": {"type": "stdio", "command": "/usr/bin/extra-tool", "env": {"MODE": "serve"}}}' "${SOURCE_MANAGED_MCP}" > "${TEST_TMP}/extra.json"
     run_dockerfile_mcp_checks "${TEST_TMP}/extra.json"
 }
 
-@test "the Dockerfile managed-mcp.json checks fail without cfwf, kb, build-dotnet or codegraph, or with any of them changed (#1850)" {
+@test "the Dockerfile managed-mcp.json checks fail without cfwf, kb, build-dotnet, changelog or codegraph, or with any of them changed (#1850)" {
     local filter
     for filter in \
         'del(.mcpServers.cfwf)' \
@@ -819,6 +862,9 @@ run_dockerfile_mcp_checks() {
         'del(.mcpServers["build-dotnet"])' \
         '.mcpServers["build-dotnet"].env.EXTRA = "x"' \
         '.mcpServers["build-dotnet"].command = "/home/developer/.dotnet/tools/credfeto-build-dotnet"' \
+        'del(.mcpServers.changelog)' \
+        '.mcpServers.changelog.env.EXTRA = "x"' \
+        '.mcpServers.changelog.command = "/home/developer/.dotnet/tools/changelog-mcp"' \
         'del(.mcpServers.codegraph)' \
         '.mcpServers.codegraph.type = "http"' \
         '.mcpServers.codegraph.command = "/usr/bin/other-codegraph"' \
@@ -838,12 +884,25 @@ run_dockerfile_mcp_checks() {
     # shellcheck disable=SC2016  # the literal ${...} of the Dockerfile's ARG substitution
     grep -qxF 'RUN su developer -c ": ${CREDFETO_FUNFAIR_TOOLS_CACHE_BUST}; dotnet tool install -g Credfeto.Build.Dotnet.Server"' "${dockerfile}"
     # Both the installed-versions report and the sanity check list the package.
-    [ "$(grep -cE 'for tool in .* credfeto\.build\.dotnet\.server; do' "${dockerfile}")" -eq 2 ]
+    [ "$(grep -cE 'for tool in .* credfeto\.build\.dotnet\.server( .*)?; do' "${dockerfile}")" -eq 2 ]
     grep -qF '[ -x /home/developer/.dotnet/tools/credfeto-build-dotnet ]' "${dockerfile}"
     grep -qF 'su developer -c "command -v credfeto-build-dotnet >/dev/null 2>&1"' "${dockerfile}"
     # The cache bust hashes the package's latest version, so a new release rebuilds the layer.
     grep -qxF '            Credfeto.Build.Dotnet.Server' "${REPO_ROOT}/.github/workflows/build-development-credfeto-tools.yml"
     grep -qxF '            Credfeto.Build.Dotnet.Server' "${REPO_ROOT}/.github/workflows/check-credfeto-tools-updates.yml"
+}
+
+@test "development-credfeto-tools installs Credfeto.ChangeLog.Mcp behind the cache bust and its sanity check requires it" {
+    local dockerfile="${REPO_ROOT}/containers/base/development-credfeto-tools/Dockerfile"
+    # shellcheck disable=SC2016  # the literal ${...} of the Dockerfile's ARG substitution
+    grep -qxF 'RUN su developer -c ": ${CREDFETO_FUNFAIR_TOOLS_CACHE_BUST}; dotnet tool install -g Credfeto.ChangeLog.Mcp"' "${dockerfile}"
+    # Both the installed-versions report and the sanity check list the package.
+    [ "$(grep -cE 'for tool in .* credfeto\.changelog\.mcp( .*)?; do' "${dockerfile}")" -eq 2 ]
+    grep -qF '[ -x /home/developer/.dotnet/tools/changelog-mcp ]' "${dockerfile}"
+    grep -qF 'su developer -c "command -v changelog-mcp >/dev/null 2>&1"' "${dockerfile}"
+    # The cache bust hashes the package's latest version, so a new release rebuilds the layer.
+    grep -qxF '            Credfeto.ChangeLog.Mcp' "${REPO_ROOT}/.github/workflows/build-development-credfeto-tools.yml"
+    grep -qxF '            Credfeto.ChangeLog.Mcp' "${REPO_ROOT}/.github/workflows/check-credfeto-tools-updates.yml"
 }
 
 @test "the Dockerfile sanity block pins the cfwf server, its helper's owner and mode, and its allow rule" {
@@ -869,7 +928,7 @@ run_dockerfile_mcp_checks() {
     grep -qE 'for cmd in git gh ' "${dockerfile}"
 }
 
-@test "the Dockerfile copies managed-mcp.json, the headers helpers and the build-dotnet wrapper into /etc/claude-code, and sets the wrapper's root and tool mode" {
+@test "the Dockerfile copies managed-mcp.json, the headers helpers and the build-dotnet and changelog wrappers into /etc/claude-code, and sets each wrapper's root and tool mode" {
     local dockerfile="${SOURCE_DIR}/Dockerfile"
     grep -qxF 'COPY --chown=root:root --chmod=0444 claude-managed-mcp.json /etc/claude-code/managed-mcp.json' "${dockerfile}"
     grep -qxF 'COPY --chown=root:root --chmod=0755 claude-mcp/cfwf-mcp-headers /etc/claude-code/mcp/cfwf-mcp-headers' "${dockerfile}"
@@ -877,9 +936,13 @@ run_dockerfile_mcp_checks() {
     grep -qxF 'COPY --chown=root:root --chmod=0755 claude-mcp/build-dotnet-mcp /etc/claude-code/mcp/build-dotnet-mcp' "${dockerfile}"
     grep -qxF 'ENV BUILD_MCP_REPO_ROOT=/workspace/repo' "${dockerfile}"
     grep -qxF 'ENV BUILD_MCP_TOOL=global' "${dockerfile}"
+    grep -qxF 'COPY --chown=root:root --chmod=0755 claude-mcp/changelog-mcp /etc/claude-code/mcp/changelog-mcp' "${dockerfile}"
+    grep -qxF 'ENV CHANGELOG_MCP_REPO_ROOT=/workspace/repo' "${dockerfile}"
+    grep -qxF 'ENV CHANGELOG_MCP_TOOL=global' "${dockerfile}"
     [ -x "${SOURCE_CFWF_MCP_HEADERS}" ]
     [ -x "${SOURCE_KB_MCP_HEADERS}" ]
     [ -x "${SOURCE_BUILD_DOTNET_MCP}" ]
+    [ -x "${SOURCE_CHANGELOG_MCP}" ]
 }
 
 # --- legacy ~/.claude/hooks symlinks -------------------------------------------
