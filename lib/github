@@ -186,6 +186,39 @@ fetch_pr_fields_json() {
     return 1
 }
 
+# Makes one GitHub read through Credfeto.Orchestrator.Cmd (ORCHESTRATOR_DOTNET_GITHUB=1, #252), which
+# asks the cfwf MCP server at ORCHESTRATOR_CFWF_MCP_URL with the GitHub token oneshot exported from
+# .env (GH_ENTERPRISE_TOKEN, then GH_TOKEN), as the agent's cfwf-mcp-headers helper does. Arguments:
+# the read's name and options. Prints what the gh call it replaces prints
+# (test/fixtures/github-parity.json holds the cases both are tested against); the tool prints
+# nothing unless the read succeeded, and its non-zero exit status is returned when it fails.
+_github_read_with_orchestrator_cmd() {
+    ORCHESTRATOR_CFWF_MCP_URL="${ORCHESTRATOR_CFWF_MCP_URL}" "${ORCHESTRATOR_CMD}" github "$@" < /dev/null
+}
+
+# Prints the numbers of the open PRs in repo_full whose head branch is exactly branch, a fork's
+# branch of that name included, one per line, newest first; prints nothing when there is none.
+# Returns non-zero when the list cannot be read.
+fetch_open_pr_numbers_on_head() {
+    local repo_full="$1" branch="$2"
+    if [ "${ORCHESTRATOR_DOTNET_GITHUB}" = 1 ]; then
+        _github_read_with_orchestrator_cmd open-prs --repo "${repo_full}" --head "${branch}"
+        return
+    fi
+    gh pr list --repo "${repo_full}" --head "${branch}" --state open --json number --jq '.[].number' 2> /dev/null
+}
+
+# Prints how many open PRs in repo_full have exactly branch as their head branch, counted as
+# fetch_open_pr_numbers_on_head lists them. Returns non-zero when the list cannot be read.
+fetch_open_pr_count_on_head() {
+    local repo_full="$1" branch="$2"
+    if [ "${ORCHESTRATOR_DOTNET_GITHUB}" = 1 ]; then
+        _github_read_with_orchestrator_cmd open-pr-count --repo "${repo_full}" --head "${branch}"
+        return
+    fi
+    gh pr list --repo "${repo_full}" --head "${branch}" --state open --json number --jq 'length' 2>/dev/null
+}
+
 # Prints a JSON array of the names of the checks on the PR's head commit that GitHub reports as
 # required for merging this PR, read from the same GraphQL field `gh pr checks --required` filters
 # on (isRequired(pullRequestNumber:)). `gh pr view --json statusCheckRollup` never carries
@@ -222,6 +255,10 @@ fetch_pr_required_check_names() {
 fetch_branch_requires_status_checks() {
     local base_branch="$1" repo_full="${2:-${REPO_FULL}}" encoded_branch protection rules
     [ -n "${base_branch}" ] || return 1
+    if [ "${ORCHESTRATOR_DOTNET_GITHUB}" = 1 ]; then
+        _github_read_with_orchestrator_cmd branch-requires-status-checks --repo "${repo_full}" --branch "${base_branch}"
+        return
+    fi
     # A branch name may contain "/", "#" or "%", so it is encoded as a single path segment.
     encoded_branch=$(printf '%s' "${base_branch}" | jq -sRr '@uri') || return 1
     protection=$(gh api "repos/${repo_full}/branches/${encoded_branch}" 2>/dev/null) || return 1
@@ -466,7 +503,7 @@ resolve_resumable_issue_branch() {
     branch=$(find_stale_issue_branch "${issue_id}") || return 1
     [ -n "${branch}" ] || return 1
 
-    open_pr_count=$(gh pr list --repo "${REPO_FULL}" --head "${branch}" --state open --json number --jq 'length' 2>/dev/null)
+    open_pr_count=$(fetch_open_pr_count_on_head "${REPO_FULL}" "${branch}")
     [[ "${open_pr_count}" =~ ^[0-9]+$ ]] || open_pr_count=1
     [ "${open_pr_count}" -eq 0 ] || return 1
 
@@ -503,7 +540,7 @@ dirty_branch_owned_by_queued_item() {
         '.[] | select(.repository == $repo) | [.itemType, (.id | tostring)] | @tsv' 2> /dev/null)
 
     [ "${#queued_prs[@]}" -gt 0 ] || return 1
-    if ! head_prs=$(gh pr list --repo "${repo}" --head "${dirty_branch}" --state open --json number --jq '.[].number' 2> /dev/null); then
+    if ! head_prs=$(fetch_open_pr_numbers_on_head "${repo}" "${dirty_branch}"); then
         warn "Could not list the open PRs on '${dirty_branch}' in ${repo} to tell whether a queued item owns it"
         return 2
     fi

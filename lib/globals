@@ -66,10 +66,16 @@ FINGERPRINT_SCHEMA_VERSION=2
 # ORCHESTRATOR_CMD is the tool to run, and each ORCHESTRATOR_DOTNET_<AREA>=1 hands that area to it.
 # Every area is off unless set to exactly 1 in the environment, so nothing changes until an operator
 # opts in. ORCHESTRATOR_DOTNET_FINGERPRINTS: fingerprint_pr_json / fingerprint_issue_json.
+# ORCHESTRATOR_DOTNET_GITHUB: the lib/github reads the cfwf MCP server already offers, which the tool
+# makes through that server at ORCHESTRATOR_CFWF_MCP_URL (the agent's cfwf server).
 # shellcheck disable=SC2034  # read by lib/fingerprints after sourcing
 ORCHESTRATOR_CMD="${ORCHESTRATOR_CMD:-credfeto-orchestrator}"
 # shellcheck disable=SC2034  # read by lib/fingerprints after sourcing
 ORCHESTRATOR_DOTNET_FINGERPRINTS="${ORCHESTRATOR_DOTNET_FINGERPRINTS:-0}"
+# shellcheck disable=SC2034  # read by lib/github after sourcing
+ORCHESTRATOR_DOTNET_GITHUB="${ORCHESTRATOR_DOTNET_GITHUB:-0}"
+# shellcheck disable=SC2034  # read by lib/github after sourcing
+ORCHESTRATOR_CFWF_MCP_URL="${ORCHESTRATOR_CFWF_MCP_URL:-https://workflow-mcp.markridgwell.com/mcp}"
 
 # Conservative pre-send guard against grossly oversized prompts.
 # The launch prompt is deliberately tiny ("Work on <item> in <repo>") — everything of

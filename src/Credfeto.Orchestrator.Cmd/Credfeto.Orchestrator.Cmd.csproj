@@ -91,6 +91,7 @@
   <ItemGroup>
     <ProjectReference Include="../Credfeto.Orchestrator.Commands/Credfeto.Orchestrator.Commands.csproj" />
     <ProjectReference Include="../Credfeto.Orchestrator.Fingerprints/Credfeto.Orchestrator.Fingerprints.csproj" />
+    <ProjectReference Include="../Credfeto.Orchestrator.GitHub/Credfeto.Orchestrator.GitHub.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="AsyncFixer" Version="2.1.0" PrivateAssets="All" ExcludeAssets="runtime" />
