@@ -782,11 +782,13 @@ pr_within_idle_budget() {
 # Returns 0 (true) when oneshot's settled check (pr_json_is_terminal) may be applied to a PR in merge
 # state $2 (#1654). A DIRTY PR never: its conflicts need the non-agentic rebase, or an agent. A
 # BEHIND PR only when GitHub reports the review decision REVIEW_REQUIRED (pr_json_needs_review_approval):
-# a PR that is handed off and waits on nothing but a human review gains nothing from a rebase or an
-# agent session, and auto-merge or a human updates it. Without that, a push to the base left every
-# handed-off PR in a repository BEHIND and each one got a session on every tick. Once it is
-# approved (or has no review decision at all) a BEHIND PR is not settled, so the non-agentic rebase
-# brings it up to date for auto-merge, as before. Any other merge state may be settled.
+# a PR that is handed off and waits on nothing but a human review gains nothing from an agent
+# session. Without that, a push to the base left every handed-off PR in a repository BEHIND and
+# each one got a session on every tick. A settled BEHIND PR still gets oneshot's non-agentic
+# rebase (#1889), since a base that requires up-to-date branches never merges it otherwise; only
+# the agent session is skipped, unless that rebase conflicts. Once it has an approving review (or
+# has no review decision at all) a BEHIND PR is not settled and takes the same rebase. Any other
+# merge state may be settled.
 pr_merge_state_allows_settled() {
     local pr_json="$1" merge_state="$2"
     case "${merge_state}" in

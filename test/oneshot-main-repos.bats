@@ -976,30 +976,94 @@ main_dependency_flag() {
     [ -f "${_invoke_log}" ]
 }
 
-@test "main treats a handed-off BEHIND pivot PR that only waits on human review as settled, with no rebase and no agent (#1654)" {
+@test "main rebases a handed-off BEHIND pivot PR that only waits on human review non-agentically, with no agent session (#1889)" {
     setup_main_mocks
     fetch_all_priorities() {
         printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
     }
     find_open_nonblocked_pr_for_repo() { printf '99\n'; }
     fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
-    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"fix/x","comments":[],"reviews":[],"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"mergeStateStatus":"BEHIND","autoMergeRequest":{"enabledAt":"now"}}\n'; }
+    fetch_pr_json()             { printf '%s\n' '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"fix/x","comments":[],"reviews":[],"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"mergeStateStatus":"BEHIND","autoMergeRequest":{"enabledAt":"now"}}'; }
     pr_json_has_blocked_label() { return 1; }
     fingerprint_pr_json()       { printf 'fp-same\n'; }
     load_pr_fingerprint()       { printf 'fp-same\n'; }
     fingerprint_issue_json()    { printf 'issue-fp-same\n'; }
     load_issue_fingerprint()    { printf 'issue-fp-same\n'; }
-    try_nonagentic_rebase()     { printf 'rebased\n' >> "${TEST_TMP}/rebase_log"; return 0; }
+    notify_discord_pr_waiting() { printf '%s %s\n' "$1" "$4" >> "${TEST_TMP}/waiting_log"; }
     save_pr_invocation_counts 99 2 2
     local _invoke_log="${TEST_TMP}/invoke_log"
     invoke_claude() { printf 'invoked\n' >> "${_invoke_log}"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+    try_nonagentic_rebase()     { printf 'rebased %s\n' "$1" >> "${TEST_TMP}/rebase_log"; return 0; }
 
     run main
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"PR #99 in org/repo: settled (ready to merge, nothing failed/pending; BEHIND, left for auto-merge or a human to update) — no agent needed"* ]]
+    [[ "${output}" == *"PR #99 in org/repo: settled (ready to merge, nothing failed/pending) but BEHIND — trying the non-agentic rebase"* ]]
+    [[ "${output}" != *"no agent needed"* ]]
+    [[ "${output}" == *"PR #99 in org/repo unchanged but BEHIND - re-running (idle budget 2/${MAX_PR_IDLE_INVOCATIONS})"* ]]
+    [[ "${output}" == *"PR #99 in org/repo rebased non-agentically — idle budget reset"* ]]
+    grep -qx 'rebased fix/x' "${TEST_TMP}/rebase_log"
+    grep -qx '99 Waiting on human review' "${TEST_TMP}/waiting_log"
+    [ ! -f "${_invoke_log}" ]
+    load_pr_invocation_counts 99
+    [ "${PR_INVOCATION_IDLE}" -eq 0 ]
+    [ "${PR_INVOCATION_TOTAL}" -eq 2 ]
+}
+
+@test "main hands a handed-off BEHIND pivot PR to the agent when its non-agentic rebase conflicts (#1889)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    fetch_pr_json()             { printf '%s\n' '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"fix/x","comments":[],"reviews":[],"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"mergeStateStatus":"BEHIND","autoMergeRequest":{"enabledAt":"now"}}'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    fingerprint_issue_json()    { printf 'issue-fp-same\n'; }
+    load_issue_fingerprint()    { printf 'issue-fp-same\n'; }
+    notify_discord_pr_waiting() { printf '%s %s\n' "$1" "$4" >> "${TEST_TMP}/waiting_log"; }
+    save_pr_invocation_counts 99 2 2
+    local _invoke_log="${TEST_TMP}/invoke_log"
+    invoke_claude() { printf 'invoked\n' >> "${_invoke_log}"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+    try_nonagentic_rebase()     { printf 'rebased\n' >> "${TEST_TMP}/rebase_log"; return 1; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 in org/repo: settled (ready to merge, nothing failed/pending) but BEHIND — trying the non-agentic rebase"* ]]
+    [[ "${output}" == *"Non-agentic rebase of PR #99 in org/repo had conflicts — handing off to agent"* ]]
+    [ -f "${TEST_TMP}/rebase_log" ]
+    [ -f "${_invoke_log}" ]
+}
+
+@test "main still leaves a handed-off CLEAN pivot PR that only waits on human review alone, with no rebase and no agent (#1889)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    fetch_pr_json()             { printf '%s\n' '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"fix/x","comments":[],"reviews":[],"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"mergeStateStatus":"CLEAN","autoMergeRequest":{"enabledAt":"now"}}'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    fingerprint_issue_json()    { printf 'issue-fp-same\n'; }
+    load_issue_fingerprint()    { printf 'issue-fp-same\n'; }
+    notify_discord_pr_waiting() { printf '%s %s\n' "$1" "$4" >> "${TEST_TMP}/waiting_log"; }
+    save_pr_invocation_counts 99 2 2
+    local _invoke_log="${TEST_TMP}/invoke_log"
+    invoke_claude() { printf 'invoked\n' >> "${_invoke_log}"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+    try_nonagentic_rebase()     { printf 'rebased\n' >> "${TEST_TMP}/rebase_log"; return 0; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 in org/repo: settled (ready to merge, nothing failed/pending) — no agent needed"* ]]
     [[ "${output}" != *"re-running"* ]]
     [ ! -f "${TEST_TMP}/rebase_log" ]
     [ ! -f "${_invoke_log}" ]
+    grep -qx '99 Waiting on human review' "${TEST_TMP}/waiting_log"
+    load_pr_invocation_counts 99
+    [ "${PR_INVOCATION_IDLE}" -eq 2 ]
 }
 
 @test "main charges the idle budget for an unchanged DIRTY pivot PR, and blocks it with the merge-conflict reason once the budget is exhausted (#1654)" {

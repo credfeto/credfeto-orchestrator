@@ -354,7 +354,7 @@ main() {
     local has_plan_comment
     local ai_instructions container_ai_instructions prompt claude_md_content post_fp
     local post_pr_fp_ok post_issue_fp_ok post_issue_fp
-    local pr_has_unaddressed_comment review_pipeline_finished settled_note
+    local pr_has_unaddressed_comment review_pipeline_finished
     local pr_required_checks pr_base_requires_checks pr_required_checks_lookup_failed pr_next_phase pr_unaddressed_comments_text
     local ensure_repo_current_status trusted_logins item_branch item_head_sha preflight_image_sha preflight_failures
     local dirty_owner dirty_owner_rc dirty_skip_reason
@@ -651,8 +651,10 @@ main() {
                 clear_pr_ci_pending_state "${open_pr}"
 
                 # A BEHIND PR is settled only when it is handed off and waits on nothing but a human review
-                # (#1654): auto-merge or a human updates it, and once it is approved the rebase below runs.
-                # A DIRTY PR never is: its conflicts need the rebase, or an agent.
+                # (#1654). Settled then means no agent session, not no rebase (#1889): it still falls through
+                # to the non-agentic rebase in the Work block, because base protection that requires an
+                # up-to-date branch would otherwise keep it from ever merging. A DIRTY PR is never settled:
+                # its conflicts need the rebase, or an agent.
                 if [ "${pr_is_draft}" != "true" ] && pr_merge_state_allows_settled "${pr_json}" "${pr_merge_state}"; then
                     # Falls back to the Workflow Status board's "Human Review" substatus when
                     # auto-merge itself couldn't be armed (unsupported on this repo) - see
@@ -687,16 +689,22 @@ main() {
                             notify_discord_pr_needs_approval "${open_pr}" "${pr_json}"
                         fi
                         if [ "${pr_has_unaddressed_comment}" != "true" ]; then
-                            settled_note=""
-                            [ "${pr_merge_state}" = "BEHIND" ] && settled_note="; BEHIND, left for auto-merge or a human to update"
-                            info "PR #${open_pr} in ${item_repo}: settled (ready to merge, nothing failed/pending${settled_note}) — no agent needed"
                             # Same "waiting" notification as the direct-PR settled path above
                             # (#1375 review) — a pivoted PR going settled must be just as visible
                             # as one selected directly from the priorities feed.
-                            notify_discord_pr_waiting "${open_pr}" "${pr_json}" "${item_priority}" "Waiting on human review"
-                            count_unchanged=$((count_unchanged + 1))
-                            item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "settled (ready to merge, nothing failed/pending${settled_note}) - no agent needed")")
-                            continue
+                            if [ "${pr_merge_state}" = "BEHIND" ]; then
+                                # Settled but behind (#1889): falls through to the path every other
+                                # BEHIND PR takes (the unchanged-fingerprint idle budget below, then the
+                                # Work block's non-agentic rebase); an agent runs only if it conflicts.
+                                info "PR #${open_pr} in ${item_repo}: settled (ready to merge, nothing failed/pending) but BEHIND — trying the non-agentic rebase"
+                                notify_discord_pr_waiting "${open_pr}" "${pr_json}" "${item_priority}" "Waiting on human review"
+                            else
+                                info "PR #${open_pr} in ${item_repo}: settled (ready to merge, nothing failed/pending) — no agent needed"
+                                notify_discord_pr_waiting "${open_pr}" "${pr_json}" "${item_priority}" "Waiting on human review"
+                                count_unchanged=$((count_unchanged + 1))
+                                item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "settled (ready to merge, nothing failed/pending) - no agent needed")")
+                                continue
+                            fi
                         fi
                     fi
                 fi
@@ -1179,8 +1187,10 @@ main() {
             clear_pr_ci_pending_state "${item_id}"
 
             # A BEHIND PR is settled only when it is handed off and waits on nothing but a human review
-            # (#1654): auto-merge or a human updates it, and once it is approved the rebase below runs.
-            # A DIRTY PR never is: its conflicts need the rebase, or an agent.
+            # (#1654). Settled then means no agent session, not no rebase (#1889): it still falls through
+            # to the non-agentic rebase in the Work block, because base protection that requires an
+            # up-to-date branch would otherwise keep it from ever merging. A DIRTY PR is never settled:
+            # its conflicts need the rebase, or an agent.
             if [ "${pr_is_draft}" != "true" ] && pr_merge_state_allows_settled "${pr_json}" "${pr_merge_state}"; then
                 # Falls back to the Workflow Status board's "Human Review" substatus when
                 # auto-merge itself couldn't be armed (unsupported on this repo) - see
@@ -1215,19 +1225,25 @@ main() {
                         notify_discord_pr_needs_approval "${item_id}" "${pr_json}"
                     fi
                     if [ "${pr_has_unaddressed_comment}" != "true" ]; then
-                        settled_note=""
-                        [ "${pr_merge_state}" = "BEHIND" ] && settled_note="; BEHIND, left for auto-merge or a human to update"
-                        info "PR #${item_id} in ${item_repo}: settled (ready to merge, nothing failed/pending${settled_note}) — no agent needed"
                         # Distinct from notify_discord_pr_needs_approval above (#1375): that alert
                         # is a dedicated, hourly-deduped nudge specifically for the review-required
                         # case; this is the general per-item status update the rest of this file
                         # sends, so a human sees this item's Progress go from "Running" to "Waiting
                         # on human review" the same way they'd see it go to "Waiting on CI" — not a
                         # substitute for the dedicated alert, both can and do fire together.
-                        notify_discord_pr_waiting "${item_id}" "${pr_json}" "${item_priority}" "Waiting on human review"
-                        count_unchanged=$((count_unchanged + 1))
-                        item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "settled (ready to merge, nothing failed/pending${settled_note}) - no agent needed")")
-                        continue
+                        if [ "${pr_merge_state}" = "BEHIND" ]; then
+                            # Settled but behind (#1889): falls through to the path every other
+                            # BEHIND PR takes (the unchanged-fingerprint idle budget below, then the
+                            # Work block's non-agentic rebase); an agent runs only if it conflicts.
+                            info "PR #${item_id} in ${item_repo}: settled (ready to merge, nothing failed/pending) but BEHIND — trying the non-agentic rebase"
+                            notify_discord_pr_waiting "${item_id}" "${pr_json}" "${item_priority}" "Waiting on human review"
+                        else
+                            info "PR #${item_id} in ${item_repo}: settled (ready to merge, nothing failed/pending) — no agent needed"
+                            notify_discord_pr_waiting "${item_id}" "${pr_json}" "${item_priority}" "Waiting on human review"
+                            count_unchanged=$((count_unchanged + 1))
+                            item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "settled (ready to merge, nothing failed/pending) - no agent needed")")
+                            continue
+                        fi
                     fi
                 fi
             fi
