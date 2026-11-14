@@ -1,0 +1,26 @@
+<Solution>
+  <Folder Name="/Config/">
+    <File Path="../CHANGELOG.md" />
+    <File Path="../README.md" />
+    <File Path="../.editorconfig" />
+    <File Path="../.globalconfig" />
+    <File Path="global.json" />
+  </Folder>
+  <Folder Name="/Cmd/">
+    <Project Path="Credfeto.Orchestrator.Cmd/Credfeto.Orchestrator.Cmd.csproj" />
+    <Project Path="Credfeto.Orchestrator.Commands.Tests/Credfeto.Orchestrator.Commands.Tests.csproj" />
+    <Project Path="Credfeto.Orchestrator.Commands/Credfeto.Orchestrator.Commands.csproj" />
+  </Folder>
+  <Folder Name="/Configuration/">
+    <Project Path="Credfeto.Orchestrator.Config.Tests/Credfeto.Orchestrator.Config.Tests.csproj" />
+    <Project Path="Credfeto.Orchestrator.Config/Credfeto.Orchestrator.Config.csproj" />
+  </Folder>
+  <Folder Name="/Jq/">
+    <Project Path="Credfeto.Orchestrator.Jq.Tests/Credfeto.Orchestrator.Jq.Tests.csproj" />
+    <Project Path="Credfeto.Orchestrator.Jq/Credfeto.Orchestrator.Jq.csproj" />
+  </Folder>
+  <Folder Name="/Fingerprints/">
+    <Project Path="Credfeto.Orchestrator.Fingerprints.Tests/Credfeto.Orchestrator.Fingerprints.Tests.csproj" />
+    <Project Path="Credfeto.Orchestrator.Fingerprints/Credfeto.Orchestrator.Fingerprints.csproj" />
+  </Folder>
+</Solution>
