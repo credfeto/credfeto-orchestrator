@@ -123,8 +123,10 @@ time and money with nothing to show for it. Two independent budgets catch this:
   session that pushes a rebase is progress, and one that leaves the conflicts in place is not, so a
   PR whose conflicts the automation can't resolve is Blocked with that reason instead of being
   re-run on every tick. A PR that is already handed off (auto-merge on, nothing failed or pending)
-  and only waits for a human review is left alone even when it is behind its base: auto-merge or a
-  human brings it up to date, and once it is approved the orchestrator rebases it as before.
+  and only waits for a human review gets no agent session. When it is behind its base, the
+  orchestrator still rebases it without an agent, so auto-merge can merge it as soon as it has an
+  approving review, even where the base requires branches to be up to date; only a rebase that
+  conflicts is handed to an agent.
 
 Both caps reset automatically once a human clears the `Blocked` label on an item that was capped
 — but *only* if it was actually blocked *because* it was capped; a PR blocked for an unrelated
