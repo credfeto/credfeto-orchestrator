@@ -50,6 +50,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - The default `CLAUDE_CODE_AUTO_COMPACT_WINDOW` is now 160000 (was 100000). A session starts with about 60k tokens of fixed context, so at 100k it had about 7k tokens of working room before auto-compaction, and sessions compacted within a few turns and could end with "Autocompact is thrashing". The environment override is unchanged (#1866)
 - The enforce-git-dash-c hook and its bats test are renamed to enforce-git-policy, with all references updated, so the name reflects everything the hook enforces (#1678)
 - SDK - Updated DotNet SDK to 11.0.100
+- build-dotnet MCP docs: the build-dotnet-mcp wrapper comments, development-full README, Claude hooks guide and local instructions now describe the current server: a set but relative or blank BUILD_MCP_REPO_ROOT or BUILD_MCP_LOG_DIR stops it at startup, job logs default to the per-user state folder (in the container too, not the temp scratch mount), and its own git-root fallback does not replace the wrapper's root lookup (#1956)
 ### Deprecated
 ### Removed
 - The agent images no longer install PowerShell or the PSScriptAnalyzer module, now that the global pre-commit has dropped its PSScriptAnalyzer hook: the development-dotnet-tools PowerShell install and its version pin, the module install, their sanity and installed-versions checks, the pwsh and run-psscriptanalyzer checks in development-full and the agent image, and the run-psscriptanalyzer agent allow rules are gone (#1925)
