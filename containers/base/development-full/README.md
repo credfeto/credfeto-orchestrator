@@ -200,12 +200,18 @@ send the token elsewhere or print it. See
 started by the root-owned wrapper `/etc/claude-code/mcp/build-dotnet-mcp`, with no `env`, and
 `mcp__build-dotnet__*` in `permissions.allow` allows all of its tools. It is registered for every session,
 whatever the repository's language. The wrapper keeps `BUILD_MCP_REPO_ROOT`, which the image sets to
-`/workspace/repo` as an `ENV`, or otherwise resolves it from the directory Claude Code was started in, and
-fails rather than pass the server a root that is not an absolute path, or run with a `HOME` that is not one. It
-keeps a preset `BUILD_MCP_LOG_DIR`; in this image (`BUILD_MCP_TOOL=global`) it otherwise leaves it unset, so
-the server logs under `TMPDIR`, the `/workspace/tmp` scratch mount, while on a host it points it at the
-per-user `~/.local/state/credfeto-build-mcp` (or under an absolute `XDG_STATE_HOME`), so one user's logs
-never lock others out of a shared `/tmp`. It
+`/workspace/repo` as an `ENV`, or otherwise resolves it from the directory Claude Code was started in (the
+git top level of `CLAUDE_PROJECT_DIR`, or of the start directory, or that directory itself outside a
+repository). The server has a git-root fallback of its own, but the wrapper keeps this lookup because it
+starts the server from `~`, so the server would look at `~` rather than the project. The wrapper fails
+rather than pass the server a root that is not an absolute path, or run with a `HOME` that is not one; the
+server itself also stops at startup, with a message on stderr, when `BUILD_MCP_REPO_ROOT` or
+`BUILD_MCP_LOG_DIR` is set but relative or blank. The wrapper keeps a preset `BUILD_MCP_LOG_DIR`; in this
+image (`BUILD_MCP_TOOL=global`) it otherwise leaves it unset, so the server writes job logs to its per-user
+default, `~/.local/state/credfeto-build-mcp/logs` (mode 0700, under `/home/developer`, not the
+`/workspace/tmp` scratch mount; `job_result` reports each job's log path). On a host it points it at the
+per-user `~/.local/state/credfeto-build-mcp` (or under an absolute `XDG_STATE_HOME`), so even a local tool
+older than that default never logs to a shared temp folder. It
 forces `DOTNET_NOLOGO=1` and `DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE=true` so neither the .NET welcome
 banner nor the workload update notice reaches the MCP stream on stdout, and
 `SuppressNETCoreSdkPreviewMessage=true` so a preview SDK's NETSDK1057 warning stays out of build output and
