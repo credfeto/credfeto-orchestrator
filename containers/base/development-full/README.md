@@ -123,9 +123,12 @@ worktree splits repo state across multiple checkouts sharing one object store, w
 a primary checkout registered as bare with no work tree of its own; it also fails closed if shfmt is
 missing or the command does not parse. `block-dotnet-tool-install` runs next, using the same shfmt-parsed
 AST to block `dotnet tool install` (local or global; `list`/`restore`/`uninstall`/`update`/`run`/... stay
-allowed) and `dotnet new tool-manifest` — this container's .NET global tools are pinned and baked into the
-image at build time, and either command would add an unpinned, unreviewed tool outside that set; it also
-fails closed if shfmt is missing or the command does not parse. `block-github-mcp-write-tools` is
+allowed), `dotnet tool exec` and `dotnet new tool-manifest` — this container's .NET global tools are pinned
+and baked into the image at build time, and each would add or run an unpinned, unreviewed tool outside that
+set. It also blocks the commands the build-dotnet MCP server runs (`dotnet build`, `test`, `restore`,
+`clean`, `cscleanup`, `buildcheck`, `format`, `reportgenerator`, `package search`, and `dotnet tool run`
+of those tools), naming the MCP tool to use, in any position in the command and behind leading options; it
+also fails closed if shfmt is missing or the command does not parse. `block-github-mcp-write-tools` is
 registered against a separate `mcp__github__.*` matcher, not the `Bash` chain above: it reads only
 `.tool_name` (there is no command string for an MCP tool call) and blocks the five GitHub MCP tools
 that write through the API directly (`create_or_update_file`, `delete_file`, `push_files`,
@@ -136,7 +139,7 @@ restricting `ssh` to a strict `user@host.lan` grammar with a usable key already 
 ssh-agent, since `claude-managed-settings.json`'s own `Bash(ssh *)` allow entry is otherwise blanket; see
 `claude-hooks.instructions.md` for the full grammar/host-allowlist rules. `enforce-background-for-long-running-commands`
 runs next, using the same shfmt-parsed AST to block `git commit`, a directly-invoked `pre-commit`,
-`pre-commit-check`, `buildtest`, `dotnet build`, `dotnet test`, `npm test`, and `bun test` unless the tool
+`pre-commit-check`, `buildtest`, `npm test`, and `bun test` unless the tool
 call sets `run_in_background: true` (a call that omits the field entirely is treated the same as `false`);
 these commands have no bounded, predictable duration, and a foreground run that outlives the tool's own timeout is killed mid-run,
 skipping the target process's own cleanup; it also fails closed if shfmt is missing or the command does

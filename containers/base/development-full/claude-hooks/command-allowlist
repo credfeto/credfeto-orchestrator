@@ -39,7 +39,6 @@ pre-commit-check                      writer
 
 # .NET
 dotnet                                writer
-buildcheck                            writer
 buildtest                             writer
 
 # Python toolchain (python3 -c inline code is still rejected by the
