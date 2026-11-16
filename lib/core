@@ -63,19 +63,42 @@ hash_sha256() {
     fi
 }
 
-# Checks that token_file exists, has safe permissions, and outputs its contents (whitespace stripped).
-# Outputs nothing and returns silently if the file is absent or has unsafe permissions.
-read_token_if_safe() {
-    local token_file="$1"
-    local perms
-    [ -f "${token_file}" ] || return
+# Outputs why an existing token file must not be used, or nothing when it is safe: a symlink is
+# refused even when its target is private, because whoever controls the link chooses what is read.
+# expected_uid is the account that must own the file.
+token_file_problem() {
+    local token_file="$1" expected_uid="$2"
+    local file_uid perms
+
+    if [ -L "${token_file}" ]; then
+        printf 'symlink'
+        return 0
+    fi
+
+    file_uid=$(stat -c '%u' "${token_file}" 2>/dev/null || stat -f '%u' "${token_file}" 2>/dev/null)
+    if [ "${file_uid}" != "${expected_uid}" ]; then
+        printf 'wrong owner: uid %s, expected uid %s' "${file_uid}" "${expected_uid}"
+        return 0
+    fi
+
     perms=$(stat -c '%a' "${token_file}" 2>/dev/null || stat -f '%Lp' "${token_file}" 2>/dev/null)
     case "${perms}" in
         600|400) ;;
-        *) warn "Token file ${token_file} has permissions ${perms} — expected 600; skipping"
-           return
-           ;;
+        *) printf 'wrong mode: permissions %s' "${perms}" ;;
     esac
+}
+
+# Checks that token_file exists and is safe (see token_file_problem), and outputs its contents
+# (whitespace stripped). Outputs nothing if the file is absent or unsafe.
+read_token_if_safe() {
+    local token_file="$1"
+    local problem
+    [ -f "${token_file}" ] || return
+    problem=$(token_file_problem "${token_file}" "${EUID}")
+    if [ -n "${problem}" ]; then
+        warn "Token file ${token_file} is unsafe (${problem}) — expected a regular file you own with permissions 600; skipping"
+        return
+    fi
     tr -d '[:space:]' < "${token_file}"
 }
 
@@ -250,13 +273,12 @@ validate_config() {
             printf '\n✗ %s\n' "${token_file} is missing — create it with the Claude OAuth token (chmod 600)" >&2
             errors=$((errors + 1))
         else
-            local perms
-            perms=$(stat -c '%a' "${token_file}" 2>/dev/null)
-            case "${perms}" in
-                600|400) ;;
-                *) printf '\n✗ %s\n' "${token_file} has permissions ${perms} — must be 600 (run: chmod 600 ${token_file})" >&2
-                   errors=$((errors + 1)) ;;
-            esac
+            local problem
+            problem=$(token_file_problem "${token_file}" "${EUID}")
+            if [ -n "${problem}" ]; then
+                printf '\n✗ %s\n' "${token_file} is unsafe (${problem}) — must be a regular file you own with permissions 600 (run: chmod 600 ${token_file})" >&2
+                errors=$((errors + 1))
+            fi
         fi
     fi
 
