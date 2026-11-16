@@ -143,10 +143,7 @@ public sealed class GitHubReaderTests : TestBase
         Assert.Equal(expected: "could not read", actual: exception.Message);
     }
 
-    private static Task<IReadOnlyList<int>> ReadPullRequestsAsync(
-        string result,
-        CancellationToken cancellationToken
-    )
+    private static Task<IReadOnlyList<int>> ReadPullRequestsAsync(string result, CancellationToken cancellationToken)
     {
         return new GitHubReader(new FakeMcpToolCaller(result: result, error: null))
             .OpenPullRequestsOnHeadAsync(repository: "org/repo", head: "main", cancellationToken: cancellationToken)

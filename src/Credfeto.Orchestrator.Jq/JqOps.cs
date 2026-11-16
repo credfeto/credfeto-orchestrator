@@ -22,9 +22,9 @@ public static class JqOps
         }
 
         return value
-                .Properties.Where(property => StringComparer.Ordinal.Equals(x: property.Name, y: name))
-                .Select(static property => property.Value)
-                .FirstOrDefault()
+            .Properties.Where(property => StringComparer.Ordinal.Equals(x: property.Name, y: name))
+            .Select(static property => property.Value)
+            .FirstOrDefault()
             ?? JqValue.Null;
     }
 

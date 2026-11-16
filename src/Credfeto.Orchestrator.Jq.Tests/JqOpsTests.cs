@@ -38,9 +38,8 @@ public sealed class JqOpsTests : TestBase
     [Fact]
     public static void IteratingAnObjectYieldsItsValuesInOrder()
     {
-        JqValue values = JqOps.Filter(
-            value: JqParser.Parse("""{"b":2,"a":1,"c":3}"""),
-            predicate: static value => value.Number > 1
+        JqValue values = JqOps.Filter(value: JqParser.Parse("""{"b":2,"a":1,"c":3}"""), predicate: static value =>
+            value.Number > 1
         );
 
         Assert.Equal(expected: """[2,3]""", actual: JqFormatter.ToJson(values));
