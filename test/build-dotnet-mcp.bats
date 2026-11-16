@@ -548,8 +548,8 @@ make_recording_probes() {
     make_global_tool 'if [ -v BUILD_MCP_LOG_DIR ]; then printf "logs=%s\n" "${BUILD_MCP_LOG_DIR}"; else printf "%s\n" logs=unset; fi'
     make_recording_probes
 
-    # Unset, or empty, the server keeps its own TMPDIR-based default, so no per-user state directory
-    # is named or created.
+    # Unset, or empty, the server picks its own per-user default under HOME, so the wrapper names or
+    # creates no state directory, and never passes on an empty value, which the server refuses.
     for preset in "XDG_STATE_HOME=${WORK}/state" BUILD_MCP_LOG_DIR=; do
         WRAPPER_ENV=(BUILD_MCP_TOOL=global BUILD_MCP_REPO_ROOT=/workspace/repo "${preset}")
         run_wrapper "${WORK}"
