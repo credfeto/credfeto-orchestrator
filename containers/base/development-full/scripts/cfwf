@@ -568,7 +568,10 @@ when it had several).
                Security is never replaced: any other priority on an issue that carries Security is
                refused, and nothing is written at all.
 --assign-self  Add the authenticated account (the agent) as an assignee. It is the only assignee
-               option: --add-assignee and --remove-assignee are not options.
+               option: --add-assignee and --remove-assignee are not options. An issue already
+               assigned to another user is refused, and nothing is written: assigning is how an
+               item is claimed, and someone else has claimed it. One the agent already holds, or
+               one with no assignee, is assigned as asked.
 At least one of --title, --body-file, --priority and --assign-self; each at most once. --add-label,
 --remove-label, --milestone, --json and --jq are not options either: other labels have commands of
 their own (label add and label remove, which never change a priority: --priority is the one way).
@@ -576,8 +579,10 @@ their own (label add and label remove, which never change a priority: --priority
 Everything is checked before anything is written. The title and the body are checked for leaks
 first (see 'cfwf help body'): a refused one exits ${BODY_REFUSED_EXIT} with "cfwf: body refused: <rule>" or
 "cfwf: title refused: <rule>" on stderr, never naming the text that matched. Then, with
---assign-self, the agent's login is read (gh api user), and the issue is read once, labels included,
-so a number that is a pull request's is never edited. A --priority asked for on an issue that
+--assign-self, the agent's login is read (gh api user), and the issue is read once, labels and
+assignees included, so a number that is a pull request's is never edited. With --assign-self, an
+issue with an assignee other than the agent exits ${POLICY_REFUSED_EXIT} with "cfwf: assign refused:
+${ASSIGNED_TO_ANOTHER_RULE}". A --priority asked for on an issue that
 carries Security exits ${POLICY_REFUSED_EXIT} with "cfwf: priority refused: Security is never replaced by
 --priority". With a priority label to add, the repository's labels are read (gh label list). An
 issue already as asked is not edited. Editing the body does not revise an implementation plan,
@@ -585,8 +590,8 @@ which is a comment of its own.
 
 Exit codes: 0 edited, or nothing to write; 1 a runtime failure, such as a gh or network error,
 prefixed "cfwf:"; 2 a usage error, an unknown --priority included; ${BODY_REFUSED_EXIT} the title or the body was
-refused by the leak check, or the priority by the Security rule; ${ISSUE_NOT_FOUND_EXIT} the issue does
-not exist, or the number is a pull request's.
+refused by the leak check, the priority by the Security rule, or --assign-self because another
+user is assigned; ${ISSUE_NOT_FOUND_EXIT} the issue does not exist, or the number is a pull request's.
 USAGE
 }
 
@@ -2004,7 +2009,10 @@ comma-separated list when it had several).
                for it. Security is never replaced: any other priority on a pull request that
                carries Security is refused, and nothing is written at all.
 --assign-self  Add the authenticated account (the agent) as an assignee. It is the only assignee
-               option: --add-assignee and --remove-assignee are not options.
+               option: --add-assignee and --remove-assignee are not options. A pull request already
+               assigned to another user is refused, and nothing is written: assigning is how an
+               item is claimed, and someone else has claimed it. One the agent already holds, or
+               one with no assignee, is assigned as asked.
 At least one of --title, --body-file, --priority and --assign-self; each at most once. --add-label,
 --remove-label, --base, --milestone, --reviewer, --json and --jq are not options either: other
 labels have commands of their own (label add and label remove, which never change a priority:
@@ -2015,15 +2023,17 @@ first (see 'cfwf help body'): a refused one exits ${BODY_REFUSED_EXIT} with "cfw
 "cfwf: title refused: <rule>" on stderr, never naming the text that matched. Any pull request in
 the repository can be edited, whoever opened it and whoever wrote its commits: there is no
 ownership rule. With --assign-self, the agent's login is read (gh api user). The pull request is
-read once, for its URL and its labels. A --priority asked for on a pull request that
+read once, for its URL, its labels and its assignees. With --assign-self, a pull request with an
+assignee other than the agent exits ${POLICY_REFUSED_EXIT} with "cfwf: assign refused:
+${ASSIGNED_TO_ANOTHER_RULE}". A --priority asked for on a pull request that
 carries Security exits ${POLICY_REFUSED_EXIT} with "cfwf: priority refused: Security is never replaced by
 --priority". With a priority label to add, the repository's labels are read (gh label list). A
 pull request already as asked is not edited.
 
 Exit codes: 0 edited, or nothing to write; 1 a runtime failure, such as a gh or network error,
 prefixed "cfwf:"; 2 a usage error, an unknown --priority included; ${BODY_REFUSED_EXIT} the title or the body was
-refused by the leak check, or the priority by the Security rule;
-${PR_NOT_FOUND_EXIT} the pull request does not exist (the number of an issue included).
+refused by the leak check, the priority by the Security rule, or --assign-self because another
+user is assigned; ${PR_NOT_FOUND_EXIT} the pull request does not exist (the number of an issue included).
 USAGE
 }
 
@@ -2990,7 +3000,9 @@ Adds the labels of the issues a pull request closes to the pull request, one gh 
 --repo         Always required; never taken from the current directory.
 --pr           The pull request's number, above 0.
 --assign-self  Also add the authenticated account (the agent) as an assignee, its login read as
-               'cfwf pr edit --assign-self' reads it (gh api user).
+               'cfwf pr edit --assign-self' reads it (gh api user). A pull request already
+               assigned to another user is refused before any label is added, and nothing is
+               written: assigning is how an item is claimed, and someone else has claimed it.
 There is no --label: the labels come only from the closing issues. --remove-label, --json and --jq
 are not options either.
 
@@ -3009,7 +3021,9 @@ Output: each label added, one a line, then "<url> synced", <url> being the pull 
 Exit codes: 0 synced (nothing to add included); 1 a runtime failure, such as a gh or network error,
 prefixed "cfwf:" (when it fails part way, the message names the labels already added), or a closing
 issue whose labels could not be read: the labels that could be read are still added and printed,
-but "synced" is not, so a partial sync is never reported as complete; 2 a usage error.
+but "synced" is not, so a partial sync is never reported as complete; 2 a usage error; 8
+--assign-self on a pull request assigned to another user, with "cfwf: assign refused: already
+assigned to another user" on stderr.
 USAGE
 }
 
@@ -7921,6 +7935,28 @@ assign_self_option() {
     ASSIGN_SELF=1
 }
 
+# The text of the refusal --assign-self gives an item someone else already holds.
+readonly ASSIGNED_TO_ANOTHER_RULE="already assigned to another user"
+
+# Refuses (exit POLICY_REFUSED_EXIT) --assign-self on an item that already has an assignee other
+# than the agent (AGENT_LOGIN): the item's assignee logins are $1, comma separated, compared
+# without regard to case, as GitHub compares logins. Assigning is how an item is claimed: the
+# orchestrator stands off one assigned to another user, so adding the agent beside them would let
+# two workers take the same item. An unassigned item, or one the agent holds already (beside
+# others or not), passes. A login that is not a login is an unexpected answer and dies. It runs
+# before anything is written.
+refuse_if_assigned_to_another() {
+    local login other=""
+    local -a logins=()
+    [ -z "$1" ] || IFS=, read -r -a logins <<< "$1"
+    for login in "${logins[@]}"; do
+        matches_pattern "${login}" "${LOGIN_PATTERN}" || die "gh returned an unexpected assignee for ${REPO}"
+        [ "${login,,}" = "${AGENT_LOGIN,,}" ] && return 0
+        other=1
+    done
+    [ -z "${other}" ] || refuse_policy assign "${ASSIGNED_TO_ANOTHER_RULE}"
+}
+
 # Prints, lower-cased, the login of the account that opens the pull requests for the agent's work:
 # PR_CREATOR_LOGIN, as the orchestrator names it, or prpixie (the orchestrator's own default) when
 # it is unset or is not a login.
@@ -7930,7 +7966,8 @@ pr_creator_login() {
     printf '%s\n' "${login,,}"
 }
 
-# Reads PR of REPO for pr edit in one REST read, setting EDIT_URL and EDIT_LABELS. A 404 is a pull
+# Reads PR of REPO for pr edit in one REST read, setting EDIT_URL, EDIT_ASSIGNEES (the assignee
+# logins, comma separated) and EDIT_LABELS. A 404 is a pull
 # request that is not there (the number of an issue included) once the repository has been read and
 # found; any other failure dies. The answer is refused unless the URL is this pull request's and as
 # many labels came as it says it has. Who opened it and who wrote its commits are not read: pr edit
@@ -7939,11 +7976,11 @@ read_pull_request_for_edit() {
     local end count row tag name
     local -a rows
     api_read "could not read ${REPO}#${PR}" "repos/${REPO}/pulls/${PR}" \
-        "${FIELDS_ROW_DEF} ([.html_url, (.labels // [] | length), \"end\"] | fields_row),
+        "${FIELDS_ROW_DEF} ([.html_url, (.labels // [] | length), ([(.assignees // [])[].login] | join(\",\")), \"end\"] | fields_row),
          ((.labels // [])[] | [\"label\", .name, \"end\"] | fields_row)" \
         || not_found_in_repository "${PR_NOT_FOUND_EXIT}" "the pull request ${REPO}#${PR} was not found"
     mapfile -t rows <<< "${GH_OUTPUT}"
-    IFS="${ROW_SEPARATOR}" read -r EDIT_URL count end <<< "${rows[0]}"
+    IFS="${ROW_SEPARATOR}" read -r EDIT_URL count EDIT_ASSIGNEES end <<< "${rows[0]}"
     if [ "${end}" != end ] \
         || ! matches_pattern "${EDIT_URL}" "${REPOSITORY_URL_PATTERN}/pull/${PR}\$" \
         || ! matches_pattern "${count}" '^[0-9]+$' || [ "$((${#rows[@]} - 1))" -ne "${count}" ]; then
@@ -7963,6 +8000,7 @@ read_pull_request_for_edit() {
 # the priority labels to remove, whether PRIORITY is to be added, and the line to print after the
 # URL ("" when the priority does not change).
 EDIT_LABELS=()
+EDIT_ASSIGNEES=""
 EDIT_ARGS=()
 PRIORITY_REMOVE=()
 PRIORITY_ADD=""
@@ -8038,6 +8076,7 @@ pr_edit() {
 
     [ -z "${ASSIGN_SELF}" ] || read_agent_login
     read_pull_request_for_edit
+    [ -z "${ASSIGN_SELF}" ] || refuse_if_assigned_to_another "${EDIT_ASSIGNEES}"
     plan_priority_change
 
     EDIT_ARGS=(pr edit "${PR}" --repo "${REPO}")
@@ -8081,12 +8120,19 @@ issue_edit() {
     [ -z "${TITLE}" ] || check_value_for_leaks "${TITLE}" "${REPO}" title
 
     [ -z "${ASSIGN_SELF}" ] || read_agent_login
-    # The URL, then one label name a line, made printable so none spans two lines.
-    read_issue number,labels "${PRINTABLE_DEF} .url, ((.labels // [])[] | .name | printable)"
+    # The URL, "assignees " and the assignee logins comma separated (so the line is never empty),
+    # then one label name a line, made printable so none spans two lines.
+    read_issue number,labels,assignees \
+        "${PRINTABLE_DEF} .url, \"assignees \" + ([(.assignees // [])[].login] | join(\",\")), ((.labels // [])[] | .name | printable)"
     url="${GH_OUTPUT%%$'\n'*}"
-    [[ "${url}" =~ ${REPOSITORY_URL_PATTERN}/issues/${ISSUE}$ ]] || unexpected_issue_result
+    GH_OUTPUT="${GH_OUTPUT#*$'\n'}"
+    EDIT_ASSIGNEES="${GH_OUTPUT%%$'\n'*}"
+    [[ "${url}" =~ ${REPOSITORY_URL_PATTERN}/issues/${ISSUE}$ ]] && [[ "${EDIT_ASSIGNEES}" == "assignees "* ]] \
+        || unexpected_issue_result
+    EDIT_ASSIGNEES="${EDIT_ASSIGNEES#assignees }"
     EDIT_LABELS=()
     [[ "${GH_OUTPUT}" != *$'\n'* ]] || mapfile -t EDIT_LABELS <<< "${GH_OUTPUT#*$'\n'}"
+    [ -z "${ASSIGN_SELF}" ] || refuse_if_assigned_to_another "${EDIT_ASSIGNEES}"
     plan_priority_change
 
     EDIT_ARGS=(issue edit "${ISSUE}" --repo "${REPO}")
@@ -8114,8 +8160,10 @@ assign_pr_sync_labels_option() {
 # --add-label call a label, in the repository's own spelling, and never removes one. A label the
 # repository does not have is skipped with a warning, and so is one gh could not take as one label
 # (gh splits a --add-label value on commas). With --assign-self, the agent is then added as an
-# assignee. Prints each label added, then "<url> synced"; when a closing issue could not be read,
-# the others' labels are still added, then it exits 1 without "synced".
+# assignee, unless the pull request is assigned to another user, which is refused before any label
+# is added (refuse_if_assigned_to_another). Prints each label added, then "<url> synced"; when a
+# closing issue could not be read, the others' labels are still added, then it exits 1 without
+# "synced".
 pr_sync_labels() {
     local label name partial="" done_labels=""
     local -a add=()
@@ -8126,7 +8174,12 @@ pr_sync_labels() {
     require_gh
 
     read_closing_issue_labels url || partial=1
-    [ -z "${ASSIGN_SELF}" ] || read_agent_login
+    if [ -n "${ASSIGN_SELF}" ]; then
+        read_agent_login
+        gh_capture pr view "${PR}" --repo "${REPO}" --json assignees --jq '[(.assignees // [])[].login] | join(",")' \
+            || die "could not read the assignees of ${REPO}#${PR}: $(gh_failure_text)"
+        refuse_if_assigned_to_another "${GH_OUTPUT}"
+    fi
     if [ -n "${CLOSING_ISSUE_LABELS}" ]; then
         read_repository_label_names
         while IFS= read -r label; do
