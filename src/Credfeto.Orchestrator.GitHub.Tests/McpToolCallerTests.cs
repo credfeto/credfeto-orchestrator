@@ -30,9 +30,8 @@ public sealed class McpToolCallerTests : TestBase
 
         Assert.Equal(expected: "{\"pullRequests\":[]}", actual: text);
         Assert.NotEmpty(server.Requests);
-        Assert.All(
-            server.Requests,
-            request => Assert.Equal(expected: "Bearer " + TOKEN, actual: request.Authorization)
+        Assert.All(server.Requests, request =>
+            Assert.Equal(expected: "Bearer " + TOKEN, actual: request.Authorization)
         );
         AssertToolCall(server);
     }
@@ -160,9 +159,8 @@ public sealed class McpToolCallerTests : TestBase
     {
         using FakeMcpServerHandler server = new(id => Result(id: id, content: TextContent("{}")));
         using HttpClient httpClient = new(handler: server, disposeHandler: false);
-        McpToolCaller caller = new(
-            httpClient: httpClient,
-            settings: static () => throw new GitHubReadException("no GitHub token: set GH_ENTERPRISE_TOKEN or GH_TOKEN")
+        McpToolCaller caller = new(httpClient: httpClient, settings: static () =>
+            throw new GitHubReadException("no GitHub token: set GH_ENTERPRISE_TOKEN or GH_TOKEN")
         );
 
         GitHubReadException exception = await Assert.ThrowsAsync<GitHubReadException>(() =>
@@ -190,9 +188,8 @@ public sealed class McpToolCallerTests : TestBase
     private static async Task<string> CallAsync(FakeMcpServerHandler server, CancellationToken cancellationToken)
     {
         using HttpClient httpClient = new(handler: server, disposeHandler: false);
-        McpToolCaller caller = new(
-            httpClient: httpClient,
-            settings: static () => new(endpoint: new("https://mcp.example.test/mcp"), token: TOKEN)
+        McpToolCaller caller = new(httpClient: httpClient, settings: static () =>
+            new(endpoint: new("https://mcp.example.test/mcp"), token: TOKEN)
         );
 
         return await caller.CallAsync(
@@ -204,9 +201,8 @@ public sealed class McpToolCallerTests : TestBase
 
     private static void AssertToolCall(FakeMcpServerHandler server)
     {
-        RecordedRequest call = Assert.Single(
-            server.Requests,
-            request => request.Body.Contains(value: "\"tools/call\"", comparisonType: StringComparison.Ordinal)
+        RecordedRequest call = Assert.Single(server.Requests, request =>
+            request.Body.Contains(value: "\"tools/call\"", comparisonType: StringComparison.Ordinal)
         );
         using JsonDocument body = JsonDocument.Parse(call.Body);
         JsonElement parameters = body.RootElement.GetProperty("params");

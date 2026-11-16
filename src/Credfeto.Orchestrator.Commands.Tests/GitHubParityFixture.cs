@@ -76,8 +76,7 @@ internal static class GitHubParityFixture
 
     private static async Task<JsonDocument> LoadAsync(CancellationToken cancellationToken)
     {
-        await using Stream stream =
-            typeof(GitHubParityFixture).Assembly.GetManifestResourceStream(RESOURCE_NAME)
+        await using Stream stream = typeof(GitHubParityFixture).Assembly.GetManifestResourceStream(RESOURCE_NAME)
             ?? throw new InvalidOperationException("Missing embedded resource " + RESOURCE_NAME);
 
         return await JsonDocument.ParseAsync(utf8Json: stream, cancellationToken: cancellationToken);

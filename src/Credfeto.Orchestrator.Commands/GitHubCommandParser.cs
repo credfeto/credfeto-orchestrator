@@ -26,7 +26,8 @@ public static class GitHubCommandParser
 
         if (read is null)
         {
-            error = $"unknown github read '{args[1]}': expected open-prs, open-pr-count or branch-requires-status-checks";
+            error =
+                $"unknown github read '{args[1]}': expected open-prs, open-pr-count or branch-requires-status-checks";
 
             return null;
         }
