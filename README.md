@@ -155,7 +155,7 @@ reads GitHub's status summary, the unresolved incidents and every component's li
 [githubstatus.com](https://www.githubstatus.com/api/v2/summary.json) (a single
 `curl` with a 5 second connect timeout and a 10 second total timeout). If a serious incident is
 open on any of the components the agent's sessions depend on (**Git Operations**, **Pull
-Requests**, **Issues**, **API Requests** or **Webhooks**), the tick does no work at all. An
+Requests**, **Issues**, **API Requests**, **Webhooks** or **Actions**), the tick does no work at all. An
 incident is serious when its impact is **major** or **critical**, or when one of those components
 it names is in **partial outage** or **major outage**. It logs one line:
 

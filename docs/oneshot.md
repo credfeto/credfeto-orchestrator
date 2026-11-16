@@ -27,7 +27,7 @@ done next.
 
 Before any of this, `oneshot` asks [githubstatus.com](https://www.githubstatus.com) whether
 GitHub has an open incident on a part the agent needs: Git Operations, Pull Requests, Issues,
-API Requests or Webhooks. If it has, the whole run is skipped with one log line and a clean
+API Requests, Webhooks or Actions. If it has, the whole run is skipped with one log line and a clean
 exit, because during such an incident a session can't push, comment or move a board card: it
 would only fail or be charged for "making no progress". If githubstatus.com itself can't be
 reached or answers with something unreadable, the run goes ahead as normal. The same applies

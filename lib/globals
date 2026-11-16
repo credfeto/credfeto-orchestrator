@@ -20,7 +20,7 @@ GITHUB_STATUS_URL="${GITHUB_STATUS_URL:-https://www.githubstatus.com/api/v2/summ
 # of them skips the tick when it is serious (see the two lists below); a minor one only logs a
 # warning. Incidents on other components (Codespaces, Copilot, Actions and so on) are ignored.
 # shellcheck disable=SC2034  # read by lib/github-health after sourcing
-GITHUB_HEALTH_COMPONENTS=("Git Operations" "Pull Requests" "Issues" "API Requests" "Webhooks")
+GITHUB_HEALTH_COMPONENTS=("Git Operations" "Pull Requests" "Issues" "API Requests" "Webhooks" "Actions")
 # An incident on a used component with one of these impacts skips the tick.
 # shellcheck disable=SC2034  # read by lib/github-health after sourcing
 GITHUB_HEALTH_SERIOUS_IMPACTS=("major" "critical")

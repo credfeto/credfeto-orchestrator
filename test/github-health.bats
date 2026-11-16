@@ -84,7 +84,7 @@ setup_gate_main() {
 
 @test "github_incident_open reports an incident on each component a session depends on" {
     local component
-    for component in "Git Operations" "Pull Requests" "Issues" "API Requests" "Webhooks"; do
+    for component in "Git Operations" "Pull Requests" "Issues" "API Requests" "Webhooks" "Actions"; do
         use_status_fixture "$(incident_json "Outage" "${component}" "2026-11-04T10:15:00Z")"
         run github_incident_open
         if [ "${status}" -ne 0 ]; then
@@ -176,8 +176,8 @@ setup_gate_main() {
 }
 
 @test "github_incident_open only counts the outage of a component the session uses" {
-    # Actions is in major outage, but the incident's used component (Issues) is only degraded.
-    use_status_fixture '{"components":[{"name":"Issues","status":"degraded_performance"},{"name":"Actions","status":"major_outage"}],"incidents":[{"name":"Mixed","impact":"minor","created_at":"2026-11-16T11:00:00Z","components":[{"name":"Actions"},{"name":"Issues"}]}]}'
+    # Codespaces is in major outage, but the incident's used component (Issues) is only degraded.
+    use_status_fixture '{"components":[{"name":"Issues","status":"degraded_performance"},{"name":"Codespaces","status":"major_outage"}],"incidents":[{"name":"Mixed","impact":"minor","created_at":"2026-11-16T11:00:00Z","components":[{"name":"Codespaces"},{"name":"Issues"}]}]}'
     run github_incident_open
     [ "${status}" -eq 3 ]
     [ "${output}" = $'Mixed\t2026-11-16T11:00:00Z\tIssues: degraded_performance' ]
