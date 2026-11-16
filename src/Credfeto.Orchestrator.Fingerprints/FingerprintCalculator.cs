@@ -134,9 +134,8 @@ public sealed class FingerprintCalculator : IFingerprintCalculator
             trusted: trusted,
             userField: AUTHOR
         );
-        JqValue humanComments = JqOps.Filter(
-            value: comments,
-            predicate: static comment => !AutomatedSummary.IsAutomatedSummary(JqOps.Field(value: comment, name: "body"))
+        JqValue humanComments = JqOps.Filter(value: comments, predicate: static comment =>
+            !AutomatedSummary.IsAutomatedSummary(JqOps.Field(value: comment, name: "body"))
         );
         AddComments(lines: lines, comments: humanComments);
     }
@@ -149,9 +148,8 @@ public sealed class FingerprintCalculator : IFingerprintCalculator
             userField: AUTHOR
         );
         JqValue latest = JqOps.Last(
-            JqOps.SortBy(
-                value: reviews,
-                key: static review => JqOps.Alternative(value: ReviewTimestamp(review), fallback: string.Empty)
+            JqOps.SortBy(value: reviews, key: static review =>
+                JqOps.Alternative(value: ReviewTimestamp(review), fallback: string.Empty)
             )
         );
 
@@ -323,13 +321,11 @@ public sealed class FingerprintCalculator : IFingerprintCalculator
             return items;
         }
 
-        return JqOps.Filter(
-            value: items,
-            predicate: item =>
-                JqOps.Contains(
-                    values: trusted,
-                    item: JqOps.Field(value: JqOps.Field(value: item, name: userField), name: "login")
-                )
+        return JqOps.Filter(value: items, predicate: item =>
+            JqOps.Contains(
+                values: trusted,
+                item: JqOps.Field(value: JqOps.Field(value: item, name: userField), name: "login")
+            )
         );
     }
 

@@ -32,9 +32,8 @@ public static class Program
             fingerprints: new FingerprintCalculator(),
             files: new FileContentReader(),
             github: new GitHubReader(
-                new McpToolCaller(
-                    httpClient: httpClient,
-                    settings: static () => CfwfMcpSettingsLoader.Load(Environment.GetEnvironmentVariable)
+                new McpToolCaller(httpClient: httpClient, settings: static () =>
+                    CfwfMcpSettingsLoader.Load(Environment.GetEnvironmentVariable)
                 )
             )
         );
