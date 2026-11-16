@@ -169,6 +169,120 @@ load oneshot_helper
     [ -z "${output}" ]
 }
 
+@test "read_token_if_safe refuses a symlink to a private token file, naming the path" {
+    local target="${TEST_TMP}/real-token" link="${TEST_TMP}/token"
+    printf 'my-token\n' > "${target}"
+    chmod 600 "${target}"
+    ln -s "${target}" "${link}"
+
+    run --separate-stderr read_token_if_safe "${link}"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == *"Token file ${link} is unsafe (symlink)"* ]]
+}
+
+@test "read_token_if_safe names the wrong mode when it skips a token file" {
+    local tf="${TEST_TMP}/token"
+    printf 'my-token\n' > "${tf}"
+    chmod 644 "${tf}"
+
+    run --separate-stderr read_token_if_safe "${tf}"
+    [ -z "${output}" ]
+    [[ "${stderr}" == *"Token file ${tf} is unsafe (wrong mode: permissions 644)"* ]]
+}
+
+@test "token_file_problem accepts a 600 or 400 regular file owned by the expected uid" {
+    local tf="${TEST_TMP}/token"
+    printf 'my-token\n' > "${tf}"
+
+    local perm
+    for perm in 600 400; do
+        chmod "${perm}" "${tf}"
+        run token_file_problem "${tf}" "${EUID}"
+        [ "${status}" -eq 0 ]
+        [ -z "${output}" ]
+    done
+}
+
+@test "token_file_problem reports a symlink even when its target is a private file" {
+    local target="${TEST_TMP}/real-token" link="${TEST_TMP}/token"
+    printf 'my-token\n' > "${target}"
+    chmod 600 "${target}"
+    ln -s "${target}" "${link}"
+
+    run token_file_problem "${link}" "${EUID}"
+    [ "${output}" = "symlink" ]
+}
+
+@test "token_file_problem reports a file owned by another uid" {
+    local tf="${TEST_TMP}/token"
+    printf 'my-token\n' > "${tf}"
+    chmod 600 "${tf}"
+    local other_uid=$((EUID + 1))
+
+    run token_file_problem "${tf}" "${other_uid}"
+    [ "${output}" = "wrong owner: uid ${EUID}, expected uid ${other_uid}" ]
+}
+
+@test "token_file_problem reports a mode other than 600 or 400" {
+    local tf="${TEST_TMP}/token"
+    printf 'my-token\n' > "${tf}"
+
+    local perm
+    for perm in 644 640 700 660; do
+        chmod "${perm}" "${tf}"
+        run token_file_problem "${tf}" "${EUID}"
+        [ "${output}" = "wrong mode: permissions ${perm}" ]
+    done
+}
+
+# Writes the config validate_config needs for an owner, so each test varies only the token file.
+write_validate_config_fixture() {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator/tokens" "${XDG_CONFIG_HOME}/gh"
+    : > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    : > "${XDG_CONFIG_HOME}/gh/hosts.yml"
+    GIT_USER_NAME="Test"
+    GIT_USER_EMAIL="test@example.com"
+    GIT_SIGNING_KEY="ABCD1234"
+}
+
+@test "validate_config accepts a private token file owned by the current user" {
+    write_validate_config_fixture
+    local tf="${XDG_CONFIG_HOME}/orchestrator/tokens/credfeto"
+    printf 'secret-token\n' > "${tf}"
+
+    local perm
+    for perm in 600 400; do
+        chmod "${perm}" "${tf}"
+        run validate_config credfeto
+        [ "${status}" -eq 0 ]
+    done
+}
+
+@test "validate_config refuses a symlinked token file, naming the path" {
+    write_validate_config_fixture
+    local target="${TEST_TMP}/real-token" tf="${XDG_CONFIG_HOME}/orchestrator/tokens/credfeto"
+    printf 'secret-token\n' > "${target}"
+    chmod 600 "${target}"
+    ln -s "${target}" "${tf}"
+
+    run validate_config credfeto
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"${tf} is unsafe (symlink)"* ]]
+    [[ "${output}" == *"Config validation failed"* ]]
+}
+
+@test "validate_config refuses a token file with the wrong mode" {
+    write_validate_config_fixture
+    local tf="${XDG_CONFIG_HOME}/orchestrator/tokens/credfeto"
+    printf 'secret-token\n' > "${tf}"
+    chmod 644 "${tf}"
+
+    run validate_config credfeto
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"${tf} is unsafe (wrong mode: permissions 644)"* ]]
+}
+
 # --- host_to_container_path ---------------------------------------------------
 
 @test "host_to_container_path maps REPO_WORK_DIR to CONTAINER_REPO_PATH" {
