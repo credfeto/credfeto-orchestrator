@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Blocks git commit, pre-commit, pre-commit-check, buildtest, dotnet build,
-# dotnet test, npm test, and bun test unless the tool call sets
-# run_in_background: true.
+# Blocks git commit, pre-commit, pre-commit-check, buildtest, npm test, and
+# bun test unless the tool call sets run_in_background: true. dotnet build and
+# dotnet test are not here: block-dotnet-tool-install refuses them outright,
+# because the build-dotnet MCP server runs them, so a background retry would
+# only be refused again.
 # Exit 2 = blocked, 0 = allowed.
 #
 # credfeto-long-running-commands (this repo's own AI instructions) mandates
@@ -29,7 +31,7 @@
 # this hook's job - reject-obfuscated-commands rejects those categorically
 # before this hook ever runs. A word that is not a plain literal (or the one
 # layer of ordinary quoting literal_value below also resolves) is opaque to
-# the checks that match only a specific literal name; the git/dotnet/npm/bun
+# the checks that match only a specific literal name; the git/npm/bun
 # checks deliberately also match that opaque state itself, so it still fails
 # closed there rather than being silently ignored - see literal_value's own
 # comment for the full detail.
@@ -68,7 +70,7 @@ is_wrapper() {
 OPAQUE_MARKER=$'\x01'
 
 # Bare-name commands: invoked directly by name rather than via a subcommand check like
-# git/dotnet/npm/bun below, so each gets a table entry instead of its own if/case arm -
+# git/npm/bun below, so each gets a table entry instead of its own if/case arm -
 # a future addition here is a single new entry. An associative array is safe to use even
 # though these hooks are symlinked to run on the host's own shell (see
 # install-claude-hooks): reject-obfuscated-commands, earlier in this same PreToolUse
@@ -100,19 +102,19 @@ command -v shfmt > /dev/null 2>&1 || block 'shfmt is not available to parse the 
 ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command could not be parsed as shell - failing closed'
 
 # One line per CallExpr: a word that is a single plain literal, or one layer of ordinary
-# quoting with no expansion inside it ("restore", 'restore'), resolves to that literal
+# quoting with no expansion inside it ("install", 'install'), resolves to that literal
 # text - same literal_value scope as enforce-ssh-host-and-key, plus the backslash-decode fix
 # enforce-git-policy's own resolve_parts already has (#1399 round 3): a bare unquoted word
-# keeps shfmt's raw, undecoded backslash in its Lit.Value (e.g. `bu\ild` stays "bu\ild", not
-# "build") even though bash's own unquoted rule is simply "drop the backslash, keep the next
-# character" for any character - without the gsub below, `dotnet bu\ild` resolved to neither
-# "build" nor the opaque marker and fell through every check unblocked, while it really does
-# execute as plain `dotnet build` at runtime. The decode applies only to the bare top-level
+# keeps shfmt's raw, undecoded backslash in its Lit.Value (e.g. `t\est` stays "t\est", not
+# "test") even though bash's own unquoted rule is simply "drop the backslash, keep the next
+# character" for any character - without the gsub below, `npm t\est` resolved to neither
+# "test" nor the opaque marker and fell through every check unblocked, while it really does
+# execute as plain `npm test` at runtime. The decode applies only to the bare top-level
 # Lit branch, never to a Lit nested inside a DblQuoted (which keeps its raw text unchanged),
 # since backslash inside double quotes is special only before $, `, ", \ and newline, not
-# before an arbitrary letter, so `"bu\ild"` really does stay bu\ild at runtime and must not
-# be decoded the same way. So a quoted-but-static word like `dotnet "restore"` is recognised
-# as literal "restore", not treated as opaque - but a genuinely *empty* quoted word ('' or
+# before an arbitrary letter, so `"t\est"` really does stay t\est at runtime and must not
+# be decoded the same way. So a quoted-but-static word like `npm "install"` is recognised
+# as literal "install", not treated as opaque - but a genuinely *empty* quoted word ('' or
 # "") is deliberately NOT resolved to an empty string here (unlike enforce-git-policy, whose
 # transport does not join words with a shared delimiter the way this one does): an empty
 # field in the tab-join below collapses exactly like the empty-string opaque-marker bug this
@@ -124,9 +126,9 @@ ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command co
 # (substitutions, expansions, ANSI-C/locale quoting, or
 # quoting that mixes literal text with either) is represented as a \x01 marker - it can
 # never equal any of the literal command/subcommand names checked below, so it is opaque to
-# those checks by default (the dotnet/npm/bun checks below deliberately also match the
+# those checks by default (the npm/bun checks below deliberately also match the
 # marker itself alongside their literal subcommand names, so a non-literal word right after
-# dotnet/npm/bun still fails closed rather than silently skipping the check), and unlike an
+# npm/bun still fails closed rather than silently skipping the check), and unlike an
 # empty string, is never dropped by IFS=<tab> word-splitting's collapsing of consecutive
 # whitespace delimiters (an earlier version used an empty string here: tab is IFS whitespace
 # even when IFS is explicitly set to $'\t', so `read -ra` collapsed a run of adjacent tabs
@@ -185,7 +187,7 @@ while IFS= read -r call_line; do
   # Only the command-name position, and the position immediately after a
   # known wrapper name in the command-name position, are checked - a token
   # appearing anywhere else is an ordinary argument, not an invocation of
-  # that command (e.g. `grep -r "dotnet test" .`).
+  # that command (e.g. `grep -r "npm test" .`).
   positions=(0)
   is_wrapper "${words[0]}" && positions+=(1)
 
@@ -209,12 +211,12 @@ while IFS= read -r call_line; do
         && block 'git commit must run with run_in_background: true (its pre-commit hook run has no bounded duration; this also fires on an unresolved subcommand right after -c/-C options, which could resolve to commit at runtime, so this fails closed)'
     fi
 
-    # Unlike git/dotnet/npm/bun above and below, this loop deliberately does NOT also match
+    # Unlike git/npm/bun above and below, this loop deliberately does NOT also match
     # OPAQUE_MARKER: $tok here is the command-name position itself (not an argument after a
     # known trigger word), so an opaque $tok could be any dynamically-named command at all
     # (e.g. `$PYTHON script.py`), not specifically one that might be pre-commit/buildtest -
     # matching the marker here would block every dynamically-named command outright, a much
-    # wider blast radius than the narrowly-scoped dotnet/npm/bun/git checks. This is safe to
+    # wider blast radius than the narrowly-scoped npm/bun/git checks. This is safe to
     # leave unmatched only because reject-obfuscated-commands, earlier in the same PreToolUse
     # chain, already uses a stricter single-Lit-only extraction for the command-name position
     # and fails closed on any quoting there at all - this loop relies on that upstream gate,
@@ -222,15 +224,6 @@ while IFS= read -r call_line; do
     for name in "${!BARE_NAME_MESSAGES[@]}"; do
       { [ "$tok" = "$name" ] || [[ "$tok" == */"$name" ]]; } && block "${BARE_NAME_MESSAGES[$name]}"
     done
-
-    if [ "$tok" = "dotnet" ] || [[ "$tok" == */dotnet ]]; then
-      j=$((i + 1))
-      case "${words[$j]:-}" in
-        build) block 'dotnet build must run with run_in_background: true (analyzer/restore duration is unbounded)' ;;
-        test) block 'dotnet test must run with run_in_background: true (test run duration scales with what changed)' ;;
-        "$OPAQUE_MARKER") block 'dotnet <unresolved subcommand> must run with run_in_background: true (a non-literal word right after dotnet could resolve to build/test at runtime, so this fails closed)' ;;
-      esac
-    fi
 
     if [ "$tok" = "npm" ] || [[ "$tok" == */npm ]]; then
       j=$((i + 1))

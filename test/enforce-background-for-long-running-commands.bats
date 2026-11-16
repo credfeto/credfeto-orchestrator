@@ -67,13 +67,6 @@ teardown() {
     [[ "${output}" == *'git commit must run with run_in_background: true'* ]]
 }
 
-@test "dotnet build via an unresolved argument right after dotnet is still blocked" {
-    # shellcheck disable=SC2016  # literal $X - must reach the hook unexpanded
-    run_hook 'dotnet $X build'
-    [ "${status}" -eq 2 ]
-    [[ "${output}" == *'dotnet <unresolved subcommand> must run with run_in_background: true'* ]]
-}
-
 @test "npm test via an unresolved argument right after npm is still blocked" {
     # shellcheck disable=SC2016  # literal $X - must reach the hook unexpanded
     run_hook 'npm $X'
@@ -88,60 +81,49 @@ teardown() {
     [[ "${output}" == *'bun test'* ]]
 }
 
-@test "a quoted-but-static dotnet subcommand with no expansion is not blocked" {
-    run_hook 'dotnet "restore"'
-    [ "${status}" -eq 0 ]
-}
-
 @test "a quoted-but-static npm subcommand with no expansion is not blocked" {
     run_hook 'npm "install"'
     [ "${status}" -eq 0 ]
 }
 
-@test "a quoted-but-static dotnet build is still blocked" {
-    run_hook 'dotnet "build"'
+@test "a quoted-but-static npm test is still blocked" {
+    run_hook 'npm "test"'
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *'dotnet build must run with run_in_background: true'* ]]
+    [[ "${output}" == *'npm test must run with run_in_background: true'* ]]
 }
 
-@test "an ANSI-C quoted dotnet subcommand still fails closed" {
-    run_hook $'dotnet $\'build\''
+@test "an ANSI-C quoted npm subcommand still fails closed" {
+    run_hook $'npm $\'test\''
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *'dotnet <unresolved subcommand> must run with run_in_background: true'* ]]
+    [[ "${output}" == *'npm test must run with run_in_background: true'* ]]
 }
 
-@test "a Dollar-quoted double-quoted dotnet subcommand still fails closed" {
-    run_hook 'dotnet $"build"'
+@test "a Dollar-quoted double-quoted npm subcommand still fails closed" {
+    run_hook 'npm $"test"'
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *'dotnet <unresolved subcommand> must run with run_in_background: true'* ]]
+    [[ "${output}" == *'npm test must run with run_in_background: true'* ]]
 }
 
-@test "a single-quoted dotnet build is still blocked" {
-    run_hook "dotnet 'build'"
+@test "a single-quoted npm test is still blocked" {
+    run_hook "npm 'test'"
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *'dotnet build must run with run_in_background: true'* ]]
+    [[ "${output}" == *'npm test must run with run_in_background: true'* ]]
 }
 
-@test "a double-quoted single-backslash dotnet arg is not decoded and stays allowed" {
-    run_hook 'dotnet "bu\ild"'
+@test "a double-quoted single-backslash npm arg is not decoded and stays allowed" {
+    run_hook 'npm "t\est"'
     [ "${status}" -eq 0 ]
 }
 
-@test "a double-quoted escaped dollar dotnet arg stays literal and allowed" {
-    # shellcheck disable=SC2016  # literal \$build - must reach the hook unexpanded
-    run_hook 'dotnet "\$build"'
+@test "a double-quoted escaped dollar npm arg stays literal and allowed" {
+    # shellcheck disable=SC2016  # literal \$test - must reach the hook unexpanded
+    run_hook 'npm "\$test"'
     [ "${status}" -eq 0 ]
 }
 
-@test "an unquoted double-backslash dotnet arg decodes to bu\\ild, not build, and stays allowed" {
-    run_hook 'dotnet bu\\ild'
+@test "an unquoted double-backslash npm arg decodes to t\\est, not test, and stays allowed" {
+    run_hook 'npm t\\est'
     [ "${status}" -eq 0 ]
-}
-
-@test "a backslash-escaped dotnet build (bu\\ild) is blocked" {
-    run_hook 'dotnet bu\ild'
-    [ "${status}" -eq 2 ]
-    [[ "${output}" == *'dotnet build must run with run_in_background: true'* ]]
 }
 
 @test "a backslash-escaped git commit (com\\mit) is blocked" {
@@ -162,10 +144,10 @@ teardown() {
     [[ "${output}" == *'bun test must run with run_in_background: true'* ]]
 }
 
-@test "dotnet with a single empty-string argument fails closed" {
-    run_hook 'dotnet ""'
+@test "npm with a single empty-string argument fails closed" {
+    run_hook 'npm ""'
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *'dotnet <unresolved subcommand> must run with run_in_background: true'* ]]
+    [[ "${output}" == *'npm test must run with run_in_background: true'* ]]
 }
 
 @test "git commit preceded by a single-quoted arg with a real embedded tab byte is blocked" {
@@ -180,10 +162,10 @@ teardown() {
     [[ "${output}" == *'git commit must run with run_in_background: true'* ]]
 }
 
-@test "a bare backslash-tab-escaped dotnet build (an embedded raw tab byte, #1530 vector-1) is blocked" {
-    run_hook "dotnet bu\\$(printf '\t')ild"
+@test "a bare backslash-tab-escaped npm test (an embedded raw tab byte, #1530 vector-1) is blocked" {
+    run_hook "npm t\\$(printf '\t')est"
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *'dotnet <unresolved subcommand> must run with run_in_background: true'* ]]
+    [[ "${output}" == *'npm test must run with run_in_background: true'* ]]
 }
 
 @test "a path-qualified git commit invocation is blocked" {
@@ -259,32 +241,15 @@ teardown() {
 
 # --- dotnet build / dotnet test ------------------------------------------
 
-@test "dotnet build without run_in_background is blocked" {
+# block-dotnet-tool-install refuses these outright (the build-dotnet MCP server runs them), so
+# this hook must not also tell the agent to retry them in the background.
+@test "dotnet build and dotnet test are left to block-dotnet-tool-install" {
     run_hook "dotnet build"
-    [ "${status}" -eq 2 ]
-    [[ "${output}" == *'dotnet build must run with run_in_background: true'* ]]
-}
-
-@test "dotnet build with run_in_background true is allowed" {
-    run_hook "dotnet build" true
     [ "${status}" -eq 0 ]
-}
-
-@test "dotnet test without run_in_background is blocked" {
     run_hook "dotnet test"
-    [ "${status}" -eq 2 ]
-    [[ "${output}" == *'dotnet test must run with run_in_background: true'* ]]
-}
-
-@test "dotnet test with run_in_background true is allowed" {
-    run_hook "dotnet test" true
     [ "${status}" -eq 0 ]
-}
-
-@test "dotnet subcommands unrelated to build/test are allowed" {
-    run_hook "dotnet restore"
-    [ "${status}" -eq 0 ]
-    run_hook "dotnet buildcheck -solution foo.slnx"
+    # shellcheck disable=SC2016  # literal $X - must reach the hook unexpanded
+    run_hook 'dotnet $X'
     [ "${status}" -eq 0 ]
 }
 
@@ -351,8 +316,8 @@ teardown() {
     [ "${status}" -eq 0 ]
 }
 
-@test "heredoc body text that merely looks like a dotnet test command is not blocked" {
-    run_hook "$(printf 'cat <<EOF\ndotnet test\nEOF')"
+@test "heredoc body text that merely looks like an npm test command is not blocked" {
+    run_hook "$(printf 'cat <<EOF\nnpm test\nEOF')"
     [ "${status}" -eq 0 ]
 }
 
