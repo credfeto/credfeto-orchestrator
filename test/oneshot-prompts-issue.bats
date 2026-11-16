@@ -207,12 +207,23 @@ declare -gA _WF_OPTION_IDS
     [[ "${output}" == *"killed the instant that turn ended"* ]]
 }
 
-@test "build_issue_claude_md mandates run_in_background for pre-commit, dotnet test, npm test, and bun test (#1270)" {
+# The build-dotnet MCP server runs the .NET build and test commands, which the container denies,
+# so the prompt sends agents to its tools instead of listing dotnet build and test as commands to
+# background.
+@test "build_issue_claude_md sends .NET builds and tests to the build-dotnet MCP tools, not raw dotnet" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"through the build-dotnet MCP tools (mcp__build-dotnet__*), never with raw dotnet commands"* ]]
+    [[ "${output}" == *"the Code Tester for tests and coverage"* ]]
+    [[ "${output}" == *"If the build-dotnet server is not connected at all, stop and report it as the blocker"* ]]
+    [[ "${output}" != *"dotnet build, dotnet test"* ]]
+}
+
+@test "build_issue_claude_md mandates run_in_background for pre-commit, npm test, and bun test (#1270)" {
     run build_issue_claude_md 42 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"must always be run with run_in_background: true"* ]]
     [[ "${output}" == *"unconditional, not a per-invocation judgement call"* ]]
-    [[ "${output}" == *"dotnet test"* ]]
     [[ "${output}" == *"npm test"* ]]
     [[ "${output}" == *"bun test"* ]]
     [[ "${output}" == *"git push and other bounded git operations are NOT covered by this rule"* ]]
@@ -543,12 +554,23 @@ declare -gA _WF_OPTION_IDS
     [[ "${output}" == *"WAIT for it to actually finish before doing anything else, including ending your turn"* ]]
 }
 
-@test "build_pr_claude_md mandates run_in_background for pre-commit, dotnet test, npm test, and bun test (#1270)" {
+# The build-dotnet MCP server runs the .NET build and test commands, which the container denies,
+# so the prompt sends agents to its tools instead of listing dotnet build and test as commands to
+# background.
+@test "build_pr_claude_md sends .NET builds and tests to the build-dotnet MCP tools, not raw dotnet" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"through the build-dotnet MCP tools (mcp__build-dotnet__*), never with raw dotnet commands"* ]]
+    [[ "${output}" == *"the Code Tester for tests and coverage"* ]]
+    [[ "${output}" == *"If the build-dotnet server is not connected at all, stop and report it as the blocker"* ]]
+    [[ "${output}" != *"dotnet build, dotnet test"* ]]
+}
+
+@test "build_pr_claude_md mandates run_in_background for pre-commit, npm test, and bun test (#1270)" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"must always be run with run_in_background: true"* ]]
     [[ "${output}" == *"unconditional, not a per-invocation judgement call"* ]]
-    [[ "${output}" == *"dotnet test"* ]]
     [[ "${output}" == *"npm test"* ]]
     [[ "${output}" == *"bun test"* ]]
     [[ "${output}" == *"git push and other bounded git operations are NOT covered by this rule"* ]]

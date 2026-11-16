@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
-# Blocks `dotnet tool install` (local or global) and `dotnet new tool-manifest`
-# outright. Other `dotnet tool` subcommands (list/restore/uninstall/update/
-# run/search) and other `dotnet new` templates are left alone.
+# Blocks the dotnet commands agents may not run:
+#   - `dotnet tool install` (local or global), `dotnet tool exec`/`execute` and
+#     `dotnet new tool-manifest`, which add tools the image does not pin;
+#   - the commands the build-dotnet MCP server runs as jobs (`build`, `test`,
+#     `restore`, `clean`, `cscleanup`, `buildcheck`, `format`,
+#     `reportgenerator`, `package search`, and the same tools through
+#     `dotnet tool run`), which agents run through that server's tools instead.
+# Other `dotnet tool` subcommands (list/restore/uninstall/update/search, and
+# run for any other tool) and other `dotnet new` templates are left alone.
 # Exit 2 = blocked, 0 = allowed.
 #
 # This container's .NET global tools are pinned and baked into the image at
@@ -10,24 +16,41 @@
 # `dotnet tool list -g`). A runtime `dotnet tool install` would add an
 # unpinned, unreviewed tool outside that list — not reproducible across
 # containers and not subject to the dependency-selection review the pinned
-# set went through. `dotnet new tool-manifest` is blocked for the same
-# reason: it seeds a local `.config/dotnet-tools.json` manifest whose entries
-# would then be installable via `dotnet tool restore`, the same bypass by a
-# different route.
+# set went through. `dotnet tool exec` downloads and runs a package without
+# installing it, the same bypass. `dotnet new tool-manifest` is blocked for
+# the same reason: it seeds a local `.config/dotnet-tools.json` manifest whose
+# entries would then be installable via `dotnet tool restore`.
+#
+# The build-dotnet MCP server runs the build, test, coverage, format and check
+# commands with a fixed argument set and keeps their logs, so
+# claude-managed-settings.json denies the raw commands. Its Bash patterns only
+# see the command text, so this hook finds the same subcommands wherever they
+# sit: after `cd x &&` or `;`, inside `$(...)`, after a wrapper, behind
+# `dotnet tool run`, or spelled with static quotes (`dotnet "build"`). An
+# option before the subcommand (`dotnet --diagnostics build`, or a runtime
+# option such as `--roll-forward` that runs an assembly directly) is refused
+# unless it is the whole command (`dotnet --info`, `dotnet --version`), since
+# the kept `Bash(dotnet --*)` allow would otherwise reach any subcommand.
+# `dotnet run` stays allowed, so a test project can still be started as an
+# application (`dotnet run --project X.Tests`); that is a known, accepted gap,
+# since agents need `dotnet run` for the application itself.
 #
 # Parses with shfmt (mvdan/sh) and walks the resulting AST, same approach as
 # the sibling block-git-worktree/enforce-git-policy (see those scripts'
 # header comments for the full rationale) — text/regex scanning for `tool
-# install`/`tool-manifest` would miss obfuscated forms and false-positive on
+# install`/`build` would miss obfuscated forms and false-positive on
 # unrelated text, so this only inspects the subcommand position of an actual
 # dotnet call expression.
 #
 # Obfuscated command names (quote-splices, substitutions, ${IFS} games) are
 # NOT this hook's job — reject-obfuscated-commands rejects those
-# categorically before this hook ever runs. Anything here that is not a
-# plain literal word is deliberately treated as opaque. A plain literal word
-# is compared as bash passes it, with unquoted backslash escapes removed, so
-# `dotnet tool inst\all` is still seen as `dotnet tool install`.
+# categorically before this hook ever runs. An argument word resolves to its
+# text when it is a plain literal or one layer of ordinary quoting with no
+# expansion inside (the literal_value rule enforce-background-for-long-running-commands
+# uses), with unquoted backslash escapes removed, so `dotnet tool inst\all`
+# and `dotnet "build"` are seen as `dotnet tool install` and `dotnet build`.
+# Anything else is opaque, and an opaque word in a checked subcommand
+# position blocks, since it could resolve to a blocked subcommand at runtime.
 #
 # Fails closed: shfmt missing or the command not parsing as shell blocks
 # the command.
@@ -65,33 +88,71 @@ command -v shfmt > /dev/null 2>&1 || block 'shfmt is not available to parse the 
 
 ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command could not be parsed as shell - failing closed'
 
-# One line per CallExpr: every word that is a single plain literal is
-# emitted with its backslash escapes decoded the way bash decodes an unquoted
-# word (shfmt keeps the raw backslash in Lit.Value, so `inst\all` would
-# otherwise never equal "install"); anything else (quoted text, substitutions, expansions)
-# is represented as a \x01 marker — layer 0 of reject-obfuscated-commands
-# (which runs before this hook) already guarantees a real \x01 byte can
-# never appear in the input, so the marker is unambiguous, can never equal
-# "dotnet"/"tool"/"install"/"new"/"tool-manifest" and so is opaque to the
-# checks below, and (unlike an empty string) is never dropped by
-# IFS=<tab> word-splitting's collapsing of consecutive whitespace
-# delimiters. A plain literal can still contain a raw tab: shfmt keeps an
-# unquoted backslash-escaped tab (`a\<TAB>b`, one word at runtime) as a
-# single Lit whose Value holds the tab byte, which would split into two
-# fields on the tab join and shift every later word's index. Such a word
-# (or one holding a newline or CR) is folded to the marker as well, the
-# same guard reject-obfuscated-commands applies to its own words line. The
-# decode runs before that guard because decoding `a\<TAB>b` is exactly what
-# produces such a raw tab.
+# One line per CallExpr: a word that is a single plain literal (backslash
+# escapes decoded the way bash decodes an unquoted word, since shfmt keeps the
+# raw backslash in Lit.Value), or one layer of single or double quoting
+# holding only literal text, resolves to that text. Anything else (a
+# substitution, an expansion, ANSI-C or locale quoting, mixed parts, an empty
+# quoted word) is a \x01 marker — layer 0 of reject-obfuscated-commands (which
+# runs before this hook) already guarantees a real \x01 byte can never appear
+# in the input, so the marker is unambiguous and, unlike an empty string, is
+# never dropped by IFS=<tab> word-splitting's collapsing of consecutive
+# whitespace delimiters. A resolved word holding a raw tab, newline or CR
+# (an unquoted backslash-escaped tab, `a\<TAB>b`, is one word at runtime) is
+# folded to the marker as well, so it cannot split into two fields on the
+# tab join and shift every later word's index.
 # Guarded like the ast=$(...) assignment above: a jq error would otherwise
 # leave $calls empty and the hook would silently allow the command.
 calls=$(printf '%s' "$ast" | jq -r '
+  def literal_value:
+    if (.Parts | length) != 1 then null
+    else
+      .Parts[0] as $p |
+      if ($p.Dollar // false) then null
+      elif $p.Type == "Lit" then ($p.Value | if . == null then null else gsub("\\\\(?<c>.)"; "\(.c)") end)
+      elif $p.Type == "SglQuoted" then $p.Value
+      elif $p.Type == "DblQuoted" and (($p.Parts // []) | length) == 1 and ($p.Parts[0].Type == "Lit")
+        then $p.Parts[0].Value
+      else null
+      end
+    end;
   .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
-  [ .Args[] |
-    (if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then (.Parts[0].Value | if . == null then null else gsub("\\\\(?<c>.)"; "\(.c)") end) else null end) as $w |
+  [ .Args[] | literal_value as $w |
     if $w == null or $w == "" or ($w | explode | any(. == 9 or . == 10 or . == 13)) then "\u0001" else $w end
   ] |
   join("\t")') || block 'command AST could not be analysed - failing closed'
+
+TOOL_INSTALL_REASON='dotnet tools are pinned and baked into the container image at build time; open an issue to add a new pinned tool instead'
+MCP_FALLBACK='a role without the build-dotnet tools hands the work to the role that has them (the Code Tester for tests and coverage); if the build-dotnet server is not connected, stop and report it instead of running dotnet directly'
+
+# The opaque marker the jq extraction above emits for a word it cannot resolve.
+OPAQUE_MARKER=$'\x01'
+
+# Denied subcommand or tool name -> what to use instead. A `dotnet-` prefix
+# is stripped before the lookup, so the tool command names
+# (`dotnet-buildcheck`, `dotnet-reportgenerator`, `dotnet-format`) match too.
+# csharpier is not MCP-covered, but claude-managed-settings.json denies it.
+declare -A USE_INSTEAD=(
+  [build]="the build-dotnet MCP server's build tool (mcp__build-dotnet__build)"
+  [test]="the build-dotnet MCP server's test or coverage tool (mcp__build-dotnet__test, mcp__build-dotnet__coverage)"
+  [restore]="the build-dotnet MCP server's restore tool (mcp__build-dotnet__restore)"
+  [clean]="the build-dotnet MCP server's buildtest tool, which cleans before it builds (mcp__build-dotnet__buildtest)"
+  [cscleanup]="the build-dotnet MCP server's cleanup tool (mcp__build-dotnet__cleanup)"
+  [buildcheck]="the build-dotnet MCP server's buildcheck tool (mcp__build-dotnet__buildcheck)"
+  [format]="the build-dotnet MCP server's cleanup or buildtest tool, which format the code (mcp__build-dotnet__cleanup, mcp__build-dotnet__buildtest)"
+  [reportgenerator]="the build-dotnet MCP server's coverage tool, which writes the report (mcp__build-dotnet__coverage)"
+  [csharpier]="the build-dotnet MCP server's cleanup tool, the repository's formatter (mcp__build-dotnet__cleanup)"
+)
+
+# Blocks when $1 (one word, `dotnet-` prefix already stripped) is a denied
+# subcommand or tool; $2 is how the agent wrote it, for the message.
+check_covered() {
+  local name="$1" shown="$2"
+  [ -z "$name" ] && return 0
+  [ "$name" = "$OPAQUE_MARKER" ] && block "dotnet with an unresolved word in the subcommand position is not permitted - it could resolve to a command that is denied here; write the subcommand as a plain word"
+  [ -n "${USE_INSTEAD[$name]+set}" ] && block "${shown} is not permitted - use ${USE_INSTEAD[$name]} instead; ${MCP_FALLBACK}"
+  return 0
+}
 
 while IFS= read -r call_line; do
   [ -z "$call_line" ] && continue
@@ -108,12 +169,45 @@ while IFS= read -r call_line; do
     tok="${words[$i]:-}"
     if [ "$tok" = "dotnet" ] || [[ "$tok" == */dotnet ]]; then
       j=$((i + 1))
-      if [ "${words[$j]:-}" = "tool" ] && [ "${words[$((j + 1))]:-}" = "install" ]; then
-        block 'dotnet tool install is prohibited in this repo - dotnet tools are pinned and baked into the container image at build time; open an issue to add a new pinned tool instead'
+      sub="${words[$j]:-}"
+      next="${words[$((j + 1))]:-}"
+
+      # dotnet --info, --version, --list-sdks: an option is fine as the whole
+      # command, but one before a subcommand (or before an assembly to run)
+      # would let the Bash(dotnet --*) allow reach any denied subcommand.
+      if [[ "$sub" == -* ]]; then
+        [ $((j + 1)) -lt "${#words[@]}" ] && block "dotnet options before the subcommand are not permitted (they would reach commands that are denied here, e.g. dotnet --diagnostics build) - run dotnet --info, --version, --list-sdks or --list-runtimes on their own, and put other options after the subcommand"
+        continue
       fi
-      if [ "${words[$j]:-}" = "new" ] && [ "${words[$((j + 1))]:-}" = "tool-manifest" ]; then
-        block 'dotnet new tool-manifest is prohibited in this repo - dotnet tools are pinned and baked into the container image at build time; open an issue to add a new pinned tool instead'
+
+      if [ "$sub" = "tool" ]; then
+        case "$next" in
+          install) block "dotnet tool install is prohibited in this repo - ${TOOL_INSTALL_REASON}" ;;
+          exec | execute) block "dotnet tool ${next} is prohibited in this repo - it downloads and runs a package the image does not pin; ${TOOL_INSTALL_REASON}" ;;
+          "$OPAQUE_MARKER") block "dotnet tool with an unresolved subcommand word is not permitted - it could resolve to install or exec at runtime; write the subcommand as a plain word" ;;
+          run)
+            # dotnet tool run [--allow-roll-forward] <command> [args]
+            k=$((j + 2))
+            while [[ "${words[$k]:-}" == -* ]]; do
+              k=$((k + 1))
+            done
+            [ "$k" -lt "${#words[@]}" ] && check_covered "${words[$k]#dotnet-}" "dotnet tool run ${words[$k]}"
+            ;;
+        esac
+        continue
       fi
+
+      if [ "$sub" = "new" ] && [ "$next" = "tool-manifest" ]; then
+        block "dotnet new tool-manifest is prohibited in this repo - ${TOOL_INSTALL_REASON}"
+      fi
+
+      if [ "$sub" = "package" ]; then
+        { [ "$next" = "search" ] || [ "$next" = "$OPAQUE_MARKER" ]; } \
+          && block "dotnet package search is not permitted - use the build-dotnet MCP server's package_versions tool (mcp__build-dotnet__package_versions) instead; ${MCP_FALLBACK}"
+        continue
+      fi
+
+      [ $j -lt "${#words[@]}" ] && check_covered "${sub#dotnet-}" "dotnet ${sub}"
     fi
   done
 done <<< "$calls"

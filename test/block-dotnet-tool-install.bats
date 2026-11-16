@@ -83,11 +83,6 @@ run_hook() {
     [ "${status}" -eq 0 ]
 }
 
-@test "dotnet build is allowed" {
-    run_hook "dotnet build"
-    [ "${status}" -eq 0 ]
-}
-
 @test "dotnet tool with no subcommand is allowed" {
     run_hook "dotnet tool"
     [ "${status}" -eq 0 ]
@@ -103,13 +98,14 @@ run_hook() {
     [ "${status}" -eq 0 ]
 }
 
-@test "a hardened invocation followed by a bare tool install via && is blocked" {
-    run_hook "dotnet build && dotnet tool install -g Foo.Bar"
+@test "an allowed invocation followed by a bare tool install via && is blocked" {
+    run_hook "dotnet --info && dotnet tool install -g Foo.Bar"
     [ "${status}" -eq 2 ]
+    [[ "${output}" == *'dotnet tool install is prohibited'* ]]
 }
 
-@test "a hardened invocation followed by a bare tool restore via && is allowed" {
-    run_hook "dotnet build && dotnet tool restore"
+@test "an allowed invocation followed by a bare tool restore via && is allowed" {
+    run_hook "dotnet --info && dotnet tool restore"
     [ "${status}" -eq 0 ]
 }
 
@@ -159,17 +155,20 @@ run_hook() {
     [ "${status}" -eq 0 ]
 }
 
-@test "an obfuscated tool install argument is opaque to this hook (reject-obfuscated-commands blocks it upstream)" {
+@test "a quoted-but-static tool word is read as tool, so tool install is still blocked" {
     run_hook 'dotnet "tool" install -g Foo.Bar'
-    [ "${status}" -eq 0 ]
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'dotnet tool install is prohibited'* ]]
 }
 
 # A backslash-escaped tab (tool\<TAB>install) is one word at runtime, so it is not the tool
 # subcommand; shfmt keeps it as a single Lit holding the raw tab, which must not split into two
-# tab-joined fields that read as `tool install`.
+# tab-joined fields that read as `tool install`. The word is unresolved, so it fails closed.
 @test "a backslash-escaped tab inside one word is not split into separate words" {
     run_hook $'dotnet tool\\\tinstall Foo.Bar'
-    [ "${status}" -eq 0 ]
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'unresolved word in the subcommand position'* ]]
+    [[ "${output}" != *'dotnet tool install is prohibited'* ]]
 }
 
 @test "a backslash-escaped letter inside the install word is blocked" {
@@ -211,4 +210,175 @@ run_hook() {
     run_hook "dotnet tool install"
     [ "${status}" -eq 2 ]
     [[ "${output}" == *'command did not run'* ]]
+}
+
+@test "dotnet tool exec and execute are blocked, since they run a package the image does not pin" {
+    local sub
+    for sub in exec execute; do
+        run_hook "dotnet tool ${sub} Foo.Bar"
+        [ "${status}" -eq 2 ]
+        [[ "${output}" == *"dotnet tool ${sub} is prohibited"* ]]
+    done
+}
+
+# --- commands the build-dotnet MCP server runs -----------------------------
+
+@test "each subcommand the build-dotnet MCP server covers is blocked, naming the MCP tool to use" {
+    local -A tool=(
+        [build]='mcp__build-dotnet__build'
+        [test]='mcp__build-dotnet__test'
+        [restore]='mcp__build-dotnet__restore'
+        [clean]='mcp__build-dotnet__buildtest'
+        [cscleanup]='mcp__build-dotnet__cleanup'
+        [buildcheck]='mcp__build-dotnet__buildcheck'
+        [format]='mcp__build-dotnet__cleanup'
+        [reportgenerator]='mcp__build-dotnet__coverage'
+    )
+    local sub
+    for sub in "${!tool[@]}"; do
+        run_hook "dotnet ${sub}"
+        [ "${status}" -eq 2 ]
+        [[ "${output}" == *"dotnet ${sub} is not permitted"* ]]
+        [[ "${output}" == *"${tool[$sub]}"* ]]
+        [[ "${output}" == *'the Code Tester for tests and coverage'* ]]
+        [[ "${output}" == *'if the build-dotnet server is not connected, stop and report it'* ]]
+        run_hook "dotnet ${sub} src/App.slnx -c Release"
+        [ "${status}" -eq 2 ]
+    done
+}
+
+@test "dotnet format style is blocked like every other dotnet format form" {
+    run_hook "dotnet format style src/App.slnx --verify-no-changes"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'dotnet format is not permitted'* ]]
+}
+
+@test "dotnet package search is blocked in favour of the package_versions tool" {
+    run_hook "dotnet package search Foo.Bar --exact-match --format json"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'mcp__build-dotnet__package_versions'* ]]
+}
+
+@test "other dotnet package subcommands are left to the permission rules" {
+    run_hook "dotnet package list"
+    [ "${status}" -eq 0 ]
+}
+
+@test "a covered subcommand is blocked whatever shape the command takes" {
+    local cmd
+    # shellcheck disable=SC2016  # literal $(...) - must reach the hook unexpanded
+    for cmd in \
+        "cd src && dotnet build" \
+        "cd src; dotnet test" \
+        "git -C . status && dotnet restore" \
+        "dotnet --info | dotnet buildcheck -solution x.slnx" \
+        "FOO=1 dotnet build" \
+        "sudo dotnet test" \
+        "/usr/bin/dotnet build" \
+        'x=$(dotnet test)' \
+        'dotnet "build"' \
+        "dotnet 'test'" \
+        'dotnet bu\ild' \
+        "dotnet dotnet-format"; do
+        run_hook "${cmd}"
+        if [ "${status}" -ne 2 ]; then
+            echo "not blocked: ${cmd}" >&2
+            return 1
+        fi
+    done
+}
+
+@test "an option before the subcommand is blocked, so it cannot reach a denied subcommand" {
+    local cmd
+    for cmd in "dotnet --diagnostics build" "dotnet -d test" "dotnet --roll-forward Major app.dll"; do
+        run_hook "${cmd}"
+        [ "${status}" -eq 2 ]
+        [[ "${output}" == *'dotnet options before the subcommand are not permitted'* ]]
+    done
+}
+
+@test "an option that is the whole dotnet command is allowed" {
+    local cmd
+    for cmd in "dotnet --info" "dotnet --version" "dotnet --list-sdks" "dotnet --list-runtimes" "dotnet -h"; do
+        run_hook "${cmd}"
+        [ "${status}" -eq 0 ]
+    done
+}
+
+@test "an unresolved word in the dotnet subcommand position fails closed" {
+    local cmd
+    # shellcheck disable=SC2016  # literal expansions - must reach the hook unexpanded
+    for cmd in 'dotnet $X' 'dotnet "$X"' "dotnet ''" 'dotnet $(echo build)'; do
+        run_hook "${cmd}"
+        [ "${status}" -eq 2 ]
+        [[ "${output}" == *'unresolved word in the subcommand position'* ]]
+    done
+}
+
+@test "dotnet tool run of a covered or denied tool is blocked, under either command name" {
+    local name
+    for name in buildcheck dotnet-buildcheck cscleanup dotnet-cscleanup reportgenerator dotnet-reportgenerator dotnet-format csharpier dotnet-csharpier; do
+        run_hook "dotnet tool run ${name} --help"
+        [ "${status}" -eq 2 ]
+        [[ "${output}" == *"dotnet tool run ${name} is not permitted"* ]]
+        [[ "${output}" == *'mcp__build-dotnet__'* ]]
+        run_hook "dotnet tool run --allow-roll-forward ${name}"
+        [ "${status}" -eq 2 ]
+    done
+}
+
+@test "ANSI-C, locale and mixed quoting in the subcommand position fail closed" {
+    local cmd
+    for cmd in $'dotnet $\'build\'' 'dotnet $"build"' 'dotnet "bu"ild'; do
+        run_hook "${cmd}"
+        [ "${status}" -eq 2 ]
+        [[ "${output}" == *'unresolved word in the subcommand position'* ]]
+    done
+}
+
+# Inside double quotes a backslash before a letter is kept, so "bu\ild" stays bu\ild at runtime.
+@test "a double-quoted backslash word is not decoded, so it is not read as build" {
+    run_hook 'dotnet "bu\ild"'
+    [ "${status}" -eq 0 ]
+}
+
+@test "an unresolved dotnet package subcommand fails closed" {
+    # shellcheck disable=SC2016  # literal $X - must reach the hook unexpanded
+    run_hook 'dotnet package $X Foo.Bar'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'dotnet package search is not permitted'* ]]
+}
+
+@test "an unresolved dotnet tool subcommand or tool run name fails closed" {
+    # shellcheck disable=SC2016  # literal $X - must reach the hook unexpanded
+    run_hook 'dotnet tool $X Foo.Bar'
+    [ "${status}" -eq 2 ]
+    # shellcheck disable=SC2016  # literal $X - must reach the hook unexpanded
+    run_hook 'dotnet tool run $X'
+    [ "${status}" -eq 2 ]
+}
+
+@test "the dotnet commands the build-dotnet MCP server does not cover are allowed" {
+    local cmd
+    for cmd in \
+        "dotnet buildversion --BuildNumber 1" \
+        'dotnet changelog -a Fixed -m "the build and test steps"' \
+        "dotnet code-analysis" \
+        "dotnet dotnet-script run.csx" \
+        "dotnet nuget list source" \
+        "dotnet nuget locals all --list" \
+        "dotnet pack src/App.slnx" \
+        "dotnet publish src/App/App.csproj" \
+        "dotnet run --project src/App -- test build" \
+        "dotnet tool run changelog --lint" \
+        "dotnet tool list -g" \
+        "dotnet tsqllint db" \
+        "grep -r 'dotnet build' docs" \
+        "echo dotnet test"; do
+        run_hook "${cmd}"
+        if [ "${status}" -ne 0 ]; then
+            echo "blocked: ${cmd}: ${output}" >&2
+            return 1
+        fi
+    done
 }
