@@ -9,17 +9,27 @@
 load test_helper
 load oneshot_helper
 
-# Writes a githubstatus.com unresolved-incidents body to a fixture file and points
-# GITHUB_STATUS_URL at it.
+# Writes a githubstatus.com status-summary body to a fixture file and points GITHUB_STATUS_URL
+# at it.
 use_status_fixture() {
     printf '%s' "$1" >"${TEST_TMP}/github-status.json"
     GITHUB_STATUS_URL="file://${TEST_TMP}/github-status.json"
 }
 
-# One unresolved incident named $1, created at $3, on the single component $2.
+# A status summary with one unresolved incident named $1, created at $3, on the single component
+# $2, with impact $4 (default major, so the incident is serious) and the component's live status $5
+# in the summary's components list (default major_outage when the impact is major or critical,
+# degraded_performance otherwise).
 incident_json() {
-    printf '{"incidents":[{"name":"%s","status":"investigating","created_at":"%s","components":[{"name":"%s"}]}]}' \
-        "$1" "$3" "$2"
+    local impact="${4:-major}" state="${5:-}"
+    if [ -z "${state}" ]; then
+        state=degraded_performance
+        if [ "${impact}" = major ] || [ "${impact}" = critical ]; then
+            state=major_outage
+        fi
+    fi
+    printf '{"components":[{"name":"%s","status":"%s"},{"name":"Copilot","status":"operational"}],"incidents":[{"name":"%s","status":"investigating","impact":"%s","created_at":"%s","components":[{"name":"%s"}]}]}' \
+        "$2" "${state}" "$1" "${impact}" "$3" "$2"
 }
 
 # main() with one open Issue in the feed. Each call that matters to the gate logs to
@@ -51,11 +61,11 @@ setup_gate_main() {
 
 # --- github_incident_open ----------------------------------------------------
 
-@test "GITHUB_STATUS_URL defaults to the githubstatus.com unresolved-incidents feed" {
+@test "GITHUB_STATUS_URL defaults to the githubstatus.com status summary" {
     # shellcheck disable=SC2016  # expands in the child shell
     run env -u GITHUB_STATUS_URL BASEDIR="${REPO_ROOT}" bash -c 'source "${BASEDIR}/lib/globals"; printf "%s\n" "${GITHUB_STATUS_URL}"'
     [ "${status}" -eq 0 ]
-    [ "${output}" = "https://www.githubstatus.com/api/v2/incidents/unresolved.json" ]
+    [ "${output}" = "https://www.githubstatus.com/api/v2/summary.json" ]
 }
 
 @test "the test environment points GITHUB_STATUS_URL at a healthy fixture, never the network" {
@@ -105,17 +115,94 @@ setup_gate_main() {
 }
 
 @test "github_incident_open reports the relevant incident when an unrelated one is listed first" {
-    use_status_fixture '{"incidents":[{"name":"Copilot is slow","created_at":"2026-11-04T09:00:00Z","components":[{"name":"Copilot"}]},{"name":"Git is down","created_at":"2026-11-04T10:00:00Z","components":[{"name":"Codespaces"},{"name":"Git Operations"}]}]}'
+    use_status_fixture '{"incidents":[{"name":"Copilot is slow","created_at":"2026-11-04T09:00:00Z","components":[{"name":"Copilot"}]},{"name":"Git is down","impact":"major","created_at":"2026-11-04T10:00:00Z","components":[{"name":"Codespaces"},{"name":"Git Operations"}]}]}'
     run github_incident_open
     [ "${status}" -eq 0 ]
     [ "${output}" = $'Git is down\t2026-11-04T10:00:00Z' ]
 }
 
 @test "github_incident_open flattens tabs and newlines in the incident name to one line" {
-    use_status_fixture '{"incidents":[{"name":"Git\tis\ndown","created_at":"2026-11-04T10:00:00Z","components":[{"name":"Git Operations"}]}]}'
+    use_status_fixture '{"incidents":[{"name":"Git\tis\ndown","impact":"critical","created_at":"2026-11-04T10:00:00Z","components":[{"name":"Git Operations"}]}]}'
     run github_incident_open
     [ "${status}" -eq 0 ]
     [ "${output}" = $'Git is down\t2026-11-04T10:00:00Z' ]
+}
+
+# --- serious or minor (#1964) -------------------------------------------------
+
+@test "github_incident_open reports a minor degraded incident on a used component as minor (returns 3)" {
+    use_status_fixture "$(incident_json "Incident with Pull Requests" "Pull Requests" "2026-11-16T11:59:40Z" minor degraded_performance)"
+    run github_incident_open
+    [ "${status}" -eq 3 ]
+    [ "${output}" = $'Incident with Pull Requests\t2026-11-16T11:59:40Z\tPull Requests: degraded_performance' ]
+}
+
+@test "github_incident_open treats an incident with no impact on an operational component as minor" {
+    use_status_fixture "$(incident_json "Investigating" "Issues" "2026-11-16T11:59:40Z" none operational)"
+    run github_incident_open
+    [ "${status}" -eq 3 ]
+    [ "${output}" = $'Investigating\t2026-11-16T11:59:40Z\tIssues: operational' ]
+}
+
+@test "github_incident_open reports a minor incident as serious when its component is in partial or major outage" {
+    local state
+    for state in partial_outage major_outage; do
+        use_status_fixture "$(incident_json "Git slow" "Git Operations" "2026-11-16T11:59:40Z" minor "${state}")"
+        run github_incident_open
+        if [ "${status}" -ne 0 ] || [ "${output}" != $'Git slow\t2026-11-16T11:59:40Z' ]; then
+            printf 'component status %s gave rc %s, output %s\n' "${state}" "${status}" "${output}" >&2
+            return 1
+        fi
+    done
+}
+
+@test "github_incident_open reports a major or critical incident as serious even when the component is only degraded" {
+    local impact
+    for impact in major critical; do
+        use_status_fixture "$(incident_json "Webhooks delayed" "Webhooks" "2026-11-16T11:59:40Z" "${impact}" degraded_performance)"
+        run github_incident_open
+        if [ "${status}" -ne 0 ]; then
+            printf 'impact %s gave rc %s\n' "${impact}" "${status}" >&2
+            return 1
+        fi
+    done
+}
+
+@test "github_incident_open reports the serious incident when a minor one on a used component is listed first" {
+    use_status_fixture '{"components":[{"name":"Pull Requests","status":"degraded_performance"},{"name":"Git Operations","status":"major_outage"}],"incidents":[{"name":"PRs slow","impact":"minor","created_at":"2026-11-16T11:00:00Z","components":[{"name":"Pull Requests"}]},{"name":"Git is down","impact":"minor","created_at":"2026-11-16T12:00:00Z","components":[{"name":"Git Operations"}]}]}'
+    run github_incident_open
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'Git is down\t2026-11-16T12:00:00Z' ]
+}
+
+@test "github_incident_open only counts the outage of a component the session uses" {
+    # Actions is in major outage, but the incident's used component (Issues) is only degraded.
+    use_status_fixture '{"components":[{"name":"Issues","status":"degraded_performance"},{"name":"Actions","status":"major_outage"}],"incidents":[{"name":"Mixed","impact":"minor","created_at":"2026-11-16T11:00:00Z","components":[{"name":"Actions"},{"name":"Issues"}]}]}'
+    run github_incident_open
+    [ "${status}" -eq 3 ]
+    [ "${output}" = $'Mixed\t2026-11-16T11:00:00Z\tIssues: degraded_performance' ]
+}
+
+@test "github_incident_open ignores a major incident only on unrelated components" {
+    use_status_fixture "$(incident_json "Copilot is down" "Copilot" "2026-11-16T11:00:00Z" critical major_outage)"
+    run github_incident_open
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+}
+
+@test "github_incident_open reports a minor incident's component status as unknown when the summary does not list it" {
+    local body
+    for body in \
+        '{"incidents":[{"name":"PRs slow","impact":"minor","created_at":"2026-11-16T11:00:00Z","components":[{"name":"Pull Requests"}]}]}' \
+        '{"components":"broken","incidents":[{"name":"PRs slow","impact":"minor","created_at":"2026-11-16T11:00:00Z","components":[{"name":"Pull Requests"}]}]}' \
+        '{"components":[{"name":"Pull Requests"}],"incidents":[{"name":"PRs slow","impact":"minor","created_at":"2026-11-16T11:00:00Z","components":[{"name":"Pull Requests"}]}]}'; do
+        use_status_fixture "${body}"
+        run github_incident_open
+        if [ "${status}" -ne 3 ] || [ "${output}" != $'PRs slow\t2026-11-16T11:00:00Z\tPull Requests: unknown' ]; then
+            printf 'body %s gave rc %s, output %s\n' "${body}" "${status}" "${output}" >&2
+            return 1
+        fi
+    done
 }
 
 @test "github_incident_open fails open (returns 2) when the status endpoint cannot be reached" {
@@ -176,6 +263,29 @@ setup_gate_main() {
     run main
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"GitHub incident open (Issues degraded"* ]]
+    [ ! -s "${CALLS}" ]
+}
+
+@test "main carries on with one warning while a minor incident leaves a used component only degraded" {
+    setup_gate_main
+    use_status_fixture "$(incident_json "Incident with Pull Requests" "Pull Requests" "2026-11-16T11:59:40Z" minor degraded_performance)"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"skipping work this tick"* ]]
+    [[ "${output}" == *"GitHub incident open (Incident with Pull Requests, since 2026-11-16T11:59:40Z, Pull Requests: degraded_performance) — minor, continuing"* ]]
+    [ "$(grep -c 'minor, continuing' <<<"${output}")" -eq 1 ]
+    grep -qx 'fetch_all_priorities' "${CALLS}"
+}
+
+@test "main skips all work while a minor incident has a used component in partial outage" {
+    setup_gate_main
+    use_status_fixture "$(incident_json "Git slow" "Git Operations" "2026-11-16T11:59:40Z" minor partial_outage)"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"GitHub incident open (Git slow, since 2026-11-16T11:59:40Z) — skipping work this tick"* ]]
+    [[ "${output}" != *"minor, continuing"* ]]
     [ ! -s "${CALLS}" ]
 }
 

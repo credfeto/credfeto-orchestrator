@@ -11,15 +11,23 @@
 ORCHESTRATOR_IMAGE="${ORCHESTRATOR_IMAGE:-ghcr.io/credfeto/development-agent:latest}"
 # shellcheck disable=SC2034  # read by lib/discord, lib/github and oneshot after sourcing
 PRIORITIES_URL="https://git-workflow.markridgwell.com/priorities"
-# githubstatus.com's unresolved-incidents feed, read once a tick by github_incident_open
-# (lib/github-health). Overridable from the environment so tests can point it at a fixture file
-# (file://) or a stub.
+# githubstatus.com's status summary (unresolved incidents plus every component's live status),
+# read once a tick by github_incident_open (lib/github-health). Overridable from the environment so
+# tests can point it at a fixture file (file://) or a stub.
 # shellcheck disable=SC2034  # read by lib/github-health and oneshot after sourcing
-GITHUB_STATUS_URL="${GITHUB_STATUS_URL:-https://www.githubstatus.com/api/v2/incidents/unresolved.json}"
-# The githubstatus.com components an orchestrator session depends on: an unresolved incident on any
-# of them skips the tick. Incidents on other components (Codespaces, Copilot, Actions and so on) do not.
+GITHUB_STATUS_URL="${GITHUB_STATUS_URL:-https://www.githubstatus.com/api/v2/summary.json}"
+# The githubstatus.com components an orchestrator session depends on. An unresolved incident on one
+# of them skips the tick when it is serious (see the two lists below); a minor one only logs a
+# warning. Incidents on other components (Codespaces, Copilot, Actions and so on) are ignored.
 # shellcheck disable=SC2034  # read by lib/github-health after sourcing
 GITHUB_HEALTH_COMPONENTS=("Git Operations" "Pull Requests" "Issues" "API Requests" "Webhooks")
+# An incident on a used component with one of these impacts skips the tick.
+# shellcheck disable=SC2034  # read by lib/github-health after sourcing
+GITHUB_HEALTH_SERIOUS_IMPACTS=("major" "critical")
+# A used component the incident names in one of these live statuses skips the tick, whatever the
+# incident's impact. degraded_performance (a slowdown) does not.
+# shellcheck disable=SC2034  # read by lib/github-health after sourcing
+GITHUB_HEALTH_OUTAGE_STATUSES=("partial_outage" "major_outage")
 # The start of the agent entrypoint's pre-flight message when GitHub refuses the SSH key
 # (containers/agent/entrypoint.sh, verify_ssh_signing). run_claude_fresh (lib/podman) looks for it
 # in a failed container's stderr; during an outage GitHub refuses keys that are fine, so oneshot

@@ -1,35 +1,69 @@
 # shellcheck shell=bash
 # The GitHub health gate: whether githubstatus.com reports an unresolved incident on a part of
-# GitHub the orchestrator's sessions need. During such an incident a session cannot push, comment
-# or write the board, so it achieves nothing and is charged against its item's idle budget; oneshot
-# skips the whole tick instead.
+# GitHub the orchestrator's sessions need, and whether it is bad enough to stop work. During a
+# serious incident a session cannot push, comment or write the board, so it achieves nothing and is
+# charged against its item's idle budget; oneshot skips the whole tick instead. A minor incident
+# (a slowdown that leaves those operations working) only earns a warning, so the fleet keeps going.
 
-# Prints "<name><TAB><created_at>" for the first unresolved incident whose components include one of
-# GITHUB_HEALTH_COMPONENTS (lib/globals), read from GITHUB_STATUS_URL, and returns 0.
-# Returns 1 when no such incident is open (none at all, or only incidents on other components such
-# as Codespaces or Copilot).
+# Reads the status summary (incidents and components) from GITHUB_STATUS_URL (lib/globals) and
+# looks at the unresolved incidents whose components include one of GITHUB_HEALTH_COMPONENTS.
+# Such an incident is serious when its impact is one of GITHUB_HEALTH_SERIOUS_IMPACTS (major,
+# critical), or when one of those used components currently has a status in
+# GITHUB_HEALTH_OUTAGE_STATUSES (partial_outage, major_outage) in the summary's components list.
+# Anything else on a used component (minor or no impact, and degraded_performance, operational or
+# an unlisted status) is minor.
+#
+# Returns 0 and prints "<name><TAB><created_at>" for the first serious incident.
+# Returns 3 and prints "<name><TAB><created_at><TAB><component>: <status>" for the first minor one
+# when no incident is serious; <component> is the first used component it names, and <status> is
+# that component's live status ("unknown" when the summary does not list it).
+# Returns 1 when no incident is open on a used component (none at all, or only incidents on other
+# components such as Codespaces, Copilot or Actions).
 # Returns 2 when the status could not be read: curl failed or timed out, or the body is not the
 # expected JSON. Callers must treat 2 as "healthy" (fail open), so a githubstatus.com problem never
 # stops the fleet on its own.
-# Tabs, carriage returns and newlines in the name are replaced with spaces, so the output is always
-# one line with exactly one tab.
+# Tabs, carriage returns and newlines in names and statuses are replaced with spaces, so the output
+# is always one line with a fixed number of tabs.
 github_incident_open() {
-    local status_json incident
+    local status_json result used impacts outages
     status_json=$(curl --silent --fail --location --connect-timeout 5 --max-time 10 \
         "${GITHUB_STATUS_URL}" 2>/dev/null) || return 2
+    used=$(jq -cn '$ARGS.positional' --args "${GITHUB_HEALTH_COMPONENTS[@]}") || return 2
+    impacts=$(jq -cn '$ARGS.positional' --args "${GITHUB_HEALTH_SERIOUS_IMPACTS[@]}") || return 2
+    outages=$(jq -cn '$ARGS.positional' --args "${GITHUB_HEALTH_OUTAGE_STATUSES[@]}") || return 2
     # jq -e: an object without an incidents array (an error page, "null", a bare array) fails the
-    # parse, so it is a lookup failure rather than "no incident".
-    incident=$(printf '%s' "${status_json}" | jq -er '
+    # parse, so it is a lookup failure rather than "no incident". A missing or malformed components
+    # list only means no live component status is known.
+    result=$(printf '%s' "${status_json}" | jq -er \
+        --argjson used "${used}" --argjson impacts "${impacts}" --argjson outages "${outages}" '
+        def flat: tostring | gsub("[\t\r\n]"; " ");
+        def member($list): . as $v | any($list[]; . == $v);
         if (type == "object") and ((.incidents | type) == "array") then
-            [ .incidents[]
+            ((.components // []) as $c
+                | if ($c | type) == "array"
+                  then [ $c[] | select(type == "object") | {key: ((.name // "") | tostring), value: ((.status // "") | tostring)} ] | from_entries
+                  else {} end) as $live
+            | [ .incidents[]
                 | select(type == "object")
-                | select(any((.components // [])[]?; (.name? // "") as $n | any($ARGS.positional[]; . == $n))) ]
+                | [ (.components // [])[]? | (.name? // "") | select(type == "string") | select(member($used)) ] as $hit
+                | select($hit | length > 0)
+                | {
+                    name: ((.name // "unnamed incident") | flat),
+                    created: ((.created_at // "unknown time") | flat),
+                    serious: (((.impact // "") | tostring | member($impacts))
+                        or any($hit[]; ($live[.] // "") | member($outages))),
+                    component: ($hit[0] | flat),
+                    state: (($live[$hit[0]] // "unknown") | if . == "" then "unknown" else . end | flat)
+                  } ]
             | if length == 0 then ""
-              else first | "\((.name // "unnamed incident") | tostring | gsub("[\t\r\n]"; " "))\t\(.created_at // "unknown time")"
+              elif any(.[]; .serious) then first(.[] | select(.serious)) | "serious\t\(.name)\t\(.created)"
+              else first | "minor\t\(.name)\t\(.created)\t\(.component): \(.state)"
               end
         else
             error("unexpected status JSON")
-        end' --args "${GITHUB_HEALTH_COMPONENTS[@]}" 2>/dev/null) || return 2
-    [ -n "${incident}" ] || return 1
-    printf '%s\n' "${incident}"
+        end' 2>/dev/null) || return 2
+    [ -n "${result}" ] || return 1
+    printf '%s\n' "${result#*$'\t'}"
+    [ "${result%%$'\t'*}" = "serious" ] && return 0
+    return 3
 }

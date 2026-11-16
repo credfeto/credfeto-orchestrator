@@ -151,11 +151,13 @@ If `DISCORD_WEBHOOK` is absent or the file does not exist, Discord notifications
 ### GitHub health gate
 
 At the start of every tick, after taking the lock and before fetching priorities, `oneshot`
-reads GitHub's unresolved incidents from
-[githubstatus.com](https://www.githubstatus.com/api/v2/incidents/unresolved.json) (a single
-`curl` with a 5 second connect timeout and a 10 second total timeout). If an incident is open on
-any of the components the agent's sessions depend on (**Git Operations**, **Pull Requests**,
-**Issues**, **API Requests** or **Webhooks**), the tick does no work at all. It logs one line:
+reads GitHub's status summary, the unresolved incidents and every component's live status, from
+[githubstatus.com](https://www.githubstatus.com/api/v2/summary.json) (a single
+`curl` with a 5 second connect timeout and a 10 second total timeout). If a serious incident is
+open on any of the components the agent's sessions depend on (**Git Operations**, **Pull
+Requests**, **Issues**, **API Requests** or **Webhooks**), the tick does no work at all. An
+incident is serious when its impact is **major** or **critical**, or when one of those components
+it names is in **partial outage** or **major outage**. It logs one line:
 
 ```text
 GitHub incident open (<incident name>, since <start time>) — skipping work this tick
@@ -168,6 +170,10 @@ item's idle budget for "making no progress", because it cannot push, comment or 
 card, and a healthy PR can be marked `Blocked` as idle-exhausted within minutes. No session runs
 in a tick the gate stops, so no idle budget is charged and no PR is parked.
 
+- A minor incident on one of those components (minor or no impact, with the component only
+  degraded) does not stop the tick: GitHub still works, so `oneshot` logs
+  `GitHub incident open (<incident name>, since <start time>, <component>: <status>) — minor, continuing`
+  and carries on.
 - Incidents only on other components (for example Codespaces, Copilot or Actions) do not stop
   the tick.
 - The gate fails open: if githubstatus.com cannot be reached, times out or returns something that

@@ -269,12 +269,14 @@ main() {
     # due takes its own per-owner digest lock for that.
     run_daily_digest_rollover "${owner_filter}"
 
-    # The GitHub health gate (#1846), before the priorities fetch and the first gh call. While
-    # githubstatus.com has an unresolved incident on a component a session needs (Git Operations,
-    # Pull Requests, Issues, API Requests or Webhooks), a session can neither push, comment nor write
-    # the board: it fails pre-flight or is charged idle budget for making no progress, and a healthy
-    # PR can be parked as idle-exhausted. Exiting 0 here, as the low-disk-space skip does, runs no
-    # session at all this tick, so nothing is charged and the unit does not record a failure. A
+    # The GitHub health gate (#1846, #1964), before the priorities fetch and the first gh call.
+    # While githubstatus.com has a serious unresolved incident on a component a session needs (Git
+    # Operations, Pull Requests, Issues, API Requests or Webhooks: major or critical impact, or the
+    # component in partial or major outage), a session can neither push, comment nor write the
+    # board: it fails pre-flight or is charged idle budget for making no progress, and a healthy PR
+    # can be parked as idle-exhausted. Exiting 0 here (rc 0), as the low-disk-space skip does, runs
+    # no session at all this tick, so nothing is charged and the unit does not record a failure. A
+    # minor incident (rc 3: the component only degraded) logs a warning and the tick carries on. A
     # lookup that fails (rc 2: unreachable, timed out or not the expected JSON) fails open, so a
     # githubstatus.com problem never stops the fleet on its own.
     local github_incident github_incident_rc=0
@@ -282,6 +284,12 @@ main() {
     if [ "${github_incident_rc}" -eq 0 ]; then
         warn "GitHub incident open (${github_incident%%$'\t'*}, since ${github_incident#*$'\t'}) — skipping work this tick"
         exit 0
+    fi
+    if [ "${github_incident_rc}" -eq 3 ]; then
+        # A minor incident on a component sessions use (impact minor or none, and the component only
+        # degraded): GitHub still works, so the tick goes ahead and the warning is the only trace.
+        local minor_rest="${github_incident#*$'\t'}"
+        warn "GitHub incident open (${github_incident%%$'\t'*}, since ${minor_rest%%$'\t'*}, ${minor_rest#*$'\t'}) — minor, continuing"
     fi
     if [ "${github_incident_rc}" -eq 2 ]; then
         warn "Could not read GitHub status from ${GITHUB_STATUS_URL} — carrying on as if GitHub is healthy"
