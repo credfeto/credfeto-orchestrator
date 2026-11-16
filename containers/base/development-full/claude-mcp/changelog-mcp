@@ -123,7 +123,8 @@ local_tool_is_listed() {
     # report it missing, when the user's own local one is there.
     command -v jq >/dev/null 2>&1 || fail "jq is not on PATH to read dotnet tool list's output"
     # Only stdout is captured, so dotnet never writes to the MCP stream; its stderr passes through.
-    # The subshell keeps this cd to itself; each exec below changes to HOME on its own.
+    # The subshell keeps this cd to itself; each exec below changes directory on its own (the local
+    # tool to HOME, the global tool to the repository root).
     # Its stdin is /dev/null for the same reason as git's above.
     list_json=$(cd "${HOME}" && dotnet tool list --local --format json </dev/null) \
         || fail "dotnet tool list --local --format json failed in ${HOME}"
