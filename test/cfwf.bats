@@ -13792,7 +13792,7 @@ commit_reads() {
         [[ "${output}" == *"Any pull request in"*"the repository can be edited, whoever opened it and whoever wrote its commits"* ]]
         [[ "${output}" != *"edit refused"* ]]
         [[ "${output}" != *"PR_CREATOR_LOGIN"* ]]
-        [[ "${output}" == *"Exit codes: 0 edited, or nothing to write; 1 a runtime failure"*"or the priority by the Security rule;"*"9 the pull request does not exist"* ]]
+        [[ "${output}" == *"Exit codes: 0 edited, or nothing to write; 1 a runtime failure"*"the priority by the Security rule, or --assign-self because another"*"user is assigned; 9 the pull request does not exist"* ]]
         [[ "${output}" == *"--priority     Make the pull request's priority Security, Urgent, High, Medium or Low"*"Security is never replaced"* ]]
     done
     run --separate-stderr "${SCRIPT}" help pr
@@ -14008,7 +14008,7 @@ issue_edits_made() {
         [ "${status}" -eq 0 ]
         [[ "${output}" == "Usage: cfwf issue edit --repo <owner/repo> --issue <n> [--title <title>] [--body-file <file|->] [--priority <priority>] [--assign-self]"* ]]
         [[ "${output}" == *"It need not be a Conventional Commits title"* ]]
-        [[ "${output}" == *"Exit codes: 0 edited, or nothing to write; 1 a runtime failure"*"or the priority by the Security rule; 9 the issue does"*"not exist, or the number is a pull request's."* ]]
+        [[ "${output}" == *"Exit codes: 0 edited, or nothing to write; 1 a runtime failure"*"the priority by the Security rule, or --assign-self because another"*"user is assigned; 9 the issue does not exist, or the number is a pull request's."* ]]
         [[ "${output}" == *"--priority     Make the issue's priority Security, Urgent, High, Medium or Low"*"Security is never replaced"* ]]
     done
     run --separate-stderr "${SCRIPT}" help issue
@@ -19190,7 +19190,7 @@ no_label_removed() {
         [[ "${output}" == *$'\n'"  cfwf: warning: <owner/repo> has no label <name>; it was not added"$'\n'* ]]
         [[ "${output}" == *"Output: each label added, one a line, then \"<url> synced\""* ]]
         [[ "${output}" == *"Exit codes: 0 synced (nothing to add included); 1 a runtime failure"* ]]
-        [[ "${output}" == *"so a partial sync is never reported as complete; 2 a usage error."* ]]
+        [[ "${output}" == *"so a partial sync is never reported as complete; 2 a usage error; 8"*"--assign-self on a pull request assigned to another user"* ]]
         [[ "${output}" != *"usage_"* ]]
     done
     run "${SCRIPT}" help pr
@@ -19477,4 +19477,144 @@ review_comment_post() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *$'\n'"  pr reply "*$'\n'"  pr review-comment        Post a new inline review comment on a line or a range of a PR's diff (exit 8 refused, 9 not found)"$'\n'"  pr hand-off "* ]]
     [ ! -f "${GH_LOG}" ]
+}
+
+# --- --assign-self refuses an item assigned to another user (#1962) -------------
+
+# Sets the assignees of the pull request EDIT_PR, as the REST read pr edit makes answers it, to the
+# logins given (none for no assignee).
+set_pr_edit_assignees() {
+    local fixture
+    fixture="$(api_fixture "repos/${REPO}/pulls/${EDIT_PR}").json"
+    jq --args '. + {assignees: ($ARGS.positional | map({login: .}))}' "$@" < "${fixture}" > "${fixture}.next"
+    mv "${fixture}.next" "${fixture}"
+}
+
+# Sets the assignees of issue EDIT_ISSUE, as gh issue view answers it, to the logins given.
+set_issue_edit_assignees() {
+    local fixture
+    fixture="$(issue_fixture "${EDIT_ISSUE}").json"
+    jq --args '. + {assignees: ($ARGS.positional | map({login: .}))}' "$@" < "${fixture}" > "${fixture}.next"
+    mv "${fixture}.next" "${fixture}"
+}
+
+# Sets the assignees of the pull request SYNC_PR, as gh pr view answers it, to the logins given.
+set_sync_assignees() {
+    jq --args '. + {assignees: ($ARGS.positional | map({login: .}))}' "$@" < "${GH_FIXTURES}/pr-view.json" > "${GH_FIXTURES}/pr-view.next.json"
+    mv "${GH_FIXTURES}/pr-view.next.json" "${GH_FIXTURES}/pr-view.json"
+}
+
+@test "pr edit --assign-self assigns an unassigned pull request, and one the agent already holds, in any case beside others (#1962)" {
+    prepare_pr_edit
+    set_pr_edit_assignees
+    run_pr_edit --assign-self
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_PR_URL}" ]
+    issue_create_called_with "pr edit ${EDIT_PR} --repo ${REPO} --add-assignee ${AGENT}"
+
+    rm -f "${GH_LOG}"
+    set_pr_edit_assignees someone-else "${AGENT^^}"
+    run_pr_edit --assign-self
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    issue_create_called_with "pr edit ${EDIT_PR} --repo ${REPO} --add-assignee ${AGENT}"
+}
+
+@test "pr edit --assign-self refuses a pull request assigned to another user with exit 8, writing nothing, not even the title (#1962)" {
+    prepare_pr_edit
+    set_pr_edit_assignees someone-else
+    run_pr_edit --title "${EDIT_TITLE}" --body-file "${TEST_TMP}/edit-body.md" --priority High --assign-self
+    [ "${status}" -eq 8 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: assign refused: already assigned to another user" ]
+    [ "$(edits_made)" -eq 0 ]
+    [ "$(gh_call_count "label create")" -eq 0 ]
+
+    # Without --assign-self the assignees are no bar to an edit.
+    rm -f "${GH_LOG}"
+    run_pr_edit --title "${EDIT_TITLE}"
+    [ "${status}" -eq 0 ]
+    [ "$(edits_made)" -eq 1 ]
+}
+
+@test "issue edit --assign-self assigns an unassigned issue, and one the agent already holds beside others (#1962)" {
+    prepare_issue_edit
+    set_issue_edit_assignees
+    run_issue_edit --assign-self
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_ISSUE_URL}" ]
+    issue_create_called_with "issue edit ${EDIT_ISSUE} --repo ${REPO} --add-assignee ${AGENT}"
+
+    rm -f "${GH_LOG}"
+    set_issue_edit_assignees "${AGENT}" someone-else
+    run_issue_edit --assign-self
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    issue_create_called_with "issue edit ${EDIT_ISSUE} --repo ${REPO} --add-assignee ${AGENT}"
+}
+
+@test "issue edit --assign-self refuses an issue assigned to another user with exit 8, writing nothing (#1962)" {
+    prepare_issue_edit
+    set_issue_edit_assignees someone-else other-user
+    run_issue_edit --title "${EDIT_ISSUE_TITLE}" --body-file "${TEST_TMP}/edit-body.md" --assign-self
+    [ "${status}" -eq 8 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: assign refused: already assigned to another user" ]
+    [ "$(issue_edits_made)" -eq 0 ]
+
+    rm -f "${GH_LOG}"
+    run_issue_edit --title "${EDIT_ISSUE_TITLE}"
+    [ "${status}" -eq 0 ]
+    [ "$(issue_edits_made)" -eq 1 ]
+}
+
+@test "issue edit dies on an assignee that is not a login, writing nothing (#1962)" {
+    prepare_issue_edit
+    set_issue_edit_assignees "not a login"
+    run_issue_edit --assign-self
+    [ "${status}" -eq 1 ]
+    [[ "${stderr}" == "cfwf: gh returned an unexpected assignee for ${REPO}"* ]]
+    [ "$(issue_edits_made)" -eq 0 ]
+}
+
+@test "pr sync-labels --assign-self assigns a pull request that is unassigned or already the agent's (#1962)" {
+    write_sync_pr "${REPO} 10"
+    write_sync_issue_labels 10 Bug
+    write_repository_labels Bug
+    write_agent_login
+    set_sync_assignees "${AGENT}"
+    run_sync_labels --assign-self
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(printf 'Bug\n%s synced' "${SYNC_PR_URL}")" ]
+    [ "$(gh_call_count "--add-assignee ${AGENT}")" -eq 1 ]
+}
+
+@test "pr sync-labels --assign-self refuses a pull request assigned to another user before adding any label (#1962)" {
+    write_sync_pr "${REPO} 10"
+    write_sync_issue_labels 10 Bug
+    write_repository_labels Bug
+    write_agent_login
+    set_sync_assignees someone-else
+    run_sync_labels --assign-self
+    [ "${status}" -eq 8 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: assign refused: already assigned to another user" ]
+    [ "$(gh_call_count " edit ")" -eq 0 ]
+
+    # Without --assign-self the labels are still synced.
+    rm -f "${GH_LOG}"
+    run_sync_labels
+    [ "${status}" -eq 0 ]
+    [ "$(gh_call_count "--add-label Bug")" -eq 1 ]
+}
+
+@test "the help of issue edit, pr edit and pr sync-labels describes the assign refusal (#1962)" {
+    local command
+    local -a words
+    for command in "issue edit" "pr edit" "pr sync-labels"; do
+        read -r -a words <<< "${command}"
+        run "${SCRIPT}" help "${words[@]}"
+        [ "${status}" -eq 0 ]
+        [[ "$(printf '%s' "${output}" | tr '\n' ' ' | tr -s ' ')" == *"assigned to another user"* ]]
+    done
 }
