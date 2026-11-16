@@ -57,3 +57,6 @@ docker	is not permitted - container execution is banned in this workflow
 nerdctl	is not permitted - container execution is banned in this workflow
 
 gh	is not permitted - raw gh is not available to agents; use cfwf (run `cfwf help`)
+
+# The build-dotnet MCP server runs FunFair.BuildCheck; the raw command is denied
+buildcheck	is not permitted - use the build-dotnet MCP server's buildcheck tool (mcp__build-dotnet__buildcheck) instead

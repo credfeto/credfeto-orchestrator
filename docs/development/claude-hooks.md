@@ -94,7 +94,7 @@ It blocks `git worktree add` and `git worktree move` (also when the word is quot
 
 ### block-dotnet-tool-install
 
-It blocks `dotnet tool install` and `dotnet new tool-manifest` (also behind a wrapper name), because .NET tools are pinned in the image. `claude-managed-settings.json` denies the same two patterns as well.
+It blocks `dotnet tool install`, `dotnet tool exec` and `dotnet new tool-manifest` (also behind a wrapper name), because .NET tools are pinned in the image. It also blocks the commands the build-dotnet MCP server runs (`dotnet build`, `test`, `restore`, `clean`, `cscleanup`, `buildcheck`, `format`, `reportgenerator` and `package search`, and `dotnet tool run` of the covered tools and `csharpier`), naming the MCP tool to use. It checks every call in the command, reads one layer of static quoting, fails closed on an unresolved subcommand word, and refuses an option before the subcommand unless the option is the whole command (`dotnet --info`), since the kept `Bash(dotnet --*)` allow would otherwise reach any subcommand. `claude-managed-settings.json` denies the same commands, plain and after `cd * &&`, and the bare `buildcheck` command is on `command-blocklist` and denied as well; `test/command-allowlist-parity.bats` pins those entries and the dotnet commands that stay allowed.
 
 ### block-github-mcp-write-tools
 
@@ -114,7 +114,7 @@ It allows curl only with the flags in `ALLOWED_NOARG_FLAGS` and `ALLOWED_ARG_FLA
 
 ### enforce-background-for-long-running-commands
 
-It blocks `git commit`, `pre-commit`, `pre-commit-check`, `buildtest`, `dotnet build`, `dotnet test`, `npm test` and `bun test` unless `run_in_background` is exactly `true`, and fails closed on an unresolved (non-literal) subcommand in the same position, since it could resolve to one of those at runtime. `git push` is not in its list.
+It blocks `git commit`, `pre-commit`, `pre-commit-check`, `buildtest`, `npm test` and `bun test` unless `run_in_background` is exactly `true`, and fails closed on an unresolved (non-literal) subcommand in the same position, since it could resolve to one of those at runtime. `git push` is not in its list.
 
 ### cache-gh-lookups
 

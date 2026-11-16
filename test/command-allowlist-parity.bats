@@ -275,3 +275,52 @@ EXPECTED_NON_BASH_TOOLS=(
         printf '%s\n' "${deny_entries}" | grep -qxF "Bash(npm * -${opt}*)"
     done
 }
+
+# The build-dotnet MCP server runs these as jobs, so the raw commands are denied (plain and after
+# cd), and nothing in permissions.allow names them. block-dotnet-tool-install refuses the same
+# subcommands whatever shape the command takes; these entries are the permission-layer half.
+@test "the dotnet commands the build-dotnet MCP server covers are denied, and the others stay allowed" {
+    local allow_entries deny_entries sub prefix tool covered_allow
+    if [ ! -s "${SETTINGS}" ]; then
+        echo "SETTINGS not found or empty: ${SETTINGS}" >&2
+        return 1
+    fi
+    allow_entries=$(jq -r '.permissions.allow[]' "${SETTINGS}")
+    deny_entries=$(jq -r '.permissions.deny[]' "${SETTINGS}")
+
+    for prefix in "" "cd * && "; do
+        for sub in build buildcheck clean cscleanup format "package search" reportgenerator restore test; do
+            printf '%s\n' "${deny_entries}" | grep -qxF "Bash(${prefix}dotnet ${sub})"
+            printf '%s\n' "${deny_entries}" | grep -qxF "Bash(${prefix}dotnet ${sub} *)"
+        done
+        for tool in buildcheck cscleanup csharpier reportgenerator; do
+            printf '%s\n' "${deny_entries}" | grep -qxF "Bash(${prefix}dotnet tool run ${tool}*)"
+            printf '%s\n' "${deny_entries}" | grep -qxF "Bash(${prefix}dotnet tool run dotnet-${tool}*)"
+        done
+        printf '%s\n' "${deny_entries}" | grep -qxF "Bash(${prefix}dotnet tool run dotnet-format*)"
+        printf '%s\n' "${deny_entries}" | grep -qxF "Bash(${prefix}dotnet tool exec*)"
+        printf '%s\n' "${deny_entries}" | grep -qxF "Bash(${prefix}dotnet csharpier)"
+        printf '%s\n' "${deny_entries}" | grep -qxF "Bash(${prefix}dotnet csharpier *)"
+    done
+
+    # The bare buildcheck command runs the same check, so it is denied by both layers too.
+    printf '%s\n' "${deny_entries}" | grep -qxF 'Bash(buildcheck)'
+    printf '%s\n' "${deny_entries}" | grep -qxF 'Bash(buildcheck *)'
+    run grep -E '^[[:space:]]*buildcheck[[:space:]]' "${ALLOWLIST}"
+    [ "${status}" -ne 0 ]
+    grep -qxF "$(printf 'buildcheck\t%s' "is not permitted - use the build-dotnet MCP server's buildcheck tool (mcp__build-dotnet__buildcheck) instead")" "${BLOCKLIST}"
+
+    covered_allow=$(printf '%s\n' "${allow_entries}" | grep -E '^Bash\(((cd \* && )?dotnet (build|buildcheck|clean|cscleanup|csharpier|format|package|reportgenerator|restore|test)|buildcheck)( |\)|\*)' || true)
+    if [ -n "${covered_allow}" ]; then
+        echo "permissions.allow still allows a dotnet command the build-dotnet MCP server covers:" >&2
+        echo "${covered_allow}" >&2
+        return 1
+    fi
+
+    for sub in "--*" "buildversion *" "changelog *" "code-analysis *" "dotnet-script *" "nuget *" "pack *" "publish *" "run *" "tool *" "tsqllint *"; do
+        printf '%s\n' "${allow_entries}" | grep -qxF "Bash(dotnet ${sub})"
+        printf '%s\n' "${allow_entries}" | grep -qxF "Bash(cd * && dotnet ${sub})"
+    done
+    printf '%s\n' "${allow_entries}" | grep -qxF 'Bash(dotnet nuget list source)'
+    printf '%s\n' "${allow_entries}" | grep -qxF 'mcp__build-dotnet__*'
+}
