@@ -847,13 +847,14 @@ kb_token_privacy_predicates() {
 }
 
 # The Node server reads the same BUILD_MCP_REPO_ROOT and BUILD_MCP_TOOL as build-dotnet, whose test
-# above pins them. development-full does not check the global tool or the package: its pull-request
-# build starts from the published development-credfeto-tools image, which checks both itself.
-@test "the Dockerfile sanity block pins the build-node server, its wrapper's owner and mode and its allow rule (#1970)" {
+# above pins them.
+@test "the Dockerfile sanity block pins the build-node server, its wrapper's owner and mode, the global tool and its allow rule (#1970, #1972)" {
     local dockerfile="${SOURCE_DIR}/Dockerfile"
     grep -qF "jq -e '.mcpServers[\"build-node\"] == {\"type\": \"stdio\", \"command\": \"/etc/claude-code/mcp/build-node-mcp\"}' /etc/claude-code/managed-mcp.json" "${dockerfile}"
     grep -qF "[ \"\$(stat -c '%U:%G %a' /etc/claude-code/mcp/build-node-mcp)\" = \"root:root 755\" ]" "${dockerfile}"
+    grep -qF '[ -x /home/developer/.dotnet/tools/credfeto-build-node ]' "${dockerfile}"
     grep -qF "jq -e '.permissions.allow | index(\"mcp__build-node__*\")' /etc/claude-code/managed-settings.json" "${dockerfile}"
+    grep -qE 'for tool in .* credfeto\.build\.node\.server( .*)?; do' "${dockerfile}"
 }
 
 @test "the Dockerfile sanity block pins the changelog server, its wrapper's owner and mode, its root, its tool mode and allow rule" {

@@ -422,7 +422,7 @@ RUN set -e; \
     claude --version >/dev/null 2>&1 || claude --help >/dev/null 2>&1 \
         || { echo "FATAL sanity: 'claude' is not functional" >&2; exit 1; }; \
     echo "== dotnet tools =="; \
-    for tool in credfeto.changelog.cmd credfeto.dotnet.code.analysis.overrides.cmd tsqllint funfair.buildcheck funfair.buildversion cwm.roslynnavigator dotnet-ef ilspycmd microsoft.sqlpackage credfeto.dotnet.repo.formatter dotnet-script dotnet-reportgenerator-globaltool credfeto.build.dotnet.server; do \
+    for tool in credfeto.changelog.cmd credfeto.dotnet.code.analysis.overrides.cmd tsqllint funfair.buildcheck funfair.buildversion cwm.roslynnavigator dotnet-ef ilspycmd microsoft.sqlpackage credfeto.dotnet.repo.formatter dotnet-script dotnet-reportgenerator-globaltool credfeto.build.dotnet.server credfeto.build.node.server; do \
         if ! su developer -c "dotnet tool list -g" | awk '{print tolower($1)}' | grep -Fxq "$tool"; then \
             echo "FATAL sanity: dotnet tool '$tool' is missing" >&2; exit 1; \
         fi; \
@@ -502,6 +502,8 @@ RUN set -e; \
         || { echo "FATAL sanity: /home/developer/.dotnet/tools/credfeto-build-dotnet, the build-dotnet MCP server, is missing or not executable" >&2; exit 1; }; \
     jq -e '.mcpServers["build-node"] == {"type": "stdio", "command": "/etc/claude-code/mcp/build-node-mcp"}' /etc/claude-code/managed-mcp.json >/dev/null \
         || { echo "FATAL sanity: managed-mcp.json must hold the required build-node server, and as the file is world-readable it must be exactly the stdio server started by /etc/claude-code/mcp/build-node-mcp, with no env" >&2; exit 1; }; \
+    [ -x /home/developer/.dotnet/tools/credfeto-build-node ] \
+        || { echo "FATAL sanity: /home/developer/.dotnet/tools/credfeto-build-node, the build-node MCP server, is missing or not executable" >&2; exit 1; }; \
     jq -e '.mcpServers.changelog == {"type": "stdio", "command": "/etc/claude-code/mcp/changelog-mcp"}' /etc/claude-code/managed-mcp.json >/dev/null \
         || { echo "FATAL sanity: managed-mcp.json must hold the required changelog server, and as the file is world-readable it must be exactly the stdio server started by /etc/claude-code/mcp/changelog-mcp, with no env" >&2; exit 1; }; \
     [ "${CHANGELOG_MCP_REPO_ROOT}" = "/workspace/repo" ] \
