@@ -276,6 +276,33 @@ fetch_branch_requires_status_checks() {
     ' 2>/dev/null
 }
 
+# Prints the verdict of each check that branch requires on its tip in repository repo_full, as the
+# in-repo cfwf (CFWF_SCRIPT) judges it with `pr checks --branch` (#1584): the newest run of each
+# required check (every check when the branch requires none), one "<name><TAB>pass|fail|pending"
+# line each, the same names and verdicts an agent sees. It reads REST only, never GraphQL. A required
+# check that has no result on the tip (it has not finished, or its workflow runs only on pull
+# requests) is "pending". Prints nothing when the tip has no check runs or statuses at all. Returns 1
+# when cfwf is missing or fails (a gh or network error, a branch that is not found) or prints a
+# line it does not expect, so the caller never reads a partial list as the branch's verdicts.
+fetch_branch_check_verdicts() {
+    local repo_full="$1" branch="$2" output rc=0
+    [ -n "${repo_full}" ] && [ -n "${branch}" ] || return 1
+    [ -x "${CFWF_SCRIPT}" ] || return 1
+    output=$("${CFWF_SCRIPT}" pr checks --repo "${repo_full}" --branch "${branch}" 2> /dev/null) || rc=$?
+    case "${rc}" in
+        0 | 3 | 4) ;;
+        5) return 0 ;;
+        *) return 1 ;;
+    esac
+    printf '%s\n' "${output}" | awk -F '\t' '
+        NF == 0 { next }
+        NF == 1 && /^summary / { next }
+        NF == 4 && $1 != "" && ($2 == "pass" || $2 == "fail" || $2 == "pending") { print $1 "\t" $2; next }
+        { bad = 1 }
+        END { exit bad }
+    '
+}
+
 # Returns 0 when a check run on commit head_sha in repository repo_full is still running: its status
 # is queued, in_progress, waiting, pending or requested and it has no conclusion yet (a run whose
 # conclusion is set is done, whatever its status says, as pr_json_has_pending_ci_checks also

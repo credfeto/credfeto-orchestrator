@@ -658,6 +658,15 @@ main() {
                 fi
                 clear_pr_ci_pending_state "${open_pr}"
 
+                # Parked while every failing required check also fails on the base branch (#1975);
+                # see the matching comment on the direct-PR path below.
+                if skip_pr_for_default_branch_failures "${open_pr}" "${item_repo}" "${pr_json}" "${pr_has_unaddressed_comment}"; then
+                    unset 'skip_repos[-1]'
+                    count_unchanged=$((count_unchanged + 1))
+                    item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "default branch failing the same checks - skipping")")
+                    continue
+                fi
+
                 # A BEHIND PR is settled only when it is handed off and waits on nothing but a human review
                 # (#1654). Settled then means no agent session, not no rebase (#1889): it still falls through
                 # to the non-agentic rebase in the Work block, because base protection that requires an
@@ -1193,6 +1202,23 @@ main() {
                 continue
             fi
             clear_pr_ci_pending_state "${item_id}"
+
+            # A PR whose every failing required check also fails in the latest completed run on its
+            # base branch is parked before anything else can start a session for it (#1975): no
+            # session, no rebase and neither budget charged, with one status comment the first time.
+            # Without this, each such PR (typically every open dependency PR of a repository whose
+            # default branch is red) got a session per cycle that only traced the failure to the
+            # default branch, and its status comment or board move counted as progress, so the
+            # idle budget never stopped it. It does not count as active work for the repository
+            # (the entry just added to skip_repos is taken off again), as a Blocked PR does not,
+            # so an Issue that fixes the default branch can still start. It is worked again once
+            # those checks' result there changes (skip_pr_for_default_branch_failures, lib/state).
+            if skip_pr_for_default_branch_failures "${item_id}" "${item_repo}" "${pr_json}" "${pr_has_unaddressed_comment}"; then
+                unset 'skip_repos[-1]'
+                count_unchanged=$((count_unchanged + 1))
+                item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "default branch failing the same checks - skipping")")
+                continue
+            fi
 
             # A BEHIND PR is settled only when it is handed off and waits on nothing but a human review
             # (#1654). Settled then means no agent session, not no rebase (#1889): it still falls through

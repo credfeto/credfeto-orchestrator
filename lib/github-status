@@ -420,6 +420,26 @@ pr_json_has_failed_check_of_unknown_requiredness() {
     ' > /dev/null 2>&1
 }
 
+# Prints the name (or legacy context) of each required check whose latest run has definitively
+# failed, one per line, sorted and each once: the checks pr_json_has_failed_required_check counts.
+# Each control character in a name is printed as a space, as cfwf prints check names, so the names
+# compare with fetch_branch_check_verdicts' (lib/github). Prints nothing when none has failed, and
+# nothing for a check whose required-ness is unknown.
+pr_json_failed_required_check_names() {
+    local pr_json="$1"
+    printf '%s' "${pr_json}" | jq -r "${_JQ_DEF_LATEST_CHECK_RUNS}${_JQ_DEF_CHECK_FAILED}"'
+        [(.statusCheckRollup // [])
+        | latest_check_runs
+        | .[]
+        | select(.isRequired == true and check_failed)
+        | (.name // .context // "")
+        | gsub("[[:cntrl:]]"; " ")
+        | select(. != "")]
+        | unique
+        | .[]
+    ' 2> /dev/null
+}
+
 # Maps an item_type ("Issue"|"PullRequest") to the gh CLI noun ("issue"|"pr") used in `gh pr
 # ...`/`gh issue ...` subcommands. Single definition shared by every call site that needs this
 # mapping so a future item type can't be updated in only some of them (#1136 review).

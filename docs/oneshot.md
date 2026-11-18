@@ -127,6 +127,23 @@ time and money with nothing to show for it. Two independent budgets catch this:
   orchestrator still rebases it without an agent, so auto-merge can merge it as soon as it has an
   approving review, even where the base requires branches to be up to date; only a rebase that
   conflicts is handed to an agent.
+- **Failures the base branch already has** — when every required check failing on a Pull
+  Request also failed in the latest completed run on its base branch (typically every open
+  dependency Pull Request of a repository whose default branch is red), no session can fix it on
+  the Pull Request: each one would only trace the failure back to the base branch, post a
+  comment and stop, and that comment would count as progress, so the idle cap would never catch
+  it. Such a Pull Request is parked instead: no session, no rebase, neither cap charged, and one
+  log line per tick, `default branch failing the same checks`. The first time, it gets one status
+  comment naming the checks and saying the fix belongs on the base branch. It does not count as
+  active work for its repository, so an Issue that fixes the base branch can still start. It is
+  worked again as soon as one of its failing checks did not fail on the base branch's latest
+  completed run, or none of its required checks fails any more. Nothing changes for a Pull Request
+  with at least one failure of its own, or with a trusted comment nobody has answered yet. The base
+  branch's verdicts come from `cfwf pr checks --branch` and are reused for
+  `DEFAULT_BRANCH_CHECKS_CACHE_SECS` (default 300 seconds), so many parked Pull Requests share
+  one lookup, and a base branch that turns green is seen within that time. A check still running
+  on the base branch keeps its last completed verdict, and if the lookup fails the Pull Request is
+  worked as before.
 
 Both caps reset automatically once a human clears the `Blocked` label on an item that was capped
 — but *only* if it was actually blocked *because* it was capped; a PR blocked for an unrelated

@@ -158,6 +158,17 @@ PRECHECK_TIMEOUT_MINUTES="${PRECHECK_TIMEOUT_MINUTES:-20}"
 [[ "${PRECHECK_TIMEOUT_MINUTES}" =~ ^(0|[1-9][0-9]*)$ ]] || PRECHECK_TIMEOUT_MINUTES=20
 # shellcheck disable=SC2034  # read by lib/podman after sourcing
 PRECHECK_TIMEOUT_SECS=$((PRECHECK_TIMEOUT_MINUTES * 60))
+
+# How long, in seconds, the check verdicts of a PR's base branch (load_branch_completed_check_verdicts,
+# lib/state) are reused before cfwf is asked again (#1975). They decide whether every failing required
+# check of a PR also fails on its base branch, in which case no session is started. Many open PRs in
+# one repository share one lookup, so a red default branch costs a few REST reads an hour rather than
+# one lookup per PR per tick; the price is that a base branch turning green is seen up to this long
+# later. 0 looks the verdicts up every time. Override with DEFAULT_BRANCH_CHECKS_CACHE_SECS in the
+# environment.
+# shellcheck disable=SC2034  # read by lib/state after sourcing
+DEFAULT_BRANCH_CHECKS_CACHE_SECS="${DEFAULT_BRANCH_CHECKS_CACHE_SECS:-300}"
+[[ "${DEFAULT_BRANCH_CHECKS_CACHE_SECS}" =~ ^(0|[1-9][0-9]*)$ ]] || DEFAULT_BRANCH_CHECKS_CACHE_SECS=300
 # How much of a failing pre-check the prompt quotes: up to PRECHECK_SUMMARY_LINES error lines
 # for each failing hook, and at most PRECHECK_SUMMARY_MAX_HOOKS hooks. The agent reads the
 # rest from the full log at PRECHECK_CONTAINER_LOG.

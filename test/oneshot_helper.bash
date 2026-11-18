@@ -99,6 +99,9 @@ setup_main_mocks() {
     # their absence) exactly as written. Tests of the annotation path override this.
     fetch_pr_required_check_names() { return 1; }
     head_commit_has_running_check_runs() { return 1; }
+    # Default: the base branch reports no check results (#1975), so no PR is parked because its
+    # base branch fails the same checks and no test reaches cfwf. Tests of that path override it.
+    fetch_branch_check_verdicts() { return 0; }
     notify_discord_work_item()         { return 0; }
     notify_discord_pr_waiting()        { return 0; }
     notify_discord_no_work()           { return 0; }

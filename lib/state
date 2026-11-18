@@ -96,6 +96,144 @@ clear_preflight_failure() {
     rm -f "$(preflight_failure_file_path "${item_type}" "${item_id}")" 2> /dev/null || true
 }
 
+# The cache of a base branch's latest completed check verdicts (#1975), kept per repository in
+# SESSION_BASE_DIR: the first line is when it was looked up (Unix seconds), each further line
+# "<name><TAB>pass|fail". The branch name is URI-encoded, so a "/" in it stays in one file name.
+branch_check_verdicts_cache_path() {
+    local branch="$1" encoded
+    encoded=$(printf '%s' "${branch}" | jq -sRr '@uri') || return 1
+    printf '%s/branch-checks.%s' "${SESSION_BASE_DIR}" "${encoded}"
+}
+
+# Prints the latest completed verdict of each check branch requires in the repository, one
+# "<name><TAB>pass|fail" line each, for pr_failures_all_on_default_branch. Reads the cache while it
+# is younger than DEFAULT_BRANCH_CHECKS_CACHE_SECS; otherwise asks fetch_branch_check_verdicts
+# (lib/github) and rewrites the cache. A check pending on the tip (a newer commit still building it,
+# or a check that runs only on pull requests) keeps the verdict the cache held for it, so a new commit
+# on the branch does not count as a change until the check finishes there, and a check with no
+# completed verdict yet is left out. A check the branch no longer reports is dropped. Returns 1 when
+# the lookup fails, leaving the cache as it was.
+load_branch_completed_check_verdicts() {
+    local repository="$1" branch="$2" cache_file now stamp="" cached="" verdicts merged="" name verdict
+    local -A previous=()
+    cache_file=$(branch_check_verdicts_cache_path "${branch}") || return 1
+    now=$(date +%s)
+    if [ -f "${cache_file}" ]; then
+        stamp=$(head -n 1 "${cache_file}" 2> /dev/null) || stamp=""
+        cached=$(tail -n +2 "${cache_file}" 2> /dev/null) || cached=""
+        if [[ "${stamp}" =~ ^[0-9]+$ ]] && [ "${stamp}" -le "${now}" ] \
+            && [ $((now - stamp)) -lt "${DEFAULT_BRANCH_CHECKS_CACHE_SECS}" ]; then
+            [ -n "${cached}" ] && printf '%s\n' "${cached}"
+            return 0
+        fi
+    fi
+    verdicts=$(fetch_branch_check_verdicts "${repository}" "${branch}") || return 1
+    while IFS=$'\t' read -r name verdict; do
+        [ -n "${name}" ] && previous["${name}"]="${verdict}"
+    done <<< "${cached}"
+    while IFS=$'\t' read -r name verdict; do
+        [ -n "${name}" ] || continue
+        case "${verdict}" in
+            pass | fail) merged+="${name}"$'\t'"${verdict}"$'\n' ;;
+            pending) [ -n "${previous["${name}"]:-}" ] && merged+="${name}"$'\t'"${previous["${name}"]}"$'\n' ;;
+        esac
+    done <<< "${verdicts}"
+    if mkdir -p "${SESSION_BASE_DIR}" && printf '%s\n%s' "${now}" "${merged}" > "${cache_file}.tmp" 2> /dev/null; then
+        mv -f "${cache_file}.tmp" "${cache_file}" 2> /dev/null || rm -f "${cache_file}.tmp"
+    fi
+    [ -n "${merged}" ] && printf '%s' "${merged}"
+    return 0
+}
+
+# Returns 0, printing the names comma-separated, when the PR has at least one failed required check
+# (pr_json_failed_required_check_names, lib/github-status) and every one of them also failed in the
+# latest completed run on the PR's base branch (load_branch_completed_check_verdicts): the failure is
+# the base branch's, and nothing a session does on the PR can fix it (#1975). Returns 1 when no
+# required check failed, when one failing check's required-ness is unknown (it might be the PR's own
+# failure), when the base branch is unknown, or when any failing check did not fail there. Returns 2,
+# with a warning, when the base branch's verdicts cannot be read: the PR is then worked as before.
+pr_failures_all_on_default_branch() {
+    local pr_json="$1" repository="$2" failing base verdicts name names=""
+    failing=$(pr_json_failed_required_check_names "${pr_json}") || return 1
+    [ -n "${failing}" ] || return 1
+    pr_json_has_failed_check_of_unknown_requiredness "${pr_json}" && return 1
+    base=$(printf '%s' "${pr_json}" | jq -r '.baseRefName // empty' 2> /dev/null) || return 1
+    [ -n "${base}" ] || return 1
+    if ! verdicts=$(load_branch_completed_check_verdicts "${repository}" "${base}"); then
+        warn "Failed to read the check results of ${base} in ${repository}: cannot tell whether a failing check of this PR also fails there"
+        return 2
+    fi
+    while IFS= read -r name; do
+        grep -Fxq -- "${name}"$'\t'"fail" <<< "${verdicts}" || return 1
+        names+="${names:+, }${name}"
+    done <<< "${failing}"
+    printf '%s' "${names}"
+}
+
+# The record that the PR is parked because its base branch fails the same checks (#1975). It holds
+# the check names, and it exists only once the PR's status comment was posted, so the comment is
+# posted once for each spell. Cleared when the PR is no longer parked.
+default_branch_failing_record_path() {
+    local item_id="$1"
+    printf '%s/PullRequest_%s.default-branch-failing' "${SESSION_BASE_DIR}" "${item_id}"
+}
+
+# The status comment of a PR parked by skip_pr_for_default_branch_failures. Backticks are taken out
+# of the check names, which come from the repository's configuration, so a name cannot end its code
+# span.
+default_branch_failing_comment() {
+    local names="$1" base="$2"
+    names="${names//\`/}"
+    base="${base//\`/}"
+    printf '%s\n' \
+        "Automation status: not starting agent sessions on this pull request for now." \
+        "" \
+        "Every required check failing here also fails in the latest completed run on \`${base}\`: \`${names//, /\`, \`}\`." \
+        "" \
+        "A change on this pull request cannot fix a failure that \`${base}\` already has, so the fix belongs on \`${base}\`. This pull request is picked up again as soon as the latest result of those checks on \`${base}\` changes, or this pull request's own checks change."
+}
+
+# Decides, before any session is started for the PR, whether to park it because every failing
+# required check also fails on its base branch (pr_failures_all_on_default_branch), and returns 0
+# when it is parked: no session, no rebase, and neither invocation budget charged, since nothing a
+# session does on the PR can fix the base branch, and a status comment, board move or rebase would
+# otherwise read as progress and keep resetting the idle budget, one session per PR per cycle
+# (#1975). It logs one line, and the first time only (no record yet) posts the status comment and
+# then writes the record; a comment that fails to post is warned about and tried again next tick.
+# Returns 1, clearing the record (with one line when there was one), when the PR is not parked
+# because no required check fails or one fails only on the PR. Also returns 1, keeping the record so
+# a later spell's comment is not posted twice, when the base branch's verdicts cannot be read (the
+# PR is worked as before this check existed) and when has_unaddressed_comment is "true", since a
+# trusted comment nobody has answered still earns a session.
+skip_pr_for_default_branch_failures() {
+    local item_id="$1" item_repo="$2" pr_json="$3" has_unaddressed_comment="${4:-false}"
+    local names="" base record rc=0
+    record=$(default_branch_failing_record_path "${item_id}")
+    [ "${has_unaddressed_comment}" = "true" ] && return 1
+    names=$(pr_failures_all_on_default_branch "${pr_json}" "${item_repo}") || rc=$?
+    if [ "${rc}" -eq 2 ]; then
+        return 1
+    elif [ "${rc}" -ne 0 ]; then
+        if [ -f "${record}" ]; then
+            rm -f "${record}" 2> /dev/null || true
+            info "PR #${item_id} in ${item_repo}: no longer parked for the default branch failing the same checks — working it again"
+        fi
+        return 1
+    fi
+    base=$(printf '%s' "${pr_json}" | jq -r '.baseRefName // empty' 2> /dev/null)
+    info "PR #${item_id} in ${item_repo}: default branch failing the same checks (${names} on ${base}) — skipping, not counted against any budget"
+    if [ ! -f "${record}" ]; then
+        if gh pr comment "${item_id}" --repo "${item_repo}" --body "$(default_branch_failing_comment "${names}" "${base}")" > /dev/null 2>&1; then
+            if ! { mkdir -p "${SESSION_BASE_DIR}" && printf '%s\n' "${names}" > "${record}"; } 2> /dev/null; then
+                warn "PR #${item_id} in ${item_repo}: failed to record the default-branch status comment; it may be posted again"
+            fi
+        else
+            warn "PR #${item_id} in ${item_repo}: failed to post the default-branch status comment — retrying next tick"
+        fi
+    fi
+    return 0
+}
+
 # Returns 0 when the item's pre-flight failure record has reached PREFLIGHT_FAILURES_BEFORE_SKIP
 # and both the agent image (pulled first, once per run, so a newly built image is seen) and the
 # checkout's head_sha are still the ones it failed on: the caller skips the item without
