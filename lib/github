@@ -618,8 +618,9 @@ pr_should_use_dependency_prompt() {
 # adopters: only a trusted human adopts one. That is how a dependency PR is adopted: a maintainer
 # assigns it (an organisation can never be an assignee, so it is a person, not the repository
 # owner), so the assignment is the adopted state, not a person claiming the work, and the PR counts
-# as the orchestrator's own. Its assignees are never changed (cfwf --assign-self leaves such a PR as
-# it is). No assignee at all, any assignee who is not trusted, or a missing or unreadable trusted
+# as the orchestrator's own. Its assignees are never changed: the agent's prompt for a dependency PR
+# has no assign step and forbids any assignee change (_build_dependency_pr_rule, lib/prompts), because
+# cfwf --assign-self refuses such a PR like any other PR assigned to someone else. No assignee at all, any assignee who is not trusted, or a missing or unreadable trusted
 # list is not an adoption: an untrusted assignee is a claim like on any other item.
 pr_json_is_owner_adopted_dependency_pr() {
     local pr_json="$1" trusted_logins="$2" me="${3:-}"

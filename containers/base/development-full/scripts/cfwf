@@ -2012,11 +2012,7 @@ comma-separated list when it had several).
                option: --add-assignee and --remove-assignee are not options. A pull request already
                assigned to another user is refused, and nothing is written: assigning is how an
                item is claimed, and someone else has claimed it. One the agent already holds, or
-               one with no assignee, is assigned as asked. A dependency pull request (a depends/ or
-               dependabot/ branch in the repository itself) whose assignees are all trusted
-               maintainers (collaborators with the admin, maintain or write role, never the agent
-               or the PR creator) is the agent's already: its assignees are left as they are, a
-               note says so on stderr, and the rest of the edit goes ahead.
+               one with no assignee, is assigned as asked.
 At least one of --title, --body-file, --priority and --assign-self; each at most once. --add-label,
 --remove-label, --base, --milestone, --reviewer, --json and --jq are not options either: other
 labels have commands of their own (label add and label remove, which never change a priority:
@@ -2027,12 +2023,9 @@ first (see 'cfwf help body'): a refused one exits ${BODY_REFUSED_EXIT} with "cfw
 "cfwf: title refused: <rule>" on stderr, never naming the text that matched. Any pull request in
 the repository can be edited, whoever opened it and whoever wrote its commits: there is no
 ownership rule. With --assign-self, the agent's login is read (gh api user). The pull request is
-read once, for its URL, its labels, its assignees and its head branch. With --assign-self on a
-dependency pull request with assignees other than the agent and the PR creator, the repository's
-collaborators are read (one paged read). With --assign-self, a pull request with an assignee other
-than the agent exits ${POLICY_REFUSED_EXIT} with "cfwf: assign refused: ${ASSIGNED_TO_ANOTHER_RULE}", unless it
-is a dependency pull request assigned only to trusted maintainers. A --priority asked for on a
-pull request that
+read once, for its URL, its labels and its assignees. With --assign-self, a pull request with an
+assignee other than the agent exits ${POLICY_REFUSED_EXIT} with "cfwf: assign refused:
+${ASSIGNED_TO_ANOTHER_RULE}". A --priority asked for on a pull request that
 carries Security exits ${POLICY_REFUSED_EXIT} with "cfwf: priority refused: Security is never replaced by
 --priority". With a priority label to add, the repository's labels are read (gh label list). A
 pull request already as asked is not edited.
@@ -3009,12 +3002,7 @@ Adds the labels of the issues a pull request closes to the pull request, one gh 
 --assign-self  Also add the authenticated account (the agent) as an assignee, its login read as
                'cfwf pr edit --assign-self' reads it (gh api user). A pull request already
                assigned to another user is refused before any label is added, and nothing is
-               written: assigning is how an item is claimed, and someone else has claimed it. A
-               dependency pull request (a depends/ or dependabot/ branch in the repository
-               itself) whose assignees are all trusted maintainers (collaborators with the admin,
-               maintain or write role, never the agent or the PR creator, read in one paged read)
-               is the agent's already: its assignees are left as they are, a note says so on
-               stderr, and the labels are still synced.
+               written: assigning is how an item is claimed, and someone else has claimed it.
 There is no --label: the labels come only from the closing issues. --remove-label, --json and --jq
 are not options either.
 
@@ -7969,59 +7957,6 @@ refuse_if_assigned_to_another() {
     [ -z "${other}" ] || refuse_policy assign "${ASSIGNED_TO_ANOTHER_RULE}"
 }
 
-# The repository roles (role_name, as repo collaborators lists them) of a trusted maintainer: one who
-# can adopt a dependency pull request by being its assignee (#1977).
-readonly TRUSTED_MAINTAINER_ROLE_PATTERN='^(admin|maintain|write)$'
-
-# Whether a pull request whose assignee logins are $1 (comma separated) and whose head branch is $2
-# is a dependency pull request adopted by trusted maintainers (#1977): its head is a depends/ or
-# dependabot/ branch (DEPENDENCY_BRANCH_PATTERN) in the repository itself ($3 is true; a fork's
-# branch name is chosen freely), it has at least one assignee, and every assignee is a trusted
-# maintainer of REPO: a collaborator whose role matches TRUSTED_MAINTAINER_ROLE_PATTERN, compared
-# without regard to case. The agent (AGENT_LOGIN) and the PR creator (pr_creator_login) are never
-# trusted maintainers, whatever their role. The collaborators are read (read_collaborator_rows, one
-# paged read) only for a same-repository dependency branch whose assignees are neither of those, so
-# no other pull request costs a read. Adopting a dependency pull request is a maintainer assigning
-# it (an organisation can never be an assignee), so it is the agent's already: --assign-self leaves
-# its assignees as they are and succeeds (claim_pull_request). Any other assignee is a claim as on
-# any other item.
-owner_adopted_dependency_pull_request() {
-    local LC_ALL=C assignees="$1" branch="$2" same_repository="$3" login row creator
-    local -a logins=()
-    local -A maintainers=()
-    [ "${same_repository}" = true ] && [[ "${branch}" =~ ${DEPENDENCY_BRANCH_PATTERN} ]] || return 1
-    [ -n "${assignees}" ] || return 1
-    IFS=, read -r -a logins <<< "${assignees}"
-    creator="$(pr_creator_login)"
-    for login in "${logins[@]}"; do
-        matches_pattern "${login}" "${LOGIN_PATTERN}" || die "gh returned an unexpected assignee for ${REPO}"
-        [ "${login,,}" != "${AGENT_LOGIN,,}" ] && [ "${login,,}" != "${creator}" ] || return 1
-    done
-    read_collaborator_rows
-    for row in "${COLLABORATOR_ROWS[@]+"${COLLABORATOR_ROWS[@]}"}"; do
-        [[ "${row#*$'\t'}" =~ ${TRUSTED_MAINTAINER_ROLE_PATTERN} ]] || continue
-        login="${row%%$'\t'*}"
-        maintainers["${login,,}"]=1
-    done
-    for login in "${logins[@]}"; do
-        [ -n "${maintainers["${login,,}"]+set}" ] || return 1
-    done
-}
-
-# --assign-self on PR of REPO, whose assignee logins are $1 (comma separated), whose head branch is
-# $2 and whose head is in the repository itself when $3 is true: a dependency pull request adopted
-# by trusted maintainers (owner_adopted_dependency_pull_request) is already the agent's, so
-# ASSIGN_SELF is cleared, nothing is written for it and a note says so on stderr; any other pull
-# request goes through refuse_if_assigned_to_another. It runs before anything is written.
-claim_pull_request() {
-    if owner_adopted_dependency_pull_request "$1" "$2" "$3"; then
-        ASSIGN_SELF=""
-        printf 'cfwf: note: %s#%s is a dependency pull request assigned only to trusted maintainers, which makes it the agent'"'"'s already; its assignees were not changed\n' "${REPO}" "${PR}" >&2
-        return 0
-    fi
-    refuse_if_assigned_to_another "$1"
-}
-
 # Prints, lower-cased, the login of the account that opens the pull requests for the agent's work:
 # PR_CREATOR_LOGIN, as the orchestrator names it, or prpixie (the orchestrator's own default) when
 # it is unset or is not a login.
@@ -8032,8 +7967,7 @@ pr_creator_login() {
 }
 
 # Reads PR of REPO for pr edit in one REST read, setting EDIT_URL, EDIT_ASSIGNEES (the assignee
-# logins, comma separated), EDIT_HEAD_BRANCH, EDIT_SAME_REPOSITORY (true when the head branch is in
-# the repository itself, false for a fork's or one whose repository is gone) and EDIT_LABELS. A 404 is a pull
+# logins, comma separated) and EDIT_LABELS. A 404 is a pull
 # request that is not there (the number of an issue included) once the repository has been read and
 # found; any other failure dies. The answer is refused unless the URL is this pull request's and as
 # many labels came as it says it has. Who opened it and who wrote its commits are not read: pr edit
@@ -8042,13 +7976,11 @@ read_pull_request_for_edit() {
     local end count row tag name
     local -a rows
     api_read "could not read ${REPO}#${PR}" "repos/${REPO}/pulls/${PR}" \
-        "${FIELDS_ROW_DEF} ([.html_url, (.labels // [] | length), ([(.assignees // [])[].login] | join(\",\")), (.head.ref // \"\"),
-            ((.head.repo.full_name // \"\" | ascii_downcase) as \$head | (.base.repo.full_name // \"\" | ascii_downcase) as \$base
-             | \$head != \"\" and \$head == \$base), \"end\"] | fields_row),
+        "${FIELDS_ROW_DEF} ([.html_url, (.labels // [] | length), ([(.assignees // [])[].login] | join(\",\")), \"end\"] | fields_row),
          ((.labels // [])[] | [\"label\", .name, \"end\"] | fields_row)" \
         || not_found_in_repository "${PR_NOT_FOUND_EXIT}" "the pull request ${REPO}#${PR} was not found"
     mapfile -t rows <<< "${GH_OUTPUT}"
-    IFS="${ROW_SEPARATOR}" read -r EDIT_URL count EDIT_ASSIGNEES EDIT_HEAD_BRANCH EDIT_SAME_REPOSITORY end <<< "${rows[0]}"
+    IFS="${ROW_SEPARATOR}" read -r EDIT_URL count EDIT_ASSIGNEES end <<< "${rows[0]}"
     if [ "${end}" != end ] \
         || ! matches_pattern "${EDIT_URL}" "${REPOSITORY_URL_PATTERN}/pull/${PR}\$" \
         || ! matches_pattern "${count}" '^[0-9]+$' || [ "$((${#rows[@]} - 1))" -ne "${count}" ]; then
@@ -8069,8 +8001,6 @@ read_pull_request_for_edit() {
 # URL ("" when the priority does not change).
 EDIT_LABELS=()
 EDIT_ASSIGNEES=""
-EDIT_HEAD_BRANCH=""
-EDIT_SAME_REPOSITORY=""
 EDIT_ARGS=()
 PRIORITY_REMOVE=()
 PRIORITY_ADD=""
@@ -8146,7 +8076,7 @@ pr_edit() {
 
     [ -z "${ASSIGN_SELF}" ] || read_agent_login
     read_pull_request_for_edit
-    [ -z "${ASSIGN_SELF}" ] || claim_pull_request "${EDIT_ASSIGNEES}" "${EDIT_HEAD_BRANCH}" "${EDIT_SAME_REPOSITORY}"
+    [ -z "${ASSIGN_SELF}" ] || refuse_if_assigned_to_another "${EDIT_ASSIGNEES}"
     plan_priority_change
 
     EDIT_ARGS=(pr edit "${PR}" --repo "${REPO}")
@@ -8246,12 +8176,9 @@ pr_sync_labels() {
     read_closing_issue_labels url || partial=1
     if [ -n "${ASSIGN_SELF}" ]; then
         read_agent_login
-        gh_capture pr view "${PR}" --repo "${REPO}" --json assignees,headRefName,isCrossRepository \
-            --jq '[([(.assignees // [])[].login] | join(",")), (.headRefName // ""), (.isCrossRepository // false | not | tostring)] | join("\u001f")' \
+        gh_capture pr view "${PR}" --repo "${REPO}" --json assignees --jq '[(.assignees // [])[].login] | join(",")' \
             || die "could not read the assignees of ${REPO}#${PR}: $(gh_failure_text)"
-        local assignees branch same_repository
-        IFS="${ROW_SEPARATOR}" read -r assignees branch same_repository <<< "${GH_OUTPUT}"
-        claim_pull_request "${assignees}" "${branch}" "${same_repository}"
+        refuse_if_assigned_to_another "${GH_OUTPUT}"
     fi
     if [ -n "${CLOSING_ISSUE_LABELS}" ]; then
         read_repository_label_names

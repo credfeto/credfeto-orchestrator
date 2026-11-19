@@ -533,7 +533,7 @@ load oneshot_helper
     [[ "${output}" == *$'\n'"     It prints the PR metadata, the Workflow board status"* ]]
     [[ "${output}" == *"Its exit code follows cfwf pr checks: 0 every required check passed, 3 at least one failed, 4 at least one pending, 5 no checks yet."* ]]
     [[ "${output}" == *"   - Run one cfwf command per Bash call, with no \`;\`, \`&&\`, \`|\`, \`echo \$?\` or redirection around it, and read the exit code from the tool result. A compound command containing cfwf is refused in unattended runs and ends the session."* ]]
-    [[ "${output}" == *"   Its exit code is the CI verdict step 4 uses; do NOT run a separate cfwf pr checks call."$'\n'"2. Do NOT assign yourself or change this PR's assignees in any way"* ]]
+    [[ "${output}" == *"   Its exit code is the CI verdict step 4 uses; do NOT run a separate cfwf pr checks call."$'\n'"2. No assign or claim step: the DEPENDENCY PR RULE above applies."$'\n'"3. "* ]]
     [[ "${output}" == *"4. Decide from the exit code of step 1's cfwf pr status (0 every required check passed; 3 at least one failed; 4 none failed and at least one is pending; 5 no checks yet, treat as pending)"* ]]
     [[ "${output}" == *"auto-merge is already enabled (the auto-merge line of step 1's cfwf pr status reads on)"* ]]
     # The state comes from cfwf pr status alone: no separate checks call is prescribed.
@@ -551,38 +551,66 @@ load oneshot_helper
     [[ "${output}" != *"cfwf pr checks --repo credfeto/example-repo"* ]]
     # Step 1 comes before every other step.
     local before_first="${output%%1. FIRST COMMAND (MANDATORY)*}"
-    local before_assign="${output%%2. Do NOT assign yourself*}"
+    local before_assign="${output%%2. No assign or claim step*}"
     [ "${#before_first}" -lt "${#before_assign}" ]
 }
 
-# --- build_pr_claude_md: dependency PRs keep their assignees (#1977) ---------------------------
+# --- build_pr_claude_md: a dependency PR has its own rule and no assign step (#1977) -----------
 
-@test "build_pr_claude_md's dependency-PR prompt never assigns: trusted maintainers' assignment makes the PR the agent's own (#1977)" {
+# The rule's one mention of --assign-self is the sentence forbidding it; with that sentence taken
+# out, a dependency PR's prompt must not mention the flag, an assign step or an assignee write.
+assert_no_assign_instruction() {
+    local text="${1//"Never pass --assign-self to any cfwf command"/}"
+    [[ "${text}" != *"--assign-self"* ]]
+    [[ "${text}" != *"Assign yourself"* ]]
+    [[ "${text}" != *"assign yourself first"* ]]
+    [[ "${text}" != *"assign refused"* ]]
+    [[ "${text}" != *"--add-assignee"* ]]
+}
+
+@test "build_pr_claude_md's verify-only dependency-PR prompt carries the DEPENDENCY PR RULE and no assign step (#1977)" {
     REPO_FULL="credfeto/example-repo"
     run build_pr_claude_md 1234 "/resolved/.ai-instructions" "CLEAN" "depends/x" "" "" "true"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *$'\n'"2. Do NOT assign yourself or change this PR's assignees in any way: a dependency PR assigned only to trusted maintainers is this automation's own, so there is no assign step."$'\n'"3. "* ]]
-    [[ "${output}" != *"--assign-self"* ]]
-    [[ "${output}" != *"assign refused"* ]]
+    [[ "${output}" == *$'\n'"DEPENDENCY PR RULE (MANDATORY): this is a dependency PR, so follow this rule:"$'\n'"- It is already yours. "* ]]
+    [[ "${output}" == *$'\n'"- Do NOT run any assign or claim step. Never pass --assign-self to any cfwf command, and never add, remove or change an assignee of this PR or of any issue in any way. This overrides every \"assign yourself\" step in the AI instructions"* ]]
+    [[ "${output}" == *"applies to every sub-agent you start"* ]]
+    [[ "${output}" == *$'\n'"- Act on the unaddressed trusted maintainer comments first: "* ]]
+    [[ "${output}" == *$'\n'"- Then follow the normal dependency flow: the Steps below."$'\n\n'"Steps:"$'\n'* ]]
+    [[ "${output}" == *$'\n'"2. No assign or claim step: the DEPENDENCY PR RULE above applies."$'\n'* ]]
+    assert_no_assign_instruction "${output}"
 }
 
-@test "build_pr_claude_md's full flow on a dependency branch acts for the trusted maintainers and never assigns, and keeps the assign step everywhere else (#1977)" {
+@test "build_pr_claude_md's full flow on a dependency branch carries the DEPENDENCY PR RULE ahead of the trusted comments and no assign step (#1977)" {
     REPO_FULL="credfeto/example-repo"
-    local -a args=(1234 "/resolved/.ai-instructions" "CLEAN" "dependabot/nuget/x-1.0.1" "" "" "false" "" "false" "" "" "")
+    local -a args=(1234 "/resolved/.ai-instructions" "CLEAN" "dependabot/nuget/x-1.0.1" "" "" "false" "" "false" "- credfeto: please bump y too" "" "")
     run build_pr_claude_md "${args[@]}" true
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *$'\n'"- This is a dependency update PR. Do NOT assign yourself or change its assignees in any way: a dependency PR assigned only to trusted maintainers is this automation's own, so there is no assign step. Act as the trusted maintainers' agent: read the trusted comments and do what they ask."$'\n'* ]]
-    [[ "${output}" != *"--assign-self"* ]]
-    [[ "${output}" == *"TRUSTED COMMENTS FIRST (MANDATORY"* ]]
+    [[ "${output}" == *$'\n'"- No assign or claim step on this PR: the DEPENDENCY PR RULE below applies."$'\n\n'"DEPENDENCY PR RULE (MANDATORY): this is a dependency PR, so follow this rule:"$'\n'* ]]
+    [[ "${output}" == *$'\n'"- Do NOT run any assign or claim step. Never pass --assign-self to any cfwf command"* ]]
+    [[ "${output}" == *$'\n'"- Act on the unaddressed trusted maintainer comments first: comments and reviews from the trusted commenters above that no reply or status comment of yours has answered. Do what each one asks and reply to each one on the PR, as TRUSTED COMMENTS FIRST below says."$'\n'* ]]
+    [[ "${output}" == *$'\n'"- Then follow the normal flow for this PR: the phases below."$'\n\n'"TRUSTED COMMENTS FIRST (MANDATORY"* ]]
+    [[ "${output}" == *"please bump y too"* ]]
+    [[ "${output}" != *"Then follow the normal dependency flow: the Steps below."* ]]
+    assert_no_assign_instruction "${output}"
+}
 
-    # Any other PR, and a dependency branch not flagged as one, still claims the PR first.
+@test "build_pr_claude_md keeps the assign-self step and no DEPENDENCY PR RULE on any other PR (#1977)" {
+    REPO_FULL="credfeto/example-repo"
+    local -a args=(1234 "/resolved/.ai-instructions" "CLEAN" "feat/1977-x" "" "" "false" "" "false" "" "" "")
     local flag
     for flag in false ""; do
         run build_pr_claude_md "${args[@]}" "${flag}"
         [ "${status}" -eq 0 ]
-        [[ "${output}" == *$'\n'"- Always assign yourself first if you are not already the assignee: cfwf pr edit --repo credfeto/example-repo --pr 1234 --assign-self If it exits 8 with \"assign refused\", another user has claimed this item: STOP at once and change nothing."$'\n'* ]]
-        [[ "${output}" != *"This is a dependency update PR. Do NOT assign yourself"* ]]
+        [[ "${output}" == *$'\n'"- Always assign yourself first if you are not already the assignee: cfwf pr edit --repo credfeto/example-repo --pr 1234 --assign-self If it exits 8 with \"assign refused\", another user has claimed this item: STOP at once and change nothing."$'\n\n'"TRUSTED COMMENTS FIRST (MANDATORY"* ]]
+        [[ "${output}" != *"DEPENDENCY PR RULE"* ]]
+        [[ "${output}" != *"No assign or claim step"* ]]
     done
+    # The 12-argument call oneshot made before the dependency-branch argument existed reads the same.
+    run build_pr_claude_md "${args[@]}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"cfwf pr edit --repo credfeto/example-repo --pr 1234 --assign-self"* ]]
+    [[ "${output}" != *"DEPENDENCY PR RULE"* ]]
 }
 
 @test "_build_pr_first_command_rule is the one FIRST COMMAND text in both PR prompts (#1800)" {

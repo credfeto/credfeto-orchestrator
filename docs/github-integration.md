@@ -55,12 +55,18 @@ recognised by its branch name) or, for the human-takeover check only, a
 `dependencies` label instead, and are not treated as a human takeover. A dependency PR is
 adopted by a trusted maintainer assigning it, so a same-repository `depends/` or `dependabot/`
 PR whose assignees are all trusted maintainers (the trusted logins above, never the orchestrator's
-own account, the PR create bot or GitHub's own bots) is the orchestrator's own: it is worked, its assignees are
-never changed (`cfwf --assign-self` leaves them as they are), and the agent acts on the
-maintainers' comments like any trusted commenter's. A dependency PR with no assignee is worked as
-before, and one with any assignee who is not trusted is stood off like any other PR (#1977).
-`cfwf`, which runs in the agent's container and cannot see the extra allow-list, takes the
-repository's collaborators with the admin, maintain or write role as the trusted maintainers.
+own account, the PR create bot or GitHub's own bots) is the orchestrator's own and is worked. A
+dependency PR with no assignee is worked as before, and one with any assignee who is not trusted
+is stood off like any other PR (#1977).
+
+Both prompts for a dependency PR (the verify-only one and the full flow on a dependency branch)
+carry their own DEPENDENCY PR RULE in place of the assign step every other PR has: the PR is
+already the agent's; the agent runs no assign or claim step at all (no `--assign-self`, no
+assignee change of any kind, overriding the generic "assign yourself" steps in the AI
+instructions, sub-agents included); it acts on the trusted maintainers' unaddressed comments;
+then it follows the normal flow. `cfwf --assign-self` itself has no dependency exception: it
+refuses any PR assigned to someone else (exit 8), so an agent that tried to claim an adopted
+dependency PR would only be stopped.
 
 The prompt itself is chosen by branch prefix only (`depends/` or `dependabot/`, see
 `pr_should_use_dependency_prompt` in lib/github), never by the `dependencies` label, because
