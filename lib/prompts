@@ -511,7 +511,7 @@ FCRULE
 }
 
 build_pr_claude_md() {
-    local item_id="$1" ai_instructions="$2" merge_state="${3:-UNKNOWN}" branch_name="${4:-}" repo_path="${5:-${REPO_WORK_DIR}}" dirty_branch="${6:-}" is_dependency_pr="${7:-false}" trusted_logins="${8:-}" background_stall="${9:-false}" unaddressed_comments="${10:-}" next_phase="${11:-}" precheck_section="${12:-}"
+    local item_id="$1" ai_instructions="$2" merge_state="${3:-UNKNOWN}" branch_name="${4:-}" repo_path="${5:-${REPO_WORK_DIR}}" dirty_branch="${6:-}" is_dependency_pr="${7:-false}" trusted_logins="${8:-}" background_stall="${9:-false}" unaddressed_comments="${10:-}" next_phase="${11:-}" precheck_section="${12:-}" dependency_branch="${13:-${7:-false}}"
     local checkout_step
     # The pre-check results (#1785), with their own blank line after them only when there are any.
     local precheck_block=""
@@ -565,6 +565,17 @@ build_pr_claude_md() {
         checkout_step="1. Check out the PR branch BEFORE making any changes: git -C ${repo_path} checkout ${branch_name}"
     fi
 
+    # A dependency PR (a depends/ or dependabot/ branch) is adopted by assigning it to the repository
+    # owner, and the dispatcher stops serving it once that changes, so the agent never touches its
+    # assignees: oneshot only starts a session on one that is unassigned, the agent's, or assigned
+    # to the owner alone, and treats it as the agent's own (#1977). Every other PR is claimed with
+    # cfwf --assign-self, which refuses one assigned to another user (#1962).
+    local dependency_assignee_note="a dependency PR is recognised by its assignment to the repository owner, which makes it this automation's own, so there is no assign step."
+    local assign_rule="- Always assign yourself first if you are not already the assignee: cfwf pr edit --repo ${REPO_FULL} --pr ${item_id} --assign-self If it exits 8 with \"assign refused\", another user has claimed this item: STOP at once and change nothing."
+    if [ "${dependency_branch}" = "true" ]; then
+        assign_rule="- This is a dependency update PR. Do NOT assign yourself or change its assignees in any way: ${dependency_assignee_note} Act as the repository owner's agent: read the trusted comments, the owner's included, and do what they ask."
+    fi
+
     if [ "${is_dependency_pr}" = "true" ]; then
         cat <<EOF
 You are the Orchestrator agent.
@@ -581,7 +592,7 @@ Steps:
 1. FIRST COMMAND (MANDATORY): read this PR's whole state.
 $(_build_pr_first_command_rule "${item_id}" "   ")
    Its exit code is the CI verdict step 4 uses; do NOT run a separate cfwf pr checks call.
-2. Assign yourself: cfwf pr edit --repo ${REPO_FULL} --pr ${item_id} --assign-self If it exits 8 with "assign refused", another user has claimed this item: STOP at once and change nothing.
+2. Do NOT assign yourself or change this PR's assignees in any way: ${dependency_assignee_note}
 3. Labels from linked closing issues are already synced onto this PR by the orchestrator before every session (Blocked/On-Hold excluded). Do NOT sync labels yourself.
 4. Decide from the exit code of step 1's cfwf pr status (0 every required check passed; 3 at least one failed; 4 none failed and at least one is pending; 5 no checks yet, treat as pending)
    Evaluate in this order — auto-merge being enabled does NOT mean there is nothing to do; it
@@ -623,7 +634,7 @@ $(_build_background_stall_warning "${background_stall}")
 - The Workflow board status above is your phase marker. Read the current status for this PR to know where you are; advance it as instructed when a phase completes. It is ONLY a phase marker among PHASE A-H below — it is NEVER an approval gate to re-derive or check. The Issue-workflow "Plan First" Approved gate (agent-roles.instructions.md) is scoped explicitly to picking up an Issue that has no existing PR; this PR's existence already proves that gate was passed, by a human, before this PR was ever opened. If this PR's own card still reads "Not Started", "Planning", or "Approved" (e.g. a previous session opened the draft PR but died before advancing its card, or a fresh board mis-seeded it), treat that exactly as "Development" and continue straight into PHASE A-C below — do NOT block pending approval, and do NOT treat it as evidence the linked issue was never approved. PHASE C's "linked-issue work remains" explicitly includes doing the FULL implementation described in the issue's approved plan when this PR is still a scaffold-only draft (e.g. only a placeholder CHANGELOG.md commit exists) — that is precisely the deferred work Development-phase sessions exist to finish, not a reason to escalate or block (#1276).
 - Every phase must leave a durable trace in GitHub so the next cycle sees progress: either a pushed commit, or a short status comment on the PR. If a phase makes no commit (e.g. a clean review), you MUST post a one-line status comment saying what you did and what phase is next — otherwise the workflow stalls.
 - NEVER apply the Blocked label without ALSO posting a comment, in the SAME turn, that specifically explains why. A human who sees the label with no explanation has no way to act on it and no way to tell whether their own last action (an approval, a fix, a reply) was even seen — this applies to every blocking scenario in this file, not only the ones spelled out explicitly below, including re-blocking something that was JUST unblocked (#1140).
-- Always assign yourself first if you are not already the assignee: cfwf pr edit --repo ${REPO_FULL} --pr ${item_id} --assign-self If it exits 8 with "assign refused", another user has claimed this item: STOP at once and change nothing.
+${assign_rule}
 
 $(_build_pr_trusted_comments_section "${unaddressed_comments}")
 $(_build_pr_next_phase_section "${next_phase}")

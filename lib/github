@@ -586,9 +586,15 @@ pr_has_dependency_update_branch() {
 # instead of being made to build, as the repository instructions require. The full flow routes it
 # to PHASE C (pr_next_phase_for_board_status); once CI is green again, the next session gets this
 # prompt back and arms auto-merge.
+# Optional second argument has_unaddressed_comment ("true"/"false", default "false"): a trusted
+# comment newer than the agent's last session (set_pr_has_unaddressed_comment, lib/github-status)
+# also gets the full flow (#1977). The verify-only prompt forbids code changes and never reads the
+# comments, so an owner's request on an adopted dependency PR was ignored while auto-merge was
+# armed or the PR waited; the full flow quotes the comment and acts on it in PHASE C.
 pr_should_use_dependency_prompt() {
-    local pr_json="$1"
+    local pr_json="$1" has_unaddressed_comment="${2:-false}"
     pr_has_dependency_update_branch "${pr_json}" || return 1
+    [ "${has_unaddressed_comment}" = "true" ] && return 1
     printf '%s' "${pr_json}" | jq -e '.reviewDecision != "CHANGES_REQUESTED"' > /dev/null 2>&1 || return 1
     pr_json_has_failed_required_check "${pr_json}" && return 1
     pr_json_has_failed_check_of_unknown_requiredness "${pr_json}" && return 1
@@ -601,6 +607,35 @@ pr_should_use_dependency_prompt() {
     printf '%s' "${pr_json}" | jq -e '.mergeStateStatus == "DIRTY" or .mergeStateStatus == "BEHIND"' > /dev/null 2>&1 && return 1
     pr_json_has_placeholder_file "${pr_json}" && return 1
     return 0
+}
+
+# Whether a dependency-update PR (pr_has_dependency_update_branch: a same-repository depends/ or
+# dependabot/ branch) has the repository owner ($2, the owner part of owner/repo) as its only
+# assignee, compared without regard to case (#1977). That is how a dependency PR is adopted: the
+# dispatcher keeps serving it only while it is assigned to the owner, so the assignment is the
+# adopted state, not a person claiming the work, and the PR counts as the orchestrator's own. Its
+# assignees are never changed (cfwf --assign-self leaves such a PR as it is). Any other assignee, or
+# the owner beside anyone else, is a claim like on any other item.
+pr_json_is_owner_adopted_dependency_pr() {
+    local pr_json="$1" repo_owner="$2"
+    [ -n "${repo_owner}" ] || return 1
+    pr_has_dependency_update_branch "${pr_json}" || return 1
+    printf '%s' "${pr_json}" | jq -e --arg owner "${repo_owner}" \
+        '[(.assignees // [])[] | .login // "" | ascii_downcase] == [$owner | ascii_downcase]' > /dev/null 2>&1
+}
+
+# Whether a PR is assigned to someone other than the orchestrator ($2, _GH_ME), so that the
+# orchestrator stands off it (#1142) and cfwf --assign-self refuses it (#1962): it has an assignee
+# and the orchestrator is not one of them (logins compared without regard to case). An owner-adopted
+# dependency PR (pr_json_is_owner_adopted_dependency_pr, $3 the repository owner) is not: it is the
+# orchestrator's own (#1977). A dependency PR assigned to anyone else is stood off like any other
+# PR: the agent's assign step would be refused, so a session there could only stop at once.
+pr_json_assigned_to_another() {
+    local pr_json="$1" me="$2" repo_owner="${3:-}"
+    pr_json_is_owner_adopted_dependency_pr "${pr_json}" "${repo_owner}" && return 1
+    printf '%s' "${pr_json}" | jq -e --arg me "${me}" \
+        '[(.assignees // [])[] | .login // "" | ascii_downcase] as $logins
+         | ($logins | length > 0) and ($logins | index($me | ascii_downcase) == null)' > /dev/null 2>&1
 }
 
 # Decides whether an open PR from the priorities feed is being driven by a human rather than the

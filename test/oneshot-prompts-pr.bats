@@ -533,7 +533,7 @@ load oneshot_helper
     [[ "${output}" == *$'\n'"     It prints the PR metadata, the Workflow board status"* ]]
     [[ "${output}" == *"Its exit code follows cfwf pr checks: 0 every required check passed, 3 at least one failed, 4 at least one pending, 5 no checks yet."* ]]
     [[ "${output}" == *"   - Run one cfwf command per Bash call, with no \`;\`, \`&&\`, \`|\`, \`echo \$?\` or redirection around it, and read the exit code from the tool result. A compound command containing cfwf is refused in unattended runs and ends the session."* ]]
-    [[ "${output}" == *"   Its exit code is the CI verdict step 4 uses; do NOT run a separate cfwf pr checks call."$'\n'"2. Assign yourself: cfwf pr edit --repo credfeto/example-repo --pr 1234 --assign-self"* ]]
+    [[ "${output}" == *"   Its exit code is the CI verdict step 4 uses; do NOT run a separate cfwf pr checks call."$'\n'"2. Do NOT assign yourself or change this PR's assignees in any way"* ]]
     [[ "${output}" == *"4. Decide from the exit code of step 1's cfwf pr status (0 every required check passed; 3 at least one failed; 4 none failed and at least one is pending; 5 no checks yet, treat as pending)"* ]]
     [[ "${output}" == *"auto-merge is already enabled (the auto-merge line of step 1's cfwf pr status reads on)"* ]]
     # The state comes from cfwf pr status alone: no separate checks call is prescribed.
@@ -551,8 +551,38 @@ load oneshot_helper
     [[ "${output}" != *"cfwf pr checks --repo credfeto/example-repo"* ]]
     # Step 1 comes before every other step.
     local before_first="${output%%1. FIRST COMMAND (MANDATORY)*}"
-    local before_assign="${output%%2. Assign yourself*}"
+    local before_assign="${output%%2. Do NOT assign yourself*}"
     [ "${#before_first}" -lt "${#before_assign}" ]
+}
+
+# --- build_pr_claude_md: dependency PRs keep their assignees (#1977) ---------------------------
+
+@test "build_pr_claude_md's dependency-PR prompt never assigns: the owner's assignment makes the PR the agent's own (#1977)" {
+    REPO_FULL="credfeto/example-repo"
+    run build_pr_claude_md 1234 "/resolved/.ai-instructions" "CLEAN" "depends/x" "" "" "true"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *$'\n'"2. Do NOT assign yourself or change this PR's assignees in any way: a dependency PR is recognised by its assignment to the repository owner, which makes it this automation's own, so there is no assign step."$'\n'"3. "* ]]
+    [[ "${output}" != *"--assign-self"* ]]
+    [[ "${output}" != *"assign refused"* ]]
+}
+
+@test "build_pr_claude_md's full flow on a dependency branch acts for the owner and never assigns, and keeps the assign step everywhere else (#1977)" {
+    REPO_FULL="credfeto/example-repo"
+    local -a args=(1234 "/resolved/.ai-instructions" "CLEAN" "dependabot/nuget/x-1.0.1" "" "" "false" "" "false" "" "" "")
+    run build_pr_claude_md "${args[@]}" true
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *$'\n'"- This is a dependency update PR. Do NOT assign yourself or change its assignees in any way: a dependency PR is recognised by its assignment to the repository owner, which makes it this automation's own, so there is no assign step. Act as the repository owner's agent: read the trusted comments, the owner's included, and do what they ask."$'\n'* ]]
+    [[ "${output}" != *"--assign-self"* ]]
+    [[ "${output}" == *"TRUSTED COMMENTS FIRST (MANDATORY"* ]]
+
+    # Any other PR, and a dependency branch not flagged as one, still claims the PR first.
+    local flag
+    for flag in false ""; do
+        run build_pr_claude_md "${args[@]}" "${flag}"
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == *$'\n'"- Always assign yourself first if you are not already the assignee: cfwf pr edit --repo credfeto/example-repo --pr 1234 --assign-self If it exits 8 with \"assign refused\", another user has claimed this item: STOP at once and change nothing."$'\n'* ]]
+        [[ "${output}" != *"This is a dependency update PR. Do NOT assign yourself"* ]]
+    done
 }
 
 @test "_build_pr_first_command_rule is the one FIRST COMMAND text in both PR prompts (#1800)" {

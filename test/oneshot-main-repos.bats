@@ -125,6 +125,108 @@ stub_pr_merged() {
     [ "${status}" -eq 1 ]
 }
 
+# --- owner-adopted dependency PRs (#1977) ----------------------------------------------------
+# A dependency PR is adopted by assigning it to the repository owner; that is the orchestrator's
+# own PR, never a claim by another user.
+
+@test "pr_should_use_dependency_prompt falls back to the full flow while a trusted comment is unaddressed (#1977)" {
+    run pr_should_use_dependency_prompt '{"headRefName":"depends/update-x/1.2.3","statusCheckRollup":[]}' true
+    [ "${status}" -eq 1 ]
+    run pr_should_use_dependency_prompt '{"headRefName":"depends/update-x/1.2.3","statusCheckRollup":[]}' false
+    [ "${status}" -eq 0 ]
+    run pr_should_use_dependency_prompt '{"headRefName":"depends/update-x/1.2.3","statusCheckRollup":[]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_json_is_owner_adopted_dependency_pr is true only for a same-repository dependency branch whose only assignee is the owner, in any case (#1977)" {
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"dependabot/nuget/x-1.0.1","assignees":[{"login":"credfeto"}]}' credfeto
+    [ "${status}" -eq 0 ]
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/update-x/1.2.3","isCrossRepository":false,"assignees":[{"login":"Funfair-Tech"}]}' funfair-tech
+    [ "${status}" -eq 0 ]
+    # The owner beside anyone else, someone else, nobody, a fork, another branch, or no owner given.
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"credfeto"},{"login":"alice"}]}' credfeto
+    [ "${status}" -eq 1 ]
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"alice"}]}' credfeto
+    [ "${status}" -eq 1 ]
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[]}' credfeto
+    [ "${status}" -eq 1 ]
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","isCrossRepository":true,"assignees":[{"login":"credfeto"}]}' credfeto
+    [ "${status}" -eq 1 ]
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"feat/x","labels":[{"name":"dependencies"}],"assignees":[{"login":"credfeto"}]}' credfeto
+    [ "${status}" -eq 1 ]
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"credfeto"}]}' ""
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_json_assigned_to_another stands off any other assignee, but not the orchestrator, nobody or the owner of an adopted dependency PR (#1977)" {
+    # Assigned to someone else: a feature PR, a dependency PR, a labelled one, the owner beside them.
+    run pr_json_assigned_to_another '{"headRefName":"feat/x","assignees":[{"login":"alice"}]}' testuser org
+    [ "${status}" -eq 0 ]
+    run pr_json_assigned_to_another '{"headRefName":"dependabot/npm_and_yarn/x-1.0.0","assignees":[{"login":"alice"}]}' testuser org
+    [ "${status}" -eq 0 ]
+    run pr_json_assigned_to_another '{"headRefName":"feat/x","labels":[{"name":"dependencies"}],"assignees":[{"login":"alice"}]}' testuser org
+    [ "${status}" -eq 0 ]
+    run pr_json_assigned_to_another '{"headRefName":"depends/x","assignees":[{"login":"org"},{"login":"alice"}]}' testuser org
+    [ "${status}" -eq 0 ]
+    # A feature PR assigned to the owner is still someone else's.
+    run pr_json_assigned_to_another '{"headRefName":"feat/x","assignees":[{"login":"org"}]}' testuser org
+    [ "${status}" -eq 0 ]
+    # Not someone else's: the orchestrator's (in any case, beside others), nobody's, the adopted one.
+    run pr_json_assigned_to_another '{"headRefName":"feat/x","assignees":[{"login":"alice"},{"login":"TestUser"}]}' testuser org
+    [ "${status}" -eq 1 ]
+    run pr_json_assigned_to_another '{"headRefName":"feat/x","assignees":[]}' testuser org
+    [ "${status}" -eq 1 ]
+    run pr_json_assigned_to_another '{"headRefName":"feat/x"}' testuser org
+    [ "${status}" -eq 1 ]
+    run pr_json_assigned_to_another '{"headRefName":"depends/x","assignees":[{"login":"ORG"}]}' testuser org
+    [ "${status}" -eq 1 ]
+}
+
+@test "main gives an owner-adopted dependency PR with an unaddressed trusted comment the full flow, told it is a dependency PR (#1977)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    get_trusted_logins() { printf '["org","testuser"]\n'; }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"dependabot/nuget/x-1.0.1","comments":[{"author":{"login":"org"},"createdAt":"2026-11-18T10:00:00Z","body":"Please also bump y"}],"reviews":[],"statusCheckRollup":[],"files":[{"path":"a.csproj"}],"isCrossRepository":false,"assignees":[{"login":"org"}]}\n'; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint() { printf 'fp-old\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    _GH_ME="testuser"
+    build_pr_claude_md() {
+        printf '%s %s\n' "$7" "${13:-}" > "${TEST_TMP}/flags"
+        printf '%s' "${10}" > "${TEST_TMP}/comments"
+        printf 'mock-pr-claude-md\n'
+    }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"assigned to another user"* ]]
+    [[ "${output}" == *"Found actionable PullRequest #5"* ]]
+    [ "$(cat "${TEST_TMP}/flags")" = "false true" ]
+    grep -q "Please also bump y" "${TEST_TMP}/comments"
+}
+
+@test "main keeps the verify-only prompt for an owner-adopted dependency PR with nothing unaddressed (#1977)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"depends/update-x/1.2.3","comments":[],"reviews":[],"statusCheckRollup":[],"files":[{"path":"a.csproj"}],"isCrossRepository":false,"assignees":[{"login":"org"}]}\n'; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint() { printf 'fp-old\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    _GH_ME="testuser"
+    build_pr_claude_md() {
+        printf '%s %s\n' "$7" "${13:-}" > "${TEST_TMP}/flags"
+        printf 'mock-pr-claude-md\n'
+    }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${TEST_TMP}/flags")" = "true true" ]
+}
+
 @test "pr_json_has_placeholder_file detects .deleteme.now only" {
     run pr_json_has_placeholder_file '{"files":[{"path":".deleteme.now"}]}'
     [ "${status}" -eq 0 ]

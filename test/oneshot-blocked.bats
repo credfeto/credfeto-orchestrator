@@ -816,6 +816,27 @@ load oneshot_helper
     [ "${output}" = "0" ]
 }
 
+@test "block_pr_for_idle_exhausted_no_progress names an unaddressed trusted comment instead of claiming there is no known blocking reason (#1977)" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+
+    run block_pr_for_idle_exhausted_no_progress 5 "org/repo" "false" "" "true"
+    [ "${status}" -eq 0 ]
+    grep -q "pr comment 5 --repo org/repo --body This PR's automation idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted while a trusted comment newer than the automation's last session is still unaddressed: the sessions made no progress on it. No required check has failed. Blocking this PR until a human investigates." "${call_log}"
+    run grep -c "no known blocking reason\|no unaddressed review request\|There is no unaddressed" "${call_log}"
+    [ "${output}" = "0" ]
+
+    # With the required-check lookup failed as well, neither claim is made.
+    : > "${call_log}"
+    run block_pr_for_idle_exhausted_no_progress 5 "org/repo" "true" "" "true"
+    [ "${status}" -eq 0 ]
+    grep -q "is still unaddressed: the sessions made no progress on it. The lookup of which checks are required failed, so a failed required check could not be ruled out." "${call_log}"
+    run grep -c "no known blocking reason\|no unaddressed review request\|There is no unaddressed\|No required check has failed" "${call_log}"
+    [ "${output}" = "0" ]
+}
+
 # --- apply_blocked_label_with_reason (#1140 review) -----------------------------
 
 @test "apply_blocked_label_with_reason posts the reason as a comment and notifies with it on success" {

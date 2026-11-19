@@ -1533,34 +1533,66 @@ make_dirty_branch_checkout() {
     [[ "${output}" == *"Found actionable PullRequest #5"* ]]
 }
 
-@test "main processes a depends/-branch dependency PR assigned only to a human (#1142 follow-up)" {
+# Runs main once over a single feed PR in org/repo with the given head branch, labels JSON,
+# assignees JSON and isCrossRepository value (false by default).
+main_assigned_pr() {
+    PR_HEAD="$1" PR_LABELS="$2" PR_ASSIGNEES="$3" PR_CROSS="${4:-false}"
     setup_main_mocks
     fetch_all_priorities() {
         printf '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
     }
-    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"auto-pr"}],"headRefName":"depends/update-foo/1.2.3","headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"assignees":[{"login":"alice"}]}\n'; }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":%s,"headRefName":"%s","headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"isCrossRepository":%s,"assignees":%s}\n' "${PR_LABELS}" "${PR_HEAD}" "${PR_CROSS}" "${PR_ASSIGNEES}"; }
     pr_json_has_blocked_label() { return 1; }
     _GH_ME="testuser"
-
     run main
-    [ "${status}" -eq 0 ]
-    [[ "${output}" != *"assigned to another user"* ]]
-    [[ "${output}" == *"Found actionable PullRequest #5"* ]]
 }
 
-@test "main processes a dependencies-labelled PR assigned only to a human (#1142 follow-up)" {
-    setup_main_mocks
-    fetch_all_priorities() {
-        printf '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
-    }
-    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"npm dependencies"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"assignees":[{"login":"alice"}]}\n'; }
-    pr_json_has_blocked_label() { return 1; }
-    _GH_ME="testuser"
+@test "main processes a dependency PR whose only assignee is the repository owner, in any case, as its own (#1977)" {
+    local head login
+    for head in "depends/update-foo/1.2.3" "dependabot/nuget/foo-1.2.3"; do
+        for login in org ORG; do
+            main_assigned_pr "${head}" '[{"name":"auto-pr"}]' "[{\"login\":\"${login}\"}]"
+            [ "${status}" -eq 0 ]
+            [[ "${output}" != *"assigned to another user"* ]]
+            [[ "${output}" == *"Found actionable PullRequest #5"* ]]
+        done
+    done
+}
 
-    run main
+@test "main stands off a dependency PR assigned to a human other than the repository owner (#1977)" {
+    main_assigned_pr "depends/update-foo/1.2.3" '[{"name":"auto-pr"}]' '[{"login":"alice"}]'
     [ "${status}" -eq 0 ]
-    [[ "${output}" != *"assigned to another user"* ]]
-    [[ "${output}" == *"Found actionable PullRequest #5"* ]]
+    [[ "${output}" == *"PR #5 in org/repo is assigned to another user — standing off"* ]]
+    [[ "${output}" != *"Found actionable"* ]]
+    [[ "${output}" == *"human-driven: 1"* ]]
+}
+
+@test "main stands off a dependency PR assigned to the repository owner and another user (#1977)" {
+    main_assigned_pr "dependabot/npm_and_yarn/foo-1.2.3" '[]' '[{"login":"org"},{"login":"alice"}]'
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #5 in org/repo is assigned to another user — standing off"* ]]
+    [[ "${output}" != *"Found actionable"* ]]
+}
+
+@test "main stands off a dependencies-labelled PR or a fork's depends/ PR assigned to anyone else, the owner included (#1977)" {
+    main_assigned_pr "chore/update-pins" '[{"name":"npm dependencies"}]' '[{"login":"alice"}]'
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #5 in org/repo is assigned to another user — standing off"* ]]
+    [[ "${output}" != *"Found actionable"* ]]
+
+    main_assigned_pr "chore/update-pins" '[{"name":"npm dependencies"}]' '[{"login":"org"}]'
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #5 in org/repo is assigned to another user — standing off"* ]]
+
+    main_assigned_pr "depends/update-foo/1.2.3" '[]' '[{"login":"org"}]' true
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #5 in org/repo is assigned to another user — standing off"* ]]
+}
+
+@test "main still stands off a feature PR assigned only to the repository owner (#1977)" {
+    main_assigned_pr "feat/1977-x" '[]' '[{"login":"org"}]'
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #5 in org/repo is assigned to another user — standing off"* ]]
 }
 
 @test "main marks the repo active when a feed PR's state fetch fails, keeping issues serialized (#1134)" {

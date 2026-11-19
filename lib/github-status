@@ -603,11 +603,20 @@ block_pr_for_idle_exhausted_review() {
 # the PR's board status and the phase the orchestrator expected next from it
 # (pr_next_phase_for_board_status), so a human can see where the review loop stalled (#1650).
 # Without a board, or without pr_json, the reason is unchanged.
+# Optional fifth argument has_unaddressed_comment ("true"/"false", default "false"): set when a
+# trusted comment newer than the agent's last session is waiting (set_pr_has_unaddressed_comment).
+# The reason then names that comment instead of claiming there is no known blocking reason and no
+# unaddressed request (#1977): an owner's request on a dependency PR was blocked with exactly that
+# claim while it sat unanswered.
 block_pr_for_idle_exhausted_no_progress() {
-    local item_id="$1" item_repo="$2" required_checks_unknown="${3:-false}" pr_json="${4:-}"
+    local item_id="$1" item_repo="$2" required_checks_unknown="${3:-false}" pr_json="${4:-}" has_unaddressed_comment="${5:-false}"
     local board_status next_phase
     local reason="This PR's automation idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted with no known blocking reason — no required check has failed and there is no unaddressed review request. Blocking this PR until a human investigates."
-    if [ "${required_checks_unknown}" = "true" ]; then
+    if [ "${has_unaddressed_comment}" = "true" ] && [ "${required_checks_unknown}" = "true" ]; then
+        reason="This PR's automation idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted while a trusted comment newer than the automation's last session is still unaddressed: the sessions made no progress on it. The lookup of which checks are required failed, so a failed required check could not be ruled out. Blocking this PR until a human investigates."
+    elif [ "${has_unaddressed_comment}" = "true" ]; then
+        reason="This PR's automation idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted while a trusted comment newer than the automation's last session is still unaddressed: the sessions made no progress on it. No required check has failed. Blocking this PR until a human investigates."
+    elif [ "${required_checks_unknown}" = "true" ]; then
         reason="This PR's automation idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted with no known blocking reason, but the lookup of which checks are required failed, so a failed required check could not be ruled out. There is no unaddressed review request. Blocking this PR until a human investigates."
     fi
     if [ -n "${pr_json}" ] && [ -n "${_WF_PROJECT_ID}" ]; then

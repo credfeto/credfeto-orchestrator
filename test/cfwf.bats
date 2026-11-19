@@ -19618,3 +19618,132 @@ set_sync_assignees() {
         [[ "$(printf '%s' "${output}" | tr '\n' ' ' | tr -s ' ')" == *"assigned to another user"* ]]
     done
 }
+
+# --- --assign-self on a dependency pull request the repository owner holds (#1977) ----------
+
+# The note --assign-self prints on stderr for a dependency pull request adopted by the owner.
+OWNER_ADOPTED_NOTE="cfwf: note: ${REPO}#${EDIT_PR} is a dependency pull request assigned to its repository owner, which makes it the agent's already; its assignees were not changed"
+
+# Sets the head branch of the pull request EDIT_PR, as the REST read pr edit makes answers it, to
+# $1, in the repository $2 (REPO by default; - for a head repository that is gone), with REPO as the
+# base repository.
+set_pr_edit_head() {
+    local fixture
+    fixture="$(api_fixture "repos/${REPO}/pulls/${EDIT_PR}").json"
+    jq --arg ref "$1" --arg head "${2:-${REPO}}" --arg base "${REPO}" \
+        '. + {head: {ref: $ref, repo: (if $head == "-" then null else {full_name: $head} end)}, base: {repo: {full_name: $base}}}' \
+        < "${fixture}" > "${fixture}.next"
+    mv "${fixture}.next" "${fixture}"
+}
+
+# Sets the head branch of the pull request SYNC_PR, as gh pr view answers it, to $1, from a fork
+# when $2 is true.
+set_sync_head() {
+    jq --arg ref "$1" --argjson cross "${2:-false}" '. + {headRefName: $ref, isCrossRepository: $cross}' \
+        < "${GH_FIXTURES}/pr-view.json" > "${GH_FIXTURES}/pr-view.next.json"
+    mv "${GH_FIXTURES}/pr-view.next.json" "${GH_FIXTURES}/pr-view.json"
+}
+
+@test "pr edit --assign-self on a depends/ or dependabot/ pull request assigned only to the repository owner exits 0 and writes no assignee (#1977)" {
+    local branch login
+    for branch in depends/update-xunit/3.0.1 dependabot/nuget/x-1.0.1; do
+        for login in credfeto CREDFETO; do
+            rm -f "${GH_LOG}"
+            prepare_pr_edit "dependabot[bot]" Bot
+            set_pr_edit_assignees "${login}"
+            set_pr_edit_head "${branch}"
+            run_pr_edit --assign-self
+            [ "${status}" -eq 0 ]
+            [ "${output}" = "${EDIT_PR_URL}" ]
+            [ "${stderr}" = "${OWNER_ADOPTED_NOTE}" ]
+            [ "$(edits_made)" -eq 0 ]
+            [ "$(gh_call_count "--add-assignee")" -eq 0 ]
+        done
+    done
+
+    # The rest of the edit still goes ahead, without the assignee.
+    rm -f "${GH_LOG}"
+    run_pr_edit --title "${EDIT_TITLE}" --assign-self
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_PR_URL}" ]
+    [ "${stderr}" = "${OWNER_ADOPTED_NOTE}" ]
+    issue_create_called_with "pr edit ${EDIT_PR} --repo ${REPO} --title ${EDIT_TITLE}"
+    [ "$(edits_made)" -eq 1 ]
+}
+
+@test "pr edit --assign-self still refuses a dependency pull request assigned to anyone but the owner alone, one from a fork, and any other pull request the owner holds (#1977)" {
+    prepare_pr_edit "dependabot[bot]" Bot
+    local -a cases=(
+        "dependabot/npm_and_yarn/x-1.0.0|${REPO}|someone-else"
+        "dependabot/npm_and_yarn/x-1.0.0|${REPO}|credfeto someone-else"
+        "depends/update-x/1.2.3|someone-else/credfeto-orchestrator|credfeto"
+        "depends/update-x/1.2.3|-|credfeto"
+        "feat/1977-a-change|${REPO}|credfeto"
+        "fix/depends/x|${REPO}|credfeto"
+    )
+    local entry branch head assignees
+    local -a logins
+    for entry in "${cases[@]}"; do
+        IFS='|' read -r branch head assignees <<< "${entry}"
+        read -r -a logins <<< "${assignees}"
+        rm -f "${GH_LOG}"
+        set_pr_edit_assignees "${logins[@]}"
+        set_pr_edit_head "${branch}" "${head}"
+        run_pr_edit --title "${EDIT_TITLE}" --assign-self
+        [ "${status}" -eq 8 ]
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: assign refused: already assigned to another user" ]
+        [ "$(edits_made)" -eq 0 ]
+    done
+
+    # A dependency pull request with no assignee, or the agent's, is assigned as before.
+    rm -f "${GH_LOG}"
+    set_pr_edit_assignees
+    set_pr_edit_head depends/update-x/1.2.3
+    run_pr_edit --assign-self
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    issue_create_called_with "pr edit ${EDIT_PR} --repo ${REPO} --add-assignee ${AGENT}"
+}
+
+@test "pr sync-labels --assign-self syncs the labels of a dependency pull request assigned only to the repository owner and leaves its assignees alone (#1977)" {
+    write_sync_pr "${REPO} 10"
+    write_sync_issue_labels 10 Bug
+    write_repository_labels Bug
+    write_agent_login
+    set_sync_assignees credfeto
+    set_sync_head dependabot/github_actions/x-2.0.0
+    run_sync_labels --assign-self
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(printf 'Bug\n%s synced' "${SYNC_PR_URL}")" ]
+    [ "${stderr}" = "cfwf: note: ${REPO}#${SYNC_PR} is a dependency pull request assigned to its repository owner, which makes it the agent's already; its assignees were not changed" ]
+    [ "$(gh_call_count "--add-label Bug")" -eq 1 ]
+    [ "$(gh_call_count "--add-assignee")" -eq 0 ]
+
+    # From a fork, or assigned to someone else as well, it is refused before any label is added.
+    local cross
+    for cross in true false; do
+        rm -f "${GH_LOG}"
+        if [ "${cross}" = true ]; then
+            set_sync_assignees credfeto
+        else
+            set_sync_assignees credfeto someone-else
+        fi
+        set_sync_head dependabot/github_actions/x-2.0.0 "${cross}"
+        run_sync_labels --assign-self
+        [ "${status}" -eq 8 ]
+        [ "${stderr}" = "cfwf: assign refused: already assigned to another user" ]
+        [ "$(gh_call_count " edit ")" -eq 0 ]
+    done
+}
+
+@test "the help of pr edit and pr sync-labels describes the owner-adopted dependency pull request (#1977)" {
+    local command
+    local -a words
+    for command in "pr edit" "pr sync-labels"; do
+        read -r -a words <<< "${command}"
+        run "${SCRIPT}" help "${words[@]}"
+        [ "${status}" -eq 0 ]
+        [[ "$(printf '%s' "${output}" | tr '\n' ' ' | tr -s ' ')" == *"A dependency pull request (a depends/ or dependabot/ branch in the repository itself) whose only assignee is the repository's owner is the agent's already: its assignees are left as they are, a note says so on stderr"* ]]
+    done
+}
