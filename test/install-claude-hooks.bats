@@ -202,7 +202,7 @@ expected_mcp_names() {
         | sed '/^$/d' | LC_ALL=C sort -u | paste -sd ' ' -
 }
 
-@test "the headers helpers, the build-dotnet, build-node and changelog wrappers and managed-mcp.json are installed via sudo, 0755 and 0444" {
+@test "the headers helpers, the build-dotnet, build-node and changelog wrappers, their shared launcher and managed-mcp.json are installed via sudo, 0755 and 0444" {
     allow_sudo
     main
 
@@ -211,6 +211,9 @@ expected_mcp_names() {
     diff "${SOURCE_KB_MCP_HEADERS}" "${CLAUDE_MANAGED_DIR}/mcp/kb-mcp-headers"
     [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/mcp/kb-mcp-headers")" = "755" ]
     grep -qxF "install -o root -g root -m 0755 ${SOURCE_KB_MCP_HEADERS} ${CLAUDE_MANAGED_DIR}/mcp/kb-mcp-headers" "${SUDO_LOG}"
+    diff "${SOURCE_DOTNET_TOOL_MCP_LAUNCHER}" "${CLAUDE_MANAGED_DIR}/mcp/dotnet-tool-mcp-launcher"
+    [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/mcp/dotnet-tool-mcp-launcher")" = "755" ]
+    grep -qxF "install -o root -g root -m 0755 ${SOURCE_DOTNET_TOOL_MCP_LAUNCHER} ${CLAUDE_MANAGED_DIR}/mcp/dotnet-tool-mcp-launcher" "${SUDO_LOG}"
     diff "${SOURCE_BUILD_DOTNET_MCP}" "${CLAUDE_MANAGED_DIR}/mcp/build-dotnet-mcp"
     [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/mcp/build-dotnet-mcp")" = "755" ]
     grep -qxF "install -o root -g root -m 0755 ${SOURCE_BUILD_DOTNET_MCP} ${CLAUDE_MANAGED_DIR}/mcp/build-dotnet-mcp" "${SUDO_LOG}"
@@ -542,6 +545,15 @@ expected_mcp_names() {
     [ ! -e "${CLAUDE_MANAGED_DIR}" ]
 }
 
+@test "dies when the shared MCP launcher is missing, before anything is installed" {
+    allow_sudo
+    SOURCE_DOTNET_TOOL_MCP_LAUNCHER="${TEST_TMP}/launcher-does-not-exist"
+    run main
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"Source shared MCP launcher not found: ${TEST_TMP}/launcher-does-not-exist"* ]]
+    [ ! -e "${CLAUDE_MANAGED_DIR}" ]
+}
+
 @test "dies when the build-dotnet MCP wrapper is missing, before anything is installed" {
     allow_sudo
     SOURCE_BUILD_DOTNET_MCP="${TEST_TMP}/build-dotnet-does-not-exist"
@@ -837,6 +849,7 @@ kb_token_privacy_predicates() {
     grep -qF "! grep -qi 'authorization' /etc/claude-code/managed-mcp.json" "${dockerfile}"
     grep -qF "jq -e '.mcpServers[\"build-dotnet\"] == {\"type\": \"stdio\", \"command\": \"/etc/claude-code/mcp/build-dotnet-mcp\"}' /etc/claude-code/managed-mcp.json" "${dockerfile}"
     grep -qF "[ \"\$(stat -c '%U:%G %a' /etc/claude-code/mcp/build-dotnet-mcp)\" = \"root:root 755\" ]" "${dockerfile}"
+    grep -qF "[ \"\$(stat -c '%U:%G %a' /etc/claude-code/mcp/dotnet-tool-mcp-launcher)\" = \"root:root 755\" ]" "${dockerfile}"
     # shellcheck disable=SC2016  # the literal ${...} the sanity block's shell expands
     grep -qF '[ "${BUILD_MCP_REPO_ROOT}" = "/workspace/repo" ]' "${dockerfile}"
     # shellcheck disable=SC2016  # the literal ${...} the sanity block's shell expands
@@ -987,11 +1000,12 @@ run_dockerfile_mcp_checks() {
     grep -qE 'for cmd in git gh ' "${dockerfile}"
 }
 
-@test "the Dockerfile copies managed-mcp.json, the headers helpers and the build-dotnet, build-node and changelog wrappers into /etc/claude-code, and sets each wrapper's root and tool mode" {
+@test "the Dockerfile copies managed-mcp.json, the headers helpers, the build-dotnet, build-node and changelog wrappers and their shared launcher into /etc/claude-code, and sets each wrapper's root and tool mode" {
     local dockerfile="${SOURCE_DIR}/Dockerfile"
     grep -qxF 'COPY --chown=root:root --chmod=0444 claude-managed-mcp.json /etc/claude-code/managed-mcp.json' "${dockerfile}"
     grep -qxF 'COPY --chown=root:root --chmod=0755 claude-mcp/cfwf-mcp-headers /etc/claude-code/mcp/cfwf-mcp-headers' "${dockerfile}"
     grep -qxF 'COPY --chown=root:root --chmod=0755 claude-mcp/kb-mcp-headers /etc/claude-code/mcp/kb-mcp-headers' "${dockerfile}"
+    grep -qxF 'COPY --chown=root:root --chmod=0755 claude-mcp/dotnet-tool-mcp-launcher /etc/claude-code/mcp/dotnet-tool-mcp-launcher' "${dockerfile}"
     grep -qxF 'COPY --chown=root:root --chmod=0755 claude-mcp/build-dotnet-mcp /etc/claude-code/mcp/build-dotnet-mcp' "${dockerfile}"
     grep -qxF 'ENV BUILD_MCP_REPO_ROOT=/workspace/repo' "${dockerfile}"
     grep -qxF 'ENV BUILD_MCP_TOOL=global' "${dockerfile}"
@@ -1001,6 +1015,7 @@ run_dockerfile_mcp_checks() {
     grep -qxF 'ENV CHANGELOG_MCP_TOOL=global' "${dockerfile}"
     [ -x "${SOURCE_CFWF_MCP_HEADERS}" ]
     [ -x "${SOURCE_KB_MCP_HEADERS}" ]
+    [ -x "${SOURCE_DOTNET_TOOL_MCP_LAUNCHER}" ]
     [ -x "${SOURCE_BUILD_DOTNET_MCP}" ]
     [ -x "${SOURCE_BUILD_NODE_MCP}" ]
     [ -x "${SOURCE_CHANGELOG_MCP}" ]

@@ -25,7 +25,8 @@
 # It also installs /etc/claude-code/managed-mcp.json, which takes exclusive
 # control of the MCP servers Claude Code loads, and the cfwf-mcp-headers and
 # kb-mcp-headers helpers and the build-dotnet-mcp, build-node-mcp and
-# changelog-mcp wrappers it names, all root:root 0755 in /etc/claude-code/mcp.
+# changelog-mcp wrappers it names, with the dotnet-tool-mcp-launcher those three
+# source from their own directory, all root:root 0755 in /etc/claude-code/mcp.
 # Each wrapper starts its server (build-dotnet, build-node or changelog) for
 # whichever user runs Claude Code, so the one installed file works for every
 # user on the host. The installed file is the container's shipped servers
@@ -85,6 +86,7 @@ SOURCE_CFWF="${SOURCE_DIR}/scripts/cfwf"
 SOURCE_MANAGED_MCP="${SOURCE_DIR}/claude-managed-mcp.json"
 SOURCE_CFWF_MCP_HEADERS="${SOURCE_DIR}/claude-mcp/cfwf-mcp-headers"
 SOURCE_KB_MCP_HEADERS="${SOURCE_DIR}/claude-mcp/kb-mcp-headers"
+SOURCE_DOTNET_TOOL_MCP_LAUNCHER="${SOURCE_DIR}/claude-mcp/dotnet-tool-mcp-launcher"
 SOURCE_BUILD_DOTNET_MCP="${SOURCE_DIR}/claude-mcp/build-dotnet-mcp"
 SOURCE_BUILD_NODE_MCP="${SOURCE_DIR}/claude-mcp/build-node-mcp"
 SOURCE_CHANGELOG_MCP="${SOURCE_DIR}/claude-mcp/changelog-mcp"
@@ -170,6 +172,7 @@ install_managed_files() {
     root_install -m 0444 "${SOURCE_MANAGED_SETTINGS}" "${CLAUDE_MANAGED_DIR}/managed-settings.json"
     root_install -m 0755 "${SOURCE_CFWF_MCP_HEADERS}" "${mcp_dir}/$(basename "${SOURCE_CFWF_MCP_HEADERS}")"
     root_install -m 0755 "${SOURCE_KB_MCP_HEADERS}" "${mcp_dir}/$(basename "${SOURCE_KB_MCP_HEADERS}")"
+    root_install -m 0755 "${SOURCE_DOTNET_TOOL_MCP_LAUNCHER}" "${mcp_dir}/$(basename "${SOURCE_DOTNET_TOOL_MCP_LAUNCHER}")"
     root_install -m 0755 "${SOURCE_BUILD_DOTNET_MCP}" "${mcp_dir}/$(basename "${SOURCE_BUILD_DOTNET_MCP}")"
     root_install -m 0755 "${SOURCE_BUILD_NODE_MCP}" "${mcp_dir}/$(basename "${SOURCE_BUILD_NODE_MCP}")"
     root_install -m 0755 "${SOURCE_CHANGELOG_MCP}" "${mcp_dir}/$(basename "${SOURCE_CHANGELOG_MCP}")"
@@ -398,6 +401,7 @@ main() {
     [ -f "${SOURCE_MANAGED_MCP}" ] || die "Source managed MCP servers not found: ${SOURCE_MANAGED_MCP}"
     [ -f "${SOURCE_CFWF_MCP_HEADERS}" ] || die "Source MCP headers helper not found: ${SOURCE_CFWF_MCP_HEADERS}"
     [ -f "${SOURCE_KB_MCP_HEADERS}" ] || die "Source MCP headers helper not found: ${SOURCE_KB_MCP_HEADERS}"
+    [ -f "${SOURCE_DOTNET_TOOL_MCP_LAUNCHER}" ] || die "Source shared MCP launcher not found: ${SOURCE_DOTNET_TOOL_MCP_LAUNCHER}"
     [ -f "${SOURCE_BUILD_DOTNET_MCP}" ] || die "Source build-dotnet MCP wrapper not found: ${SOURCE_BUILD_DOTNET_MCP}"
     [ -f "${SOURCE_BUILD_NODE_MCP}" ] || die "Source build-node MCP wrapper not found: ${SOURCE_BUILD_NODE_MCP}"
     [ -f "${SOURCE_CHANGELOG_MCP}" ] || die "Source changelog MCP wrapper not found: ${SOURCE_CHANGELOG_MCP}"

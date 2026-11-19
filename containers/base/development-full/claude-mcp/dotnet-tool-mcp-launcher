@@ -1,0 +1,378 @@
+#!/bin/sh
+
+# The shared launcher behind the dotnet tool MCP servers in managed-mcp.json. Each server's
+# launcher (build-dotnet-mcp, build-node-mcp, changelog-mcp) is a thin entry that only names its
+# tool and then sources this file from its own directory, so every server is found and started
+# the same way, for whichever user runs Claude Code: one root-owned set of files serves every
+# user on a host and the container alike. Run on its own it only stops with a message.
+#
+# The entry sets these shell variables (not exported, so the server never sees them):
+#   mcp_name               the entry's name, which starts every message
+#   mcp_tool_command       the dotnet tool's command, such as changelog-mcp
+#   mcp_package_id         the tool's NuGet package id, named in the install advice
+#   mcp_env_prefix         the prefix of the server's variables: <PREFIX>_REPO_ROOT,
+#                          <PREFIX>_TOOL and, with a log directory, <PREFIX>_LOG_DIR
+#   mcp_log_dir_name       the per-user state directory <PREFIX>_LOG_DIR defaults to, or
+#                          empty for a server with no log directory
+#   mcp_quiet_sdk_preview  yes for a server that runs dotnet builds, so
+#                          SuppressNETCoreSdkPreviewMessage is forced for them, otherwise no
+#
+# <PREFIX>_REPO_ROOT, the repository the server works on, is kept when it is already set (the
+# container image sets it to its mount). Otherwise it is the root of the git repository holding
+# the project directory (CLAUDE_PROJECT_DIR, or the directory Claude Code started this in when
+# that is unset), or that directory itself outside a repository. It is resolved before the cd
+# below, which would otherwise lose the start directory.
+#
+# The server is the local tool when dotnet tool list --local, run from $HOME, reports its
+# command: the user's home tool manifest pins the version, and that tool is always the one used.
+# The list runs from $HOME because dotnet looks for a manifest from the current directory
+# upwards, so a repository's own root manifest would otherwise hide the user's. The listed
+# package id and exact version are then found in the NuGet global packages folder
+# (NUGET_PACKAGES, or $HOME/.nuget/packages when that is unset or empty) through the package's
+# DotnetToolSettings.xml: under tools/<framework>/<runtime>/ for this machine's runtime (from
+# dotnet --info) ahead of tools/<framework>/any/, newest framework first. A Native AOT tool's
+# package only names the runtime-specific package that holds the executable, so that package,
+# at the same version, is read the same way. The entry point runs as dotnet <dll> for the dotnet
+# runner, or directly for the executable runner. A package that is not in the folder yet gets
+# one dotnet tool restore from $HOME, and when it is still missing the launcher fails rather
+# than start anything else.
+#
+# Otherwise the server is the global tool in .dotnet/tools under DOTNET_CLI_HOME, or under $HOME
+# when that is unset or empty, where dotnet tool install -g puts it.
+#
+# Either tool starts with the repository root as its working directory, with <PREFIX>_REPO_ROOT
+# exported too, so a server that finds its repository from its working directory and one that
+# reads the variable both work on the same repository, and none of them works on $HOME.
+#
+# <PREFIX>_TOOL=global, which only the container image sets, skips both the git and the dotnet
+# tool list probes and runs the global tool under $HOME directly, ignoring DOTNET_CLI_HOME: in
+# the image the tool, HOME and the repository root are all fixed, so there is nothing to choose.
+# It then needs <PREFIX>_REPO_ROOT set, as the image does.
+#
+# stdout is the MCP stream, so only the server writes to it: every message here goes to stderr.
+
+fail() {
+    printf '%s: %s\n' "${mcp_name:-dotnet-tool-mcp-launcher}" "$*" >&2
+    exit 1
+}
+
+require_absolute() {
+    # $1 names the path, $2 is its value and $3 is where the value came from.
+    case "$2" in
+        /*) ;;
+        *) fail "the $1 '$2' from $3 is not an absolute path" ;;
+    esac
+}
+
+[ -n "${mcp_name:-}" ] && [ -n "${mcp_tool_command:-}" ] && [ -n "${mcp_package_id:-}" ] \
+    || fail "run one of the MCP server launchers that source this file, such as changelog-mcp, not this file itself"
+# The prefix names variables read and set through eval below, so it must be a plain name.
+case "${mcp_env_prefix:-}" in
+    "" | [!A-Z]* | *[!A-Z0-9_]*) fail "the variable prefix '${mcp_env_prefix:-}' is not an upper-case name" ;;
+esac
+case "${mcp_quiet_sdk_preview:-}" in
+    yes | no) ;;
+    *) fail "mcp_quiet_sdk_preview is '${mcp_quiet_sdk_preview:-}', but it takes only yes or no" ;;
+esac
+
+root_var="${mcp_env_prefix}_REPO_ROOT"
+tool_var="${mcp_env_prefix}_TOOL"
+log_var="${mcp_env_prefix}_LOG_DIR"
+repo_root=
+tool_mode=
+eval "repo_root=\${${root_var}:-}"
+eval "tool_mode=\${${tool_var}:-}"
+
+[ -n "${HOME:-}" ] || fail "HOME is not set"
+# Every tool path below is built from HOME, and the list, the restore and dotnet --info run
+# after a cd to it. A relative HOME would make the global tool check resolve from the start
+# directory but the local tool's manifest from HOME itself, and a relative cd consults CDPATH,
+# which can print the directory to stdout, the MCP stream.
+require_absolute "home directory" "${HOME}" "HOME"
+
+case "${tool_mode}" in
+    "" | global) ;;
+    *) fail "${tool_var} is '${tool_mode}', but it takes only global, or is left unset to choose the tool" ;;
+esac
+
+# dotnet tool install -g puts the tool under DOTNET_CLI_HOME when that is set and not empty, as
+# the SDK reads it, and under HOME otherwise. A relative one would depend on the directory dotnet
+# ran in, so the tool could be anywhere. The image (<PREFIX>_TOOL=global) bakes the tool in under
+# its fixed HOME, the path its sanity block checks, so there DOTNET_CLI_HOME is ignored: a runtime
+# value must not point the launcher at a tool the image never checked.
+dotnet_cli_home="${HOME}"
+if [ "${tool_mode}" != global ] && [ -n "${DOTNET_CLI_HOME:-}" ]; then
+    require_absolute "dotnet CLI home" "${DOTNET_CLI_HOME}" "DOTNET_CLI_HOME"
+    dotnet_cli_home="${DOTNET_CLI_HOME}"
+fi
+global_tool="${dotnet_cli_home}/.dotnet/tools/${mcp_tool_command}"
+
+root_source="${root_var}"
+if [ -z "${repo_root}" ]; then
+    [ "${tool_mode}" != global ] \
+        || fail "${tool_var}=global skips the git probe, so it needs ${root_var} set"
+    # Claude Code documents CLAUDE_PROJECT_DIR for stdio servers but not their working
+    # directory, so the working directory is only the fallback.
+    if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ -d "${CLAUDE_PROJECT_DIR}" ]; then
+        start_dir="${CLAUDE_PROJECT_DIR}"
+    else
+        # dash's pwd prints nothing yet succeeds when the directory has been removed; an empty path
+        # is never a directory, so the -d test catches that as well as a removed one.
+        start_dir=$(pwd)
+        [ -d "${start_dir}" ] || fail "cannot read the directory Claude Code was started in"
+    fi
+    # pwd and git's top level are always absolute, so only CLAUDE_PROJECT_DIR can be relative here.
+    root_source="CLAUDE_PROJECT_DIR"
+    # Every child run before the exec reads /dev/null: stdin is the MCP stream, and a child that read
+    # it would take Claude Code's initialize request before the server could.
+    repo_root=$(git -C "${start_dir}" rev-parse --show-toplevel < /dev/null 2> /dev/null) \
+        || repo_root="${start_dir}"
+fi
+# Either tool is started by a cd to the root, which for a relative path would resolve from the
+# start directory and consult CDPATH (printing to stdout, the MCP stream). The server also stops
+# at startup when a set root is not absolute; failing here first names where the value came from.
+require_absolute "repository root" "${repo_root}" "${root_source}"
+eval "${root_var}=\${repo_root}"
+export "${root_var?}"
+
+if [ -n "${mcp_log_dir_name:-}" ]; then
+    log_dir=
+    eval "log_dir=\${${log_var}:-}"
+    # Unset, the server writes job logs to its own per-user default. On a host the launcher still
+    # names a per-user state directory itself, ${XDG_STATE_HOME}/<name> or
+    # $HOME/.local/state/<name>, so an older local tool (which logged to one shared temp folder
+    # that its first user created with mode 0700, locking every other user on the host out) still
+    # logs per user; the server creates the directory, with its parents, itself. XDG_STATE_HOME
+    # counts only when absolute, as the XDG spec requires and as the server does. The container
+    # (<PREFIX>_TOOL=global) runs only the image's own, current tool, so there an unset or empty
+    # value is left out of the environment and the server picks its default under the image's
+    # fixed HOME. An empty value is never passed on, because the server refuses one.
+    if [ -z "${log_dir}" ] && [ "${tool_mode}" = global ]; then
+        unset "${log_var}"
+    else
+        log_source="${log_var}"
+        if [ -z "${log_dir}" ]; then
+            case "${XDG_STATE_HOME:-}" in
+                /*) log_dir="${XDG_STATE_HOME}/${mcp_log_dir_name}" ;;
+                *)
+                    log_source="HOME"
+                    log_dir="${HOME}/.local/state/${mcp_log_dir_name}"
+                    ;;
+            esac
+        fi
+        # The server stops at startup when a set log directory is not an absolute path; failing
+        # here first names where the value came from.
+        require_absolute "log directory" "${log_dir}" "${log_source}"
+        eval "${log_var}=\${log_dir}"
+        export "${log_var?}"
+    fi
+fi
+
+# dotnet prints its first-run welcome and telemetry notice to stdout, which would corrupt the MCP
+# stream. Forced rather than kept from the caller, because no other value is safe here.
+DOTNET_NOLOGO=1
+export DOTNET_NOLOGO
+
+# The "workload updates are available" advertisement is written to stdout too, which would corrupt
+# both the dotnet output read below and the MCP stream. Set to true, the only value Microsoft's
+# docs list for it; the SDK may ignore 1.
+DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE=true
+export DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE
+
+if [ "${mcp_quiet_sdk_preview}" = yes ]; then
+    # Suppresses NETSDK1057 ("You are using a preview version of .NET"): the server's child dotnet
+    # build, restore and test runs inherit this environment, and under a preview SDK MSBuild would
+    # otherwise print the warning into their build output and the server's job logs. The server
+    # captures its children's stdout, so the warning never reaches the MCP stream. Forced, like
+    # DOTNET_NOLOGO, so a caller's value cannot turn it back on.
+    SuppressNETCoreSdkPreviewMessage=true
+    export SuppressNETCoreSdkPreviewMessage
+fi
+
+# Sets local_package and local_version, both lower case as the NuGet global packages folder names
+# them, and returns 0 when dotnet tool list --local, run from HOME, reports the tool's command;
+# returns 1 when it does not.
+local_tool_is_listed() {
+    # A local tool cannot run without dotnet, so with no dotnet there is no local tool to choose
+    # and the global tool is tried instead (a native executable, or a shim that finds a .NET
+    # runtime itself through DOTNET_ROOT or the default install locations).
+    command -v dotnet > /dev/null 2>&1 || return 1
+    # Without jq the list cannot be read, and guessing "not listed" would start the global tool, or
+    # report it missing, when the user's own local one is there.
+    command -v jq > /dev/null 2>&1 || fail "jq is not on PATH to read dotnet tool list's output"
+    # Only stdout is captured, so dotnet never writes to the MCP stream; its stderr passes through.
+    # The subshell keeps this cd to itself. Its stdin is /dev/null for the same reason as git's.
+    list_json=$(cd "${HOME}" && dotnet tool list --local --format json < /dev/null) \
+        || fail "dotnet tool list --local --format json failed in ${HOME}"
+    # With no manifest dotnet reports an empty data array, so that is "not listed" (no output);
+    # anything but exactly one object whose data is an array (including no output) is an error,
+    # and a tool whose commands is not an array never matches. The first match is the one dotnet
+    # tool run would start; its package id and version become path segments below, so anything
+    # but a plain NuGet id and version prints - instead.
+    listed=$(printf '%s' "${list_json}" | jq -r -n --arg command "${mcp_tool_command}" '
+        [inputs]
+        | if length == 1 and (.[0] | type) == "object" and (.[0].data | type) == "array"
+          then first(.[0].data[]
+                  | select(type == "object" and (.commands | type) == "array" and any(.commands[]; . == $command)))
+            | if (.packageId | type) == "string" and (.packageId | test("^[A-Za-z0-9_][A-Za-z0-9._-]*$"))
+                 and (.version | type) == "string" and (.version | test("^[0-9A-Za-z][0-9A-Za-z.+-]*$"))
+              then "\(.packageId | ascii_downcase) \(.version | sub("[+].*$"; "") | ascii_downcase)"
+              else "-"
+              end
+          else error("not dotnet tool list output")
+          end') \
+        || fail "cannot read the output of dotnet tool list --local --format json in ${HOME}"
+    [ -n "${listed}" ] || return 1
+    [ "${listed}" != - ] \
+        || fail "dotnet tool list --local in ${HOME} reports ${mcp_tool_command} without a package id and version to find it by"
+    local_package=${listed% *}
+    local_version=${listed#* }
+}
+
+# Sets settings_file to the DotnetToolSettings.xml for this runtime in package directory $1: under
+# tools/<framework>/<host_rid>/ ahead of tools/<framework>/any/, and then the newest framework.
+# Returns 1 when the package holds none, as when it is not in the folder at all.
+pick_tool_settings() {
+    settings_file=
+    best_score=-1
+    for candidate in "$1"/tools/*/*/DotnetToolSettings.xml; do
+        [ -f "${candidate}" ] || continue
+        candidate_dir=${candidate%/*}
+        candidate_framework=${candidate_dir%/*}
+        candidate_framework=${candidate_framework##*/}
+        case "${candidate_dir##*/}" in
+            any) score=0 ;;
+            "${host_rid}") score=1000 ;;
+            *) continue ;;
+        esac
+        # net10.0 and netcoreapp3.1 rank by their major version; any other folder name ranks lowest.
+        framework_version=${candidate_framework#net}
+        framework_version=${framework_version#coreapp}
+        framework_version=${framework_version%%.*}
+        case "${framework_version}" in
+            "" | *[!0-9]*) framework_version=0 ;;
+        esac
+        score=$((score + framework_version))
+        if [ "${score}" -gt "${best_score}" ]; then
+            best_score=${score}
+            settings_file=${candidate}
+        fi
+    done
+    [ -n "${settings_file}" ]
+}
+
+# Prints what settings_file says about the tool's command: "entry <runner> <entry point>", or
+# "package <id>" when it is a Native AOT tool's package naming the runtime-specific package for
+# host_rid, or "no-runtime" when it names none for host_rid. Anything else prints "bad". The
+# file is scanned as text with jq, already needed for the list, rather than with an XML tool a
+# host may lack; dotnet writes these files itself, one element per tag with quoted attributes.
+read_tool_settings() {
+    jq -R -r -s --arg command "${mcp_tool_command}" --arg rid "${host_rid}" '
+        def attr($name): [capture("\\s" + $name + "\\s*=\\s*\"(?<v>[^\"]*)\"").v] | first // "";
+        [scan("<RuntimeIdentifierPackage\\s[^>]*>")] as $packages
+        | ([scan("<Command\\s[^>]*>") | select(attr("Name") == $command)] | first) as $command_tag
+        | if $command_tag == null then "bad"
+          elif ($packages | length) > 0 and $rid == "" then "no-runtime"
+          elif ($packages | length) > 0 then
+            ([$packages[] | select(attr("RuntimeIdentifier") == $rid) | attr("Id")] | first) as $id
+            | if $id == null then "no-runtime"
+              elif ($id | test("^[A-Za-z0-9_][A-Za-z0-9._-]*$")) then "package \($id | ascii_downcase)"
+              else "bad"
+              end
+          else
+            ($command_tag | attr("EntryPoint")) as $entry
+            | if ($entry | test("^[A-Za-z0-9_+-][A-Za-z0-9._+-]*(/[A-Za-z0-9_+-][A-Za-z0-9._+-]*)*$"))
+              then "entry \($command_tag | attr("Runner")) \($entry)"
+              else "bad"
+              end
+          end' "${settings_file}"
+}
+
+# Sets local_runner and local_entry for the listed package and version. Returns 1 when a package
+# or the entry point is not in the NuGet global packages folder, which a restore can fix; fails
+# for anything a restore cannot fix.
+resolve_local_tool() {
+    package_dir="${packages_dir}/${local_package}/${local_version}"
+    pick_tool_settings "${package_dir}" || return 1
+    settings=$(read_tool_settings) || fail "cannot read ${settings_file}"
+    case "${settings}" in
+        "package "*)
+            # The runtime-specific package has the pointer package's version.
+            package_dir="${packages_dir}/${settings#package }/${local_version}"
+            pick_tool_settings "${package_dir}" || return 1
+            settings=$(read_tool_settings) || fail "cannot read ${settings_file}"
+            ;;
+        no-runtime)
+            [ -n "${host_rid}" ] \
+                || fail "cannot tell this machine's runtime from dotnet --info, to pick ${local_package}'s package for it"
+            fail "${local_package} ${local_version} has no package for this machine's runtime ${host_rid} (${settings_file})"
+            ;;
+    esac
+    case "${settings}" in
+        "entry dotnet "* | "entry executable "*) ;;
+        *) fail "${settings_file} does not name an entry point for ${mcp_tool_command} that this launcher can start" ;;
+    esac
+    settings=${settings#entry }
+    local_runner=${settings%% *}
+    local_entry="${settings_file%/*}/${settings#* }"
+    [ -f "${local_entry}" ]
+}
+
+# <PREFIX>_TOOL=global skips the probe and goes straight to the global tool below.
+if [ "${tool_mode}" != global ] && local_tool_is_listed; then
+    # dotnet --info names the runtime dotnet tool restore picked the package for, and the SDK's
+    # base path, inside the dotnet install the user runs. Its stdout is captured, never the MCP
+    # stream, and its stdin is /dev/null like the list's; a failure leaves both unknown.
+    dotnet_info=$(cd "${HOME}" && dotnet --info < /dev/null)
+    host_rid=$(printf '%s\n' "${dotnet_info}" \
+        | jq -R -r -n '[inputs | capture("^\\s*RID:\\s*(?<v>\\S+)\\s*$").v] | first // empty')
+    sdk_base_path=$(printf '%s\n' "${dotnet_info}" \
+        | jq -R -r -n '[inputs | capture("^\\s*Base Path:\\s*(?<v>/.*[^/\\s])/*\\s*$").v] | first // empty')
+    if [ -n "${NUGET_PACKAGES:-}" ]; then
+        # A relative folder would depend on the directory dotnet ran in, as DOTNET_CLI_HOME would.
+        require_absolute "NuGet global packages folder" "${NUGET_PACKAGES}" "NUGET_PACKAGES"
+        packages_dir="${NUGET_PACKAGES}"
+    else
+        packages_dir="${HOME}/.nuget/packages"
+    fi
+    if ! resolve_local_tool; then
+        # Listed in the manifest but not restored yet. Only one restore, from HOME so it reads the
+        # same manifest; its stdout goes to stderr, away from the MCP stream, and its own errors
+        # are already on stderr, so its status is left to the check that follows.
+        (cd "${HOME}" && dotnet tool restore < /dev/null >&2)
+        resolve_local_tool \
+            || fail "the local ${mcp_tool_command} (${local_package} ${local_version}) from the tool manifest in ${HOME} is not in the NuGet global packages folder ${packages_dir}, even after dotnet tool restore in ${HOME}"
+    fi
+    # The user's listed local tool is never replaced by the global one, so a root that cannot be
+    # entered is fatal here too. The root is absolute, so the cd never consults CDPATH.
+    cd "${repo_root}" \
+        || fail "cannot change to the repository root ${repo_root} to run the local ${mcp_tool_command}"
+    if [ "${local_runner}" = dotnet ]; then
+        exec dotnet "${local_entry}" "$@"
+    fi
+    [ -x "${local_entry}" ] || fail "the local ${mcp_tool_command}'s entry point ${local_entry} is not executable"
+    # A framework-dependent executable finds its .NET runtime through DOTNET_ROOT, then only in the
+    # default install locations; dotnet tool run found it through the dotnet on PATH. So an unset
+    # DOTNET_ROOT becomes the install holding that dotnet's SDK (<root>/sdk/<version>), which a
+    # Native AOT executable simply ignores. A caller's value is kept.
+    case "${sdk_base_path}" in
+        /*/sdk/*)
+            if [ -z "${DOTNET_ROOT:-}" ]; then
+                DOTNET_ROOT="${sdk_base_path%/sdk/*}"
+                export DOTNET_ROOT
+            fi
+            ;;
+    esac
+    exec "${local_entry}" "$@"
+fi
+
+if [ -f "${global_tool}" ] && [ -x "${global_tool}" ]; then
+    # From the root, like the local tool. The root is absolute, so the cd never consults CDPATH.
+    cd "${repo_root}" \
+        || fail "cannot change to the repository root ${repo_root} to run the global ${mcp_tool_command}"
+    exec "${global_tool}" "$@"
+fi
+
+[ "${tool_mode}" != global ] \
+    || fail "${tool_var}=global, but ${global_tool} is missing or not executable"
+fail "${mcp_tool_command} not found: install it as a local tool in ${HOME}'s tool manifest with dotnet tool install --local ${mcp_package_id}, run in ${HOME}, or as a global tool with dotnet tool install -g ${mcp_package_id}, which puts it in ${global_tool%/*}"
