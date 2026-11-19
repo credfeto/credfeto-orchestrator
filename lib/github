@@ -589,7 +589,7 @@ pr_has_dependency_update_branch() {
 # Optional second argument has_unaddressed_comment ("true"/"false", default "false"): a trusted
 # comment newer than the agent's last session (set_pr_has_unaddressed_comment, lib/github-status)
 # also gets the full flow (#1977). The verify-only prompt forbids code changes and never reads the
-# comments, so an owner's request on an adopted dependency PR was ignored while auto-merge was
+# comments, so a maintainer's request on an adopted dependency PR was ignored while auto-merge was
 # armed or the PR waited; the full flow quotes the comment and acts on it in PHASE C.
 pr_should_use_dependency_prompt() {
     local pr_json="$1" has_unaddressed_comment="${2:-false}"
@@ -610,29 +610,37 @@ pr_should_use_dependency_prompt() {
 }
 
 # Whether a dependency-update PR (pr_has_dependency_update_branch: a same-repository depends/ or
-# dependabot/ branch) has the repository owner ($2, the owner part of owner/repo) as its only
-# assignee, compared without regard to case (#1977). That is how a dependency PR is adopted: the
-# dispatcher keeps serving it only while it is assigned to the owner, so the assignment is the
-# adopted state, not a person claiming the work, and the PR counts as the orchestrator's own. Its
-# assignees are never changed (cfwf --assign-self leaves such a PR as it is). Any other assignee, or
-# the owner beside anyone else, is a claim like on any other item.
+# dependabot/ branch) is adopted by trusted maintainers (#1977): it has at least one assignee, and
+# every assignee is in the trusted logins ($2, the JSON array get_trusted_logins gives: the
+# repository's collaborators and the extra trusted users), compared without regard to case. The
+# orchestrator's own login ($3, _GH_ME) and the PR create bot (PR_CREATOR_LOGIN) never count as
+# adopters, even when they are collaborators. That is how a dependency PR is adopted: a maintainer
+# assigns it (an organisation can never be an assignee, so it is a person, not the repository
+# owner), so the assignment is the adopted state, not a person claiming the work, and the PR counts
+# as the orchestrator's own. Its assignees are never changed (cfwf --assign-self leaves such a PR as
+# it is). No assignee at all, any assignee who is not trusted, or a missing or unreadable trusted
+# list is not an adoption: an untrusted assignee is a claim like on any other item.
 pr_json_is_owner_adopted_dependency_pr() {
-    local pr_json="$1" repo_owner="$2"
-    [ -n "${repo_owner}" ] || return 1
+    local pr_json="$1" trusted_logins="$2" me="${3:-}"
+    [ -n "${trusted_logins}" ] || return 1
     pr_has_dependency_update_branch "${pr_json}" || return 1
-    printf '%s' "${pr_json}" | jq -e --arg owner "${repo_owner}" \
-        '[(.assignees // [])[] | .login // "" | ascii_downcase] == [$owner | ascii_downcase]' > /dev/null 2>&1
+    printf '%s' "${pr_json}" | jq -e --argjson trusted "${trusted_logins}" --arg me "${me}" --arg creator "${PR_CREATOR_LOGIN:-prpixie}" \
+        '([$trusted[] | strings | ascii_downcase] - [($me | ascii_downcase), ($creator | ascii_downcase), ""]) as $adopters
+         | [(.assignees // [])[] | .login // "" | ascii_downcase] as $logins
+         | ($logins | length > 0) and all($logins[]; . as $login | $adopters | index($login) != null)' > /dev/null 2>&1 \
+        || return 1
 }
 
 # Whether a PR is assigned to someone other than the orchestrator ($2, _GH_ME), so that the
 # orchestrator stands off it (#1142) and cfwf --assign-self refuses it (#1962): it has an assignee
-# and the orchestrator is not one of them (logins compared without regard to case). An owner-adopted
-# dependency PR (pr_json_is_owner_adopted_dependency_pr, $3 the repository owner) is not: it is the
-# orchestrator's own (#1977). A dependency PR assigned to anyone else is stood off like any other
+# and the orchestrator is not one of them (logins compared without regard to case). A dependency PR
+# adopted by trusted maintainers (pr_json_is_owner_adopted_dependency_pr, $3 the trusted logins JSON
+# the caller already holds from get_trusted_logins, so no API call is made here) is not: it is the
+# orchestrator's own (#1977). A dependency PR with any untrusted assignee is stood off like any other
 # PR: the agent's assign step would be refused, so a session there could only stop at once.
 pr_json_assigned_to_another() {
-    local pr_json="$1" me="$2" repo_owner="${3:-}"
-    pr_json_is_owner_adopted_dependency_pr "${pr_json}" "${repo_owner}" && return 1
+    local pr_json="$1" me="$2" trusted_logins="${3:-}"
+    pr_json_is_owner_adopted_dependency_pr "${pr_json}" "${trusted_logins}" "${me}" && return 1
     printf '%s' "${pr_json}" | jq -e --arg me "${me}" \
         '[(.assignees // [])[] | .login // "" | ascii_downcase] as $logins
          | ($logins | length > 0) and ($logins | index($me | ascii_downcase) == null)' > /dev/null 2>&1
@@ -678,7 +686,7 @@ pr_is_human_driven() {
         return 1
     fi
 
-    if printf '%s' "${pr_json}" | jq -e --arg me "${_GH_ME}" --arg creator "${PR_CREATOR_LOGIN}" \
+    if printf '%s' "${pr_json}" | jq -e --arg me "${_GH_ME}" --arg creator "${PR_CREATOR_LOGIN:-prpixie}" \
         "${_JQ_DEF_OWN_PR_AUTHOR}"' own_pr_author' > /dev/null 2>&1; then
         return 0
     fi

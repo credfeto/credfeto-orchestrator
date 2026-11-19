@@ -557,21 +557,21 @@ load oneshot_helper
 
 # --- build_pr_claude_md: dependency PRs keep their assignees (#1977) ---------------------------
 
-@test "build_pr_claude_md's dependency-PR prompt never assigns: the owner's assignment makes the PR the agent's own (#1977)" {
+@test "build_pr_claude_md's dependency-PR prompt never assigns: trusted maintainers' assignment makes the PR the agent's own (#1977)" {
     REPO_FULL="credfeto/example-repo"
     run build_pr_claude_md 1234 "/resolved/.ai-instructions" "CLEAN" "depends/x" "" "" "true"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *$'\n'"2. Do NOT assign yourself or change this PR's assignees in any way: a dependency PR is recognised by its assignment to the repository owner, which makes it this automation's own, so there is no assign step."$'\n'"3. "* ]]
+    [[ "${output}" == *$'\n'"2. Do NOT assign yourself or change this PR's assignees in any way: a dependency PR assigned only to trusted maintainers is this automation's own, so there is no assign step."$'\n'"3. "* ]]
     [[ "${output}" != *"--assign-self"* ]]
     [[ "${output}" != *"assign refused"* ]]
 }
 
-@test "build_pr_claude_md's full flow on a dependency branch acts for the owner and never assigns, and keeps the assign step everywhere else (#1977)" {
+@test "build_pr_claude_md's full flow on a dependency branch acts for the trusted maintainers and never assigns, and keeps the assign step everywhere else (#1977)" {
     REPO_FULL="credfeto/example-repo"
     local -a args=(1234 "/resolved/.ai-instructions" "CLEAN" "dependabot/nuget/x-1.0.1" "" "" "false" "" "false" "" "" "")
     run build_pr_claude_md "${args[@]}" true
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *$'\n'"- This is a dependency update PR. Do NOT assign yourself or change its assignees in any way: a dependency PR is recognised by its assignment to the repository owner, which makes it this automation's own, so there is no assign step. Act as the repository owner's agent: read the trusted comments, the owner's included, and do what they ask."$'\n'* ]]
+    [[ "${output}" == *$'\n'"- This is a dependency update PR. Do NOT assign yourself or change its assignees in any way: a dependency PR assigned only to trusted maintainers is this automation's own, so there is no assign step. Act as the trusted maintainers' agent: read the trusted comments and do what they ask."$'\n'* ]]
     [[ "${output}" != *"--assign-self"* ]]
     [[ "${output}" == *"TRUSTED COMMENTS FIRST (MANDATORY"* ]]
 

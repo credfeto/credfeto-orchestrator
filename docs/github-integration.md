@@ -53,11 +53,14 @@ never contain bot-authored commits by design, so they're recognised by their bra
 convention (`depends/` or `dependabot/`, on a branch in the same repository: a fork PR is never
 recognised by its branch name) or, for the human-takeover check only, a
 `dependencies` label instead, and are not treated as a human takeover. A dependency PR is
-adopted by assigning it to the repository owner, so a same-repository `depends/` or `dependabot/`
-PR whose only assignee is the owner is the orchestrator's own: it is worked, its assignees are
-never changed (`cfwf --assign-self` leaves them as they are), and the agent acts on the owner's
-comments like any trusted commenter's. A dependency PR assigned to anyone else is stood off like
-any other PR (#1977).
+adopted by a trusted maintainer assigning it, so a same-repository `depends/` or `dependabot/`
+PR whose assignees are all trusted maintainers (the trusted logins above, never the orchestrator's
+own account or the PR create bot) is the orchestrator's own: it is worked, its assignees are
+never changed (`cfwf --assign-self` leaves them as they are), and the agent acts on the
+maintainers' comments like any trusted commenter's. A dependency PR with no assignee is worked as
+before, and one with any assignee who is not trusted is stood off like any other PR (#1977).
+`cfwf`, which runs in the agent's container and cannot see the extra allow-list, takes the
+repository's collaborators with the admin, maintain or write role as the trusted maintainers.
 
 The prompt itself is chosen by branch prefix only (`depends/` or `dependabot/`, see
 `pr_should_use_dependency_prompt` in lib/github), never by the `dependencies` label, because

@@ -2013,8 +2013,9 @@ comma-separated list when it had several).
                assigned to another user is refused, and nothing is written: assigning is how an
                item is claimed, and someone else has claimed it. One the agent already holds, or
                one with no assignee, is assigned as asked. A dependency pull request (a depends/ or
-               dependabot/ branch in the repository itself) whose only assignee is the
-               repository's owner is the agent's already: its assignees are left as they are, a
+               dependabot/ branch in the repository itself) whose assignees are all trusted
+               maintainers (collaborators with the admin, maintain or write role, never the agent
+               or the PR creator) is the agent's already: its assignees are left as they are, a
                note says so on stderr, and the rest of the edit goes ahead.
 At least one of --title, --body-file, --priority and --assign-self; each at most once. --add-label,
 --remove-label, --base, --milestone, --reviewer, --json and --jq are not options either: other
@@ -2026,10 +2027,12 @@ first (see 'cfwf help body'): a refused one exits ${BODY_REFUSED_EXIT} with "cfw
 "cfwf: title refused: <rule>" on stderr, never naming the text that matched. Any pull request in
 the repository can be edited, whoever opened it and whoever wrote its commits: there is no
 ownership rule. With --assign-self, the agent's login is read (gh api user). The pull request is
-read once, for its URL, its labels, its assignees and its head branch. With --assign-self, a pull
-request with an assignee other than the agent exits ${POLICY_REFUSED_EXIT} with "cfwf: assign refused:
-${ASSIGNED_TO_ANOTHER_RULE}", unless it is a dependency pull request assigned only to the
-repository's owner. A --priority asked for on a pull request that
+read once, for its URL, its labels, its assignees and its head branch. With --assign-self on a
+dependency pull request with assignees other than the agent and the PR creator, the repository's
+collaborators are read (one paged read). With --assign-self, a pull request with an assignee other
+than the agent exits ${POLICY_REFUSED_EXIT} with "cfwf: assign refused: ${ASSIGNED_TO_ANOTHER_RULE}", unless it
+is a dependency pull request assigned only to trusted maintainers. A --priority asked for on a
+pull request that
 carries Security exits ${POLICY_REFUSED_EXIT} with "cfwf: priority refused: Security is never replaced by
 --priority". With a priority label to add, the repository's labels are read (gh label list). A
 pull request already as asked is not edited.
@@ -3008,9 +3011,10 @@ Adds the labels of the issues a pull request closes to the pull request, one gh 
                assigned to another user is refused before any label is added, and nothing is
                written: assigning is how an item is claimed, and someone else has claimed it. A
                dependency pull request (a depends/ or dependabot/ branch in the repository
-               itself) whose only assignee is the repository's owner is the agent's already: its
-               assignees are left as they are, a note says so on stderr, and the labels are
-               still synced.
+               itself) whose assignees are all trusted maintainers (collaborators with the admin,
+               maintain or write role, never the agent or the PR creator, read in one paged read)
+               is the agent's already: its assignees are left as they are, a note says so on
+               stderr, and the labels are still synced.
 There is no --label: the labels come only from the closing issues. --remove-label, --json and --jq
 are not options either.
 
@@ -7965,29 +7969,54 @@ refuse_if_assigned_to_another() {
     [ -z "${other}" ] || refuse_policy assign "${ASSIGNED_TO_ANOTHER_RULE}"
 }
 
+# The repository roles (role_name, as repo collaborators lists them) of a trusted maintainer: one who
+# can adopt a dependency pull request by being its assignee (#1977).
+readonly TRUSTED_MAINTAINER_ROLE_PATTERN='^(admin|maintain|write)$'
+
 # Whether a pull request whose assignee logins are $1 (comma separated) and whose head branch is $2
-# is a dependency pull request adopted by the repository's owner (#1977): its head is a depends/ or
+# is a dependency pull request adopted by trusted maintainers (#1977): its head is a depends/ or
 # dependabot/ branch (DEPENDENCY_BRANCH_PATTERN) in the repository itself ($3 is true; a fork's
-# branch name is chosen freely), and its only assignee is the owner of REPO, compared without regard
-# to case. Adopting a dependency pull request is assigning it to the owner, and the work queue keeps
-# serving it only while it stays that way, so it is the agent's already: --assign-self leaves its
-# assignees as they are and succeeds (claim_pull_request). Any other assignee is a claim as on any
-# other item.
+# branch name is chosen freely), it has at least one assignee, and every assignee is a trusted
+# maintainer of REPO: a collaborator whose role matches TRUSTED_MAINTAINER_ROLE_PATTERN, compared
+# without regard to case. The agent (AGENT_LOGIN) and the PR creator (pr_creator_login) are never
+# trusted maintainers, whatever their role. The collaborators are read (read_collaborator_rows, one
+# paged read) only for a same-repository dependency branch whose assignees are neither of those, so
+# no other pull request costs a read. Adopting a dependency pull request is a maintainer assigning
+# it (an organisation can never be an assignee), so it is the agent's already: --assign-self leaves
+# its assignees as they are and succeeds (claim_pull_request). Any other assignee is a claim as on
+# any other item.
 owner_adopted_dependency_pull_request() {
-    local LC_ALL=C assignees="$1" branch="$2" same_repository="$3" owner="${REPO%%/*}"
+    local LC_ALL=C assignees="$1" branch="$2" same_repository="$3" login row creator
+    local -a logins=()
+    local -A maintainers=()
     [ "${same_repository}" = true ] && [[ "${branch}" =~ ${DEPENDENCY_BRANCH_PATTERN} ]] || return 1
-    [ -n "${owner}" ] && [ "${assignees,,}" = "${owner,,}" ]
+    [ -n "${assignees}" ] || return 1
+    IFS=, read -r -a logins <<< "${assignees}"
+    creator="$(pr_creator_login)"
+    for login in "${logins[@]}"; do
+        matches_pattern "${login}" "${LOGIN_PATTERN}" || die "gh returned an unexpected assignee for ${REPO}"
+        [ "${login,,}" != "${AGENT_LOGIN,,}" ] && [ "${login,,}" != "${creator}" ] || return 1
+    done
+    read_collaborator_rows
+    for row in "${COLLABORATOR_ROWS[@]+"${COLLABORATOR_ROWS[@]}"}"; do
+        [[ "${row#*$'\t'}" =~ ${TRUSTED_MAINTAINER_ROLE_PATTERN} ]] || continue
+        login="${row%%$'\t'*}"
+        maintainers["${login,,}"]=1
+    done
+    for login in "${logins[@]}"; do
+        [ -n "${maintainers["${login,,}"]+set}" ] || return 1
+    done
 }
 
 # --assign-self on PR of REPO, whose assignee logins are $1 (comma separated), whose head branch is
 # $2 and whose head is in the repository itself when $3 is true: a dependency pull request adopted
-# by the repository owner (owner_adopted_dependency_pull_request) is already the agent's, so
+# by trusted maintainers (owner_adopted_dependency_pull_request) is already the agent's, so
 # ASSIGN_SELF is cleared, nothing is written for it and a note says so on stderr; any other pull
 # request goes through refuse_if_assigned_to_another. It runs before anything is written.
 claim_pull_request() {
     if owner_adopted_dependency_pull_request "$1" "$2" "$3"; then
         ASSIGN_SELF=""
-        printf 'cfwf: note: %s#%s is a dependency pull request assigned to its repository owner, which makes it the agent'"'"'s already; its assignees were not changed\n' "${REPO}" "${PR}" >&2
+        printf 'cfwf: note: %s#%s is a dependency pull request assigned only to trusted maintainers, which makes it the agent'"'"'s already; its assignees were not changed\n' "${REPO}" "${PR}" >&2
         return 0
     fi
     refuse_if_assigned_to_another "$1"

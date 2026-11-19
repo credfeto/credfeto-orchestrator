@@ -565,15 +565,15 @@ build_pr_claude_md() {
         checkout_step="1. Check out the PR branch BEFORE making any changes: git -C ${repo_path} checkout ${branch_name}"
     fi
 
-    # A dependency PR (a depends/ or dependabot/ branch) is adopted by assigning it to the repository
-    # owner, and the dispatcher stops serving it once that changes, so the agent never touches its
-    # assignees: oneshot only starts a session on one that is unassigned, the agent's, or assigned
-    # to the owner alone, and treats it as the agent's own (#1977). Every other PR is claimed with
-    # cfwf --assign-self, which refuses one assigned to another user (#1962).
-    local dependency_assignee_note="a dependency PR is recognised by its assignment to the repository owner, which makes it this automation's own, so there is no assign step."
+    # A dependency PR (a depends/ or dependabot/ branch) is adopted by trusted maintainers assigning
+    # it to themselves, so the agent never touches its assignees: oneshot only starts a session on
+    # one that is unassigned, the agent's, or assigned only to trusted maintainers, and treats it as
+    # the agent's own (#1977). Every other PR is claimed with cfwf --assign-self, which refuses one
+    # assigned to another user (#1962).
+    local dependency_assignee_note="a dependency PR assigned only to trusted maintainers is this automation's own, so there is no assign step."
     local assign_rule="- Always assign yourself first if you are not already the assignee: cfwf pr edit --repo ${REPO_FULL} --pr ${item_id} --assign-self If it exits 8 with \"assign refused\", another user has claimed this item: STOP at once and change nothing."
     if [ "${dependency_branch}" = "true" ]; then
-        assign_rule="- This is a dependency update PR. Do NOT assign yourself or change its assignees in any way: ${dependency_assignee_note} Act as the repository owner's agent: read the trusted comments, the owner's included, and do what they ask."
+        assign_rule="- This is a dependency update PR. Do NOT assign yourself or change its assignees in any way: ${dependency_assignee_note} Act as the trusted maintainers' agent: read the trusted comments and do what they ask."
     fi
 
     if [ "${is_dependency_pr}" = "true" ]; then

@@ -551,10 +551,10 @@ use_file_backed_marker_and_pr_states() {
     [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
 }
 
-@test "main still charges the idle budget for a no-progress session on an owner-adopted dependency PR (#1977)" {
+@test "main still charges the idle budget for a no-progress session on a dependency PR adopted by a trusted maintainer (#1977)" {
     setup_unchanged_direct_draft_pr
     local adopted
-    adopted=$(draft_pr5_json | jq -c '. + {headRefName: "depends/update-x/1.2.3", assignees: [{login: "org"}]}')
+    adopted=$(draft_pr5_json | jq -c '. + {headRefName: "depends/update-x/1.2.3", assignees: [{login: "credfeto"}]}')
     stub_pr_json_pre_post "${adopted}" "${adopted}"
     fetch_single_item_workflow_status() { printf 'AI Review'; }
 

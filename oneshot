@@ -1115,10 +1115,11 @@ main() {
             # Stand off if this PR is assigned to someone other than us — prevents
             # duplicate work when a human owns the item (#1142).  _GH_ME was resolved
             # above by pr_is_human_driven; resolve_gh_me is a no-op if already set.
-            # A dependency PR whose only assignee is the repository owner is the
-            # orchestrator's own (#1977, pr_json_is_owner_adopted_dependency_pr): that is how
-            # the dispatcher adopts one, and the agent works it without changing its
-            # assignees. A dependency PR assigned to anyone else is stood off like any other:
+            # A dependency PR whose assignees are all trusted maintainers (trusted_logins,
+            # fetched above, never _GH_ME or the PR create bot) is the orchestrator's own
+            # (#1977, pr_json_is_owner_adopted_dependency_pr): that is how a maintainer adopts
+            # one, and the agent works it without changing its assignees. A dependency PR with
+            # any other assignee is stood off like any other:
             # the agent's assign step is refused there (#1962), so a session could only stop
             # at once, and each such session used to be charged against the idle budget.
             if ! resolve_gh_me; then
@@ -1128,7 +1129,7 @@ main() {
                 skip_repos+=("${item_repo}")
                 continue
             fi
-            if pr_json_assigned_to_another "${pr_json}" "${_GH_ME}" "${item_repo%%/*}"; then
+            if pr_json_assigned_to_another "${pr_json}" "${_GH_ME}" "${trusted_logins}"; then
                 info "PR #${item_id} in ${item_repo} is assigned to another user — standing off"
                 count_human_driven=$((count_human_driven + 1))
                 item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "assigned to another user - standing off")")
@@ -1609,7 +1610,7 @@ main() {
         else
             # A trusted comment the agent has not addressed gets the full flow, which acts on it,
             # even on a dependency PR (#1977); dependency_branch tells the full flow it is one, so
-            # the agent works it as the owner's agent and leaves its assignees alone.
+            # the agent works it as the trusted maintainers' agent and leaves its assignees alone.
             local is_dependency_pr dependency_branch=false
             if pr_should_use_dependency_prompt "${pr_json}" "${pr_has_unaddressed_comment}"; then
                 is_dependency_pr=true
@@ -1799,7 +1800,7 @@ main() {
                     info "PR #${item_id} in ${item_repo}: still CI-pending after this session — not counting it against the idle budget"
                     pr_new_idle="${PR_INVOCATION_IDLE}"
                 elif [ "${post_run_ok}" -eq 0 ] \
-                    && pr_json_assigned_to_another "${post_run_pr_json}" "${_GH_ME:-}" "${item_repo%%/*}"; then
+                    && pr_json_assigned_to_another "${post_run_pr_json}" "${_GH_ME:-}" "${trusted_logins:-}"; then
                     # Someone else claimed the PR before or during the session, so the agent's
                     # assign step was refused and it stopped there (#1962). That is a stand-off,
                     # not idleness: it is not charged (#1977), and the next tick stands off the PR
