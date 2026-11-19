@@ -165,7 +165,7 @@ the persistent state subdirectories (`sessions/`, `session-env/`, `plans/`, `cac
 per-work-item transcript directory (`projects/`) are mounted per invocation.
 
 `claude-managed-mcp.json` is copied to `/etc/claude-code/managed-mcp.json` (root:root 0444), and
-`claude-mcp/cfwf-mcp-headers`, `claude-mcp/kb-mcp-headers`, `claude-mcp/build-dotnet-mcp`, `claude-mcp/build-node-mcp` and `claude-mcp/changelog-mcp` to `/etc/claude-code/mcp/` (root:root 0755). The file defines
+`claude-mcp/cfwf-mcp-headers`, `claude-mcp/kb-mcp-headers`, `claude-mcp/build-dotnet-mcp`, `claude-mcp/build-node-mcp`, `claude-mcp/changelog-mcp` and the shared `claude-mcp/dotnet-tool-mcp-launcher` they source to `/etc/claude-code/mcp/` (root:root 0755). The file defines
 the only MCP servers Claude Code loads in the container: `cfwf`, an HTTP server at
 `https://workflow-mcp.markridgwell.com/mcp`, `kb`, an HTTP server at `https://memory.markridgwell.com/dev/mcp`
 (described below), `build-dotnet`, `build-node`, `changelog` and `codegraph` (all also described below). Those six are required. The file
@@ -202,11 +202,15 @@ send the token elsewhere or print it. See
 `Credfeto.Build.Dotnet.Server` package that `development-credfeto-tools` installs. It is a stdio server
 started by the root-owned wrapper `/etc/claude-code/mcp/build-dotnet-mcp`, with no `env`, and
 `mcp__build-dotnet__*` in `permissions.allow` allows all of its tools. It is registered for every session,
-whatever the repository's language. The wrapper keeps `BUILD_MCP_REPO_ROOT`, which the image sets to
+whatever the repository's language. The wrapper is a thin entry: it names the tool and sources the shared,
+root-owned `/etc/claude-code/mcp/dotnet-tool-mcp-launcher` beside it, which `build-node-mcp` and
+`changelog-mcp` source too, so all three find and start their server the same way. The launcher keeps
+`BUILD_MCP_REPO_ROOT`, which the image sets to
 `/workspace/repo` as an `ENV`, or otherwise resolves it from the directory Claude Code was started in (the
 git top level of `CLAUDE_PROJECT_DIR`, or of the start directory, or that directory itself outside a
-repository). The server has a git-root fallback of its own, but the wrapper keeps this lookup because it
-starts the server from `~`, so the server would look at `~` rather than the project. The wrapper fails
+repository), and starts the server with that root as its working directory. The server has a git-root
+fallback of its own, but the launcher keeps this lookup because it prefers `CLAUDE_PROJECT_DIR`, which the
+server does not read. The wrapper fails
 rather than pass the server a root that is not an absolute path, or run with a `HOME` that is not one; the
 server itself also stops at startup, with a message on stderr, when `BUILD_MCP_REPO_ROOT` or
 `BUILD_MCP_LOG_DIR` is set but relative or blank. The wrapper keeps a preset `BUILD_MCP_LOG_DIR`; in this
@@ -219,11 +223,15 @@ forces `DOTNET_NOLOGO=1` and `DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE=true` so
 banner nor the workload update notice reaches the MCP stream on stdout, and
 `SuppressNETCoreSdkPreviewMessage=true` so a preview SDK's NETSDK1057 warning stays out of build output and
 job logs. It then runs the
-local tool when `dotnet tool list --local`, run from `~`, reports `credfeto-build-dotnet`, or else the
+local tool when `dotnet tool list --local`, run from `~`, reports `credfeto-build-dotnet`: the package id and
+exact version that list reports are found in the NuGet global packages folder (`NUGET_PACKAGES`, or
+`~/.nuget/packages`), after one `dotnet tool restore` from `~` when they are not there yet, and the entry
+point their `DotnetToolSettings.xml` names (in the runtime-specific package for a Native AOT tool) is
+started from the repository root. Otherwise it runs the
 global tool `.dotnet/tools/credfeto-build-dotnet` under `DOTNET_CLI_HOME`, or `~` when that is unset or empty
-(`/home/developer/.dotnet/tools/credfeto-build-dotnet` here). In the container the image `ENV`
+(`/home/developer/.dotnet/tools/credfeto-build-dotnet` here), also from the root. In the container the image `ENV`
 `BUILD_MCP_TOOL=global` skips that choice and its `git` and `dotnet tool list` probes and runs the global tool
-under `~` directly, ignoring `DOTNET_CLI_HOME`, because the tool, `HOME` and the root are fixed there. The
+under `~` directly, from `/workspace/repo`, ignoring `DOTNET_CLI_HOME`, because the tool, `HOME` and the root are fixed there. The
 same file therefore works for every user on a host. The sanity block pins that exact entry, the wrapper's
 owner and mode, both `ENV` values and the global tool. See
 [docs/development/claude-hooks.md](../../../docs/development/claude-hooks.md#the-build-dotnet-mcp-server).
@@ -232,24 +240,24 @@ owner and mode, both `ENV` values and the global tool. See
 `Credfeto.Build.Node.Server` package that `development-credfeto-tools` installs. It is a stdio server started by
 the root-owned wrapper `/etc/claude-code/mcp/build-node-mcp`, with no `env`, and `mcp__build-node__*` in
 `permissions.allow` allows all of its tools. It is registered for every session, whatever the repository's
-language. The wrapper is a copy of
+language. The wrapper is a thin entry that sources the same shared launcher as
 `build-dotnet-mcp`: the server is built on the same core, so it reads the same `BUILD_MCP_REPO_ROOT`,
-`BUILD_MCP_LOG_DIR` and `BUILD_MCP_TOOL` (the image `ENV`s above) and picks its tool the same way. It forces
-`DOTNET_NOLOGO` and `DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE`, because it still runs `dotnet tool list` and a
-local tool through `dotnet tool run`, but not `SuppressNETCoreSdkPreviewMessage`, as the server starts no
-dotnet builds. It runs `/home/developer/.dotnet/tools/credfeto-build-node` here. The sanity block pins that
+`BUILD_MCP_LOG_DIR` and `BUILD_MCP_TOOL` (the image `ENV`s above) and is found and started the same way. It
+forces `DOTNET_NOLOGO` and `DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE`, because the launcher still runs
+`dotnet tool list` and may run a local tool's dll through `dotnet`, but not `SuppressNETCoreSdkPreviewMessage`,
+as the server starts no dotnet builds. It runs `/home/developer/.dotnet/tools/credfeto-build-node` here. The sanity block pins that
 exact entry, the wrapper's owner and mode and the global tool. See
 [docs/development/claude-hooks.md](../../../docs/development/claude-hooks.md#the-build-node-mcp-server).
 
 `changelog` is the CHANGELOG.md MCP server, `changelog-mcp` from the `Credfeto.ChangeLog.Mcp` package that
 `development-credfeto-tools` installs. It is a stdio server started by the root-owned wrapper
 `/etc/claude-code/mcp/changelog-mcp`, with no `env`, and `mcp__changelog__*` in `permissions.allow` allows all
-of its tools. It is registered for every session, whatever the repository's language. The wrapper is a copy of
-`build-dotnet-mcp` with `CHANGELOG_MCP_REPO_ROOT` and `CHANGELOG_MCP_TOOL` (both image `ENV`s, `/workspace/repo`
-and `global`) in place of `BUILD_MCP_REPO_ROOT` and `BUILD_MCP_TOOL`, and it starts the global tool from
-`CHANGELOG_MCP_REPO_ROOT` rather than `~`, so a server that finds its repository from its working directory, as
-every released version does, works on that repository too; a local tool on a host still runs from `~` and
-relies on the variable. It has no log directory and does not set
+of its tools. It is registered for every session, whatever the repository's language. The wrapper is a thin
+entry that sources the same shared launcher as `build-dotnet-mcp`, with `CHANGELOG_MCP_REPO_ROOT` and
+`CHANGELOG_MCP_TOOL` (both image `ENV`s, `/workspace/repo` and `global`) in place of `BUILD_MCP_REPO_ROOT` and
+`BUILD_MCP_TOOL`. Either tool, the local one from the home manifest or the global one, starts with
+`CHANGELOG_MCP_REPO_ROOT` as its working directory, so a server that finds its repository from its working
+directory, as every released version does, works on that repository and never on `~`. It has no log directory and does not set
 `SuppressNETCoreSdkPreviewMessage`, as the server runs no child builds; it runs
 `/home/developer/.dotnet/tools/changelog-mcp` here. The sanity block pins that exact entry, the wrapper's
 owner and mode and both `ENV` values; `development-credfeto-tools` checks the global tool, because this
@@ -276,7 +284,7 @@ changes; `CLAUDE_MANAGED_DIR` overrides the directory for tests only), the prefe
 `settings.json.bak`), and any `~/.claude/hooks` symlinks left pointing into this checkout are removed. Any
 arguments are ignored; the host directory roots in the root-owned
 `/etc/claude-code/hooks/allowed-dirs.local` are maintained by hand. It installs `cfwf-mcp-headers`, `kb-mcp-headers` and a `managed-mcp.json` that
-merges the shipped servers with the host's own MCP servers from `~/.claude.json` (user scope and every project scope), and the `build-dotnet-mcp`, `build-node-mcp` and `changelog-mcp` wrappers.
+merges the shipped servers with the host's own MCP servers from `~/.claude.json` (user scope and every project scope), and the `build-dotnet-mcp`, `build-node-mcp` and `changelog-mcp` wrappers with the `dotnet-tool-mcp-launcher` they share.
 A server at a shipped `http` server's URL, such as `cfwf`'s or `kb`'s, is left out as a duplicate, whatever its name, with a suggestion to remove it. A server with a
 literal `headers` or `env` value, a `url` carrying userinfo or a query string, or a credential-like `command` or
 `args` word is refused with a warning naming it, because the file is world-readable.
@@ -354,6 +362,7 @@ Paths locked down by this image. NuGet.Config and the .NET tool paths are locked
 | `/etc/claude-code/mcp/` | root:root | 0755 | MCP headers helper and wrapper directory; agent can read/execute but not modify |
 | `/etc/claude-code/mcp/cfwf-mcp-headers` | root:root | 0755 | `headersHelper` printing the `cfwf` server's `Authorization` header from the token broker while its socket exists, otherwise from the GitHub token in the environment (from `claude-mcp/cfwf-mcp-headers`); read/execute only |
 | `/etc/claude-code/mcp/kb-mcp-headers` | root:root | 0755 | `headersHelper` printing the `kb` server's `Authorization` header from the token broker while its socket exists, otherwise from `KB_MCP_TOKEN` or the user's 0600 token file (from `claude-mcp/kb-mcp-headers`); read/execute only |
+| `/etc/claude-code/mcp/dotnet-tool-mcp-launcher` | root:root | 0755 | Shared launcher the `build-dotnet-mcp`, `build-node-mcp` and `changelog-mcp` wrappers source from their own directory, holding all of their logic (from `claude-mcp/dotnet-tool-mcp-launcher`); read/execute only |
 | `/etc/claude-code/mcp/build-dotnet-mcp` | root:root | 0755 | Wrapper starting the `build-dotnet` server for whichever user runs Claude Code (from `claude-mcp/build-dotnet-mcp`); read/execute only |
 | `/etc/claude-code/mcp/build-node-mcp` | root:root | 0755 | Wrapper starting the `build-node` server for whichever user runs Claude Code (from `claude-mcp/build-node-mcp`); read/execute only |
 | `/etc/claude-code/mcp/changelog-mcp` | root:root | 0755 | Wrapper starting the `changelog` server for whichever user runs Claude Code (from `claude-mcp/changelog-mcp`); read/execute only |
@@ -448,8 +457,8 @@ and `kb`, `type` `http`, at `https://memory.markridgwell.com/dev/mcp`, with `hea
 `build-dotnet` starting `/etc/claude-code/mcp/build-dotnet-mcp`, `build-node` starting
 `/etc/claude-code/mcp/build-node-mcp` and `changelog` starting
 `/etc/claude-code/mcp/changelog-mcp`, all three with no `env`;
-any other server is not checked, but the file must hold no `Authorization` text, both helpers and all three wrappers must be
-root:root 0755, `BUILD_MCP_REPO_ROOT` and `CHANGELOG_MCP_REPO_ROOT` must be `/workspace/repo`, `BUILD_MCP_TOOL` and
+any other server is not checked, but the file must hold no `Authorization` text, both helpers, all three wrappers and
+their shared `dotnet-tool-mcp-launcher` must be root:root 0755, `BUILD_MCP_REPO_ROOT` and `CHANGELOG_MCP_REPO_ROOT` must be `/workspace/repo`, `BUILD_MCP_TOOL` and
 `CHANGELOG_MCP_TOOL` must be `global` and the global tools `/home/developer/.dotnet/tools/credfeto-build-dotnet`
 and `/home/developer/.dotnet/tools/credfeto-build-node` must be executable (`/home/developer/.dotnet/tools/changelog-mcp` is not checked here, because the `development-credfeto-tools`
 base image checks it); `~/.claude/settings.json` must hold no

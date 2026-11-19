@@ -235,11 +235,14 @@ RUN mkdir -p /home/developer/.claude/agents \
 # probes and run the global tool directly, because in the image the tool, HOME
 # and the root are all fixed. build-node, the Node build/test/coverage server
 # installed by development-credfeto-tools, is started the same way through the
-# root-owned mcp/build-node-mcp wrapper, a copy of build-dotnet-mcp that reads
-# the same BUILD_MCP_REPO_ROOT and BUILD_MCP_TOOL. changelog, the CHANGELOG.md server installed by
+# root-owned mcp/build-node-mcp wrapper, which reads the same BUILD_MCP_REPO_ROOT
+# and BUILD_MCP_TOOL. changelog, the CHANGELOG.md server installed by
 # development-credfeto-tools, is started the same way through the root-owned
 # mcp/changelog-mcp wrapper, with CHANGELOG_MCP_REPO_ROOT and
 # CHANGELOG_MCP_TOOL=global in place of BUILD_MCP_REPO_ROOT and BUILD_MCP_TOOL.
+# The three wrappers are thin entries that only name their tool and source the
+# shared, root-owned mcp/dotnet-tool-mcp-launcher beside them, which holds the
+# logic for all of them.
 # codegraph, the code knowledge graph server
 # installed by development-tools (this image's base chain), is pinned to the
 # exact entry `codegraph install` writes for Claude Code, so a host's own entry
@@ -252,6 +255,7 @@ COPY --chown=root:root --chmod=0444 claude-managed-settings.json /etc/claude-cod
 COPY --chown=root:root --chmod=0444 claude-managed-mcp.json /etc/claude-code/managed-mcp.json
 COPY --chown=root:root --chmod=0755 claude-mcp/cfwf-mcp-headers /etc/claude-code/mcp/cfwf-mcp-headers
 COPY --chown=root:root --chmod=0755 claude-mcp/kb-mcp-headers /etc/claude-code/mcp/kb-mcp-headers
+COPY --chown=root:root --chmod=0755 claude-mcp/dotnet-tool-mcp-launcher /etc/claude-code/mcp/dotnet-tool-mcp-launcher
 COPY --chown=root:root --chmod=0755 claude-mcp/build-dotnet-mcp /etc/claude-code/mcp/build-dotnet-mcp
 COPY --chown=root:root --chmod=0755 claude-mcp/build-node-mcp /etc/claude-code/mcp/build-node-mcp
 ENV BUILD_MCP_REPO_ROOT=/workspace/repo
@@ -518,6 +522,8 @@ RUN set -e; \
         || { echo "FATAL sanity: cfwf-mcp-headers missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
     [ "$(stat -c '%U:%G %a' /etc/claude-code/mcp/kb-mcp-headers)" = "root:root 755" ] \
         || { echo "FATAL sanity: kb-mcp-headers missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
+    [ "$(stat -c '%U:%G %a' /etc/claude-code/mcp/dotnet-tool-mcp-launcher)" = "root:root 755" ] \
+        || { echo "FATAL sanity: dotnet-tool-mcp-launcher, the shared launcher the build-dotnet, build-node and changelog wrappers source, missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
     [ "$(stat -c '%U:%G %a' /etc/claude-code/mcp/build-dotnet-mcp)" = "root:root 755" ] \
         || { echo "FATAL sanity: build-dotnet-mcp missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
     [ "$(stat -c '%U:%G %a' /etc/claude-code/mcp/build-node-mcp)" = "root:root 755" ] \
