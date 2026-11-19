@@ -1116,7 +1116,8 @@ main() {
             # duplicate work when a human owns the item (#1142).  _GH_ME was resolved
             # above by pr_is_human_driven; resolve_gh_me is a no-op if already set.
             # A dependency PR whose assignees are all trusted maintainers (trusted_logins,
-            # fetched above, never _GH_ME, the PR create bot or a GitHub bot) is the orchestrator's own
+            # fetched above, never a GitHub bot; _GH_ME and the PR create bot are left out as
+            # neutral, #1981) is the orchestrator's own
             # (#1977, pr_json_is_owner_adopted_dependency_pr): that is how a maintainer adopts
             # one, and the agent works it without changing its assignees. A dependency PR with
             # any other assignee is stood off like any other:

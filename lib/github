@@ -610,18 +610,21 @@ pr_should_use_dependency_prompt() {
 }
 
 # Whether a dependency-update PR (pr_has_dependency_update_branch: a same-repository depends/ or
-# dependabot/ branch) is adopted by trusted maintainers (#1977): it has at least one assignee, and
-# every assignee is in the trusted logins ($2, the JSON array get_trusted_logins gives: the
-# repository's collaborators and the extra trusted users), compared without regard to case. The
-# orchestrator's own login ($3, _GH_ME), the PR create bot (PR_CREATOR_LOGIN) and the GitHub bots
+# dependabot/ branch) is adopted by trusted maintainers (#1977): leaving out the neutral assignees,
+# the orchestrator's own login ($3, _GH_ME) and the PR create bot (PR_CREATOR_LOGIN), which never
+# decide it either way (#1981), it has at least one assignee, and every one of them is in the
+# trusted logins ($2, the JSON array get_trusted_logins gives: the repository's collaborators and
+# the extra trusted users), compared without regard to case. So a maintainer beside the PR create
+# bot adopts it, and the PR create bot alone does not. The neutral logins and the GitHub bots
 # get_trusted_logins adds (copilot-pull-request-reviewer and any [bot] login) never count as
-# adopters: only a trusted human adopts one. That is how a dependency PR is adopted: a maintainer
-# assigns it (an organisation can never be an assignee, so it is a person, not the repository
-# owner), so the assignment is the adopted state, not a person claiming the work, and the PR counts
-# as the orchestrator's own. Its assignees are never changed: the agent's prompt for a dependency PR
+# adopters, and a GitHub bot as an assignee is not neutral: only a trusted human adopts one. That
+# is how a dependency PR is adopted: a maintainer assigns it (an organisation can never be an
+# assignee, so it is a person, not the repository owner), so the assignment is the adopted state,
+# not a person claiming the work, and the PR counts as the orchestrator's own. Its assignees are never changed: the agent's prompt for a dependency PR
 # has no assign step and forbids any assignee change (_build_dependency_pr_rule, lib/prompts), because
-# cfwf --assign-self refuses such a PR like any other PR assigned to someone else. No assignee at all, any assignee who is not trusted, or a missing or unreadable trusted
-# list is not an adoption: an untrusted assignee is a claim like on any other item.
+# cfwf --assign-self refuses such a PR like any other PR assigned to someone else. No assignee at
+# all, only neutral assignees, any other assignee who is not trusted, or a missing or unreadable
+# trusted list is not an adoption: an untrusted assignee is a claim like on any other item.
 pr_json_is_owner_adopted_dependency_pr() {
     local pr_json="$1" trusted_logins="$2" me="${3:-}"
     [ -n "${trusted_logins}" ] || return 1
@@ -629,7 +632,8 @@ pr_json_is_owner_adopted_dependency_pr() {
     printf '%s' "${pr_json}" | jq -e --argjson trusted "${trusted_logins}" --arg me "${me}" --arg creator "${PR_CREATOR_LOGIN:-prpixie}" \
         '([$trusted[] | strings | ascii_downcase | select(endswith("[bot]") | not)]
           - [($me | ascii_downcase), ($creator | ascii_downcase), "copilot-pull-request-reviewer", ""]) as $adopters
-         | [(.assignees // [])[] | .login // "" | ascii_downcase] as $logins
+         | ([(.assignees // [])[] | .login // "" | ascii_downcase]
+            - ([$me, $creator] | map(ascii_downcase) - [""])) as $logins
          | ($logins | length > 0) and all($logins[]; . as $login | $adopters | index($login) != null)' > /dev/null 2>&1 \
         || return 1
 }
