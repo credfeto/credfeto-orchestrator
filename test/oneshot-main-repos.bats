@@ -164,8 +164,6 @@ stub_pr_merged() {
     # The orchestrator, the PR create bot and GitHub's bots never adopt one, even when listed as trusted.
     run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"TestUser"}]}' "${trusted}" testuser
     [ "${status}" -eq 1 ]
-    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"credfeto"},{"login":"prpixie"}]}' "${trusted}" testuser
-    [ "${status}" -eq 1 ]
     run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"credfeto"},{"login":"Copilot-Pull-Request-Reviewer"}]}' "${trusted}" testuser
     [ "${status}" -eq 1 ]
     run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"github-advanced-security[bot]"}]}' "${trusted}" testuser
@@ -175,6 +173,53 @@ stub_pr_merged() {
     [ "${status}" -eq 1 ]
     run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"credfeto"}]}' "not json" testuser
     [ "${status}" -eq 1 ]
+}
+
+@test "pr_json_is_owner_adopted_dependency_pr leaves out the orchestrator and the PR create bot as neutral assignees (#1981)" {
+    local trusted='["credfeto","alice","testuser","prpixie"]'
+    # A trusted maintainer beside the PR create bot or the orchestrator, in any case: adopted.
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"credfeto"},{"login":"prpixie"}]}' "${trusted}" testuser
+    [ "${status}" -eq 0 ]
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"dependabot/nuget/x-1.0.1","assignees":[{"login":"PrPixie"},{"login":"Alice"}]}' "${trusted}" testuser
+    [ "${status}" -eq 0 ]
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"TestUser"},{"login":"credfeto"}]}' "${trusted}" testuser
+    [ "${status}" -eq 0 ]
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"testuser"},{"login":"prpixie"},{"login":"alice"}]}' "${trusted}" testuser
+    [ "${status}" -eq 0 ]
+    # A PR create bot set by the operator is the neutral one.
+    PR_CREATOR_LOGIN=dependency-pixie run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"credfeto"},{"login":"dependency-pixie"}]}' "${trusted}" testuser
+    [ "${status}" -eq 0 ]
+    # Only neutral assignees: not adopted.
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"prpixie"}]}' "${trusted}" testuser
+    [ "${status}" -eq 1 ]
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"prpixie"},{"login":"testuser"}]}' "${trusted}" testuser
+    [ "${status}" -eq 1 ]
+    # Any other assignee still stands it off: an untrusted human, a GitHub bot, beside a neutral one too.
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"credfeto"},{"login":"mallory"}]}' "${trusted}" testuser
+    [ "${status}" -eq 1 ]
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"credfeto"},{"login":"prpixie"},{"login":"mallory"}]}' "${trusted}" testuser
+    [ "${status}" -eq 1 ]
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"prpixie"},{"login":"mallory"}]}' "${trusted}" testuser
+    [ "${status}" -eq 1 ]
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"credfeto"},{"login":"prpixie"},{"login":"copilot-pull-request-reviewer"}]}' "${trusted}" testuser
+    [ "${status}" -eq 1 ]
+    # Neutral assignees never make a feature branch, a fork or an untrusted list adopted.
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"feat/x","assignees":[{"login":"credfeto"},{"login":"prpixie"}]}' "${trusted}" testuser
+    [ "${status}" -eq 1 ]
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","isCrossRepository":true,"assignees":[{"login":"credfeto"},{"login":"prpixie"}]}' "${trusted}" testuser
+    [ "${status}" -eq 1 ]
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"credfeto"},{"login":"prpixie"}]}' "" testuser
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_json_assigned_to_another does not stand off a dependency PR a trusted maintainer holds beside the PR create bot (#1981)" {
+    local trusted='["credfeto","alice"]'
+    run pr_json_assigned_to_another '{"headRefName":"depends/x","assignees":[{"login":"credfeto"},{"login":"prpixie"}]}' testuser "${trusted}"
+    [ "${status}" -eq 1 ]
+    run pr_json_assigned_to_another '{"headRefName":"depends/x","assignees":[{"login":"prpixie"},{"login":"mallory"},{"login":"credfeto"}]}' testuser "${trusted}"
+    [ "${status}" -eq 0 ]
+    run pr_json_assigned_to_another '{"headRefName":"feat/x","assignees":[{"login":"credfeto"},{"login":"prpixie"}]}' testuser "${trusted}"
+    [ "${status}" -eq 0 ]
 }
 
 @test "pr_json_assigned_to_another stands off any untrusted assignee, but not the orchestrator, nobody or the trusted maintainers of an adopted dependency PR (#1977)" {
