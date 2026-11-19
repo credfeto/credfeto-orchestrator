@@ -51,13 +51,28 @@ own Pull Request a human is developing is stood off, and reported as human-drive
 Dependency-update Pull Requests (from tools like Dependabot) are a deliberate exception: they
 never contain bot-authored commits by design, so they're recognised by their branch-naming
 convention (`depends/` or `dependabot/`, on a branch in the same repository: a fork PR is never
-recognised by its branch name) or, for the human-takeover and assignee stand-off checks only, a
-`dependencies` label instead, and are not treated as a human takeover.
+recognised by its branch name) or, for the human-takeover check only, a
+`dependencies` label instead, and are not treated as a human takeover. A dependency PR is
+adopted by a trusted maintainer assigning it, so a same-repository `depends/` or `dependabot/`
+PR whose assignees are all trusted maintainers (the trusted logins above, never the orchestrator's
+own account, the PR create bot or GitHub's own bots) is the orchestrator's own and is worked. A
+dependency PR with no assignee is worked as before, and one with any assignee who is not trusted
+is stood off like any other PR (#1977).
+
+Both prompts for a dependency PR (the verify-only one and the full flow on a dependency branch)
+carry their own DEPENDENCY PR RULE in place of the assign step every other PR has: the PR is
+already the agent's; the agent runs no assign or claim step at all (no `--assign-self`, no
+assignee change of any kind, overriding the generic "assign yourself" steps in the AI
+instructions, sub-agents included); it acts on the trusted maintainers' unaddressed comments;
+then it follows the normal flow. `cfwf --assign-self` itself has no dependency exception: it
+refuses any PR assigned to someone else (exit 8), so an agent that tried to claim an adopted
+dependency PR would only be stopped.
 
 The prompt itself is chosen by branch prefix only (`depends/` or `dependabot/`, see
 `pr_should_use_dependency_prompt` in lib/github), never by the `dependencies` label, because
 issue-label sync copies that label onto any bot PR. A dependency-prefixed PR still gets the full
-phase flow when a reviewer has requested changes or the branch still carries the `.deleteme.now`
+phase flow when a reviewer has requested changes, a trusted comment is unaddressed (the
+verify-only prompt cannot act on it), or the branch still carries the `.deleteme.now`
 placeholder, and a PR from a fork never gets that prompt whatever its branch is called. A PR
 whose diff includes `.deleteme.now` is never treated as settled, and the prompts refuse to enable
 auto-merge or mark it ready while it is listed (the full flow removes the placeholder when the real

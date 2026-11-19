@@ -125,6 +125,133 @@ stub_pr_merged() {
     [ "${status}" -eq 1 ]
 }
 
+# --- maintainer-adopted dependency PRs (#1977) -----------------------------------------------
+# A dependency PR is adopted by trusted maintainers assigning it; one whose assignees are all
+# trusted humans (never the orchestrator, the PR create bot or a GitHub bot) is the orchestrator's own PR, never a
+# claim by another user.
+
+@test "pr_should_use_dependency_prompt falls back to the full flow while a trusted comment is unaddressed (#1977)" {
+    run pr_should_use_dependency_prompt '{"headRefName":"depends/update-x/1.2.3","statusCheckRollup":[]}' true
+    [ "${status}" -eq 1 ]
+    run pr_should_use_dependency_prompt '{"headRefName":"depends/update-x/1.2.3","statusCheckRollup":[]}' false
+    [ "${status}" -eq 0 ]
+    run pr_should_use_dependency_prompt '{"headRefName":"depends/update-x/1.2.3","statusCheckRollup":[]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_json_is_owner_adopted_dependency_pr is true only for a same-repository dependency branch whose assignees are all trusted, in any case (#1977)" {
+    local trusted='["credfeto","Alice","testuser","prpixie","copilot-pull-request-reviewer","github-advanced-security[bot]"]'
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"dependabot/nuget/x-1.0.1","assignees":[{"login":"credfeto"}]}' "${trusted}" testuser
+    [ "${status}" -eq 0 ]
+    # An organisation's repository: a trusted human maintainer, not the owner, holds it.
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/update-x/1.2.3","isCrossRepository":false,"assignees":[{"login":"ALICE"}]}' "${trusted}" testuser
+    [ "${status}" -eq 0 ]
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"credfeto"},{"login":"alice"}]}' "${trusted}" testuser
+    [ "${status}" -eq 0 ]
+    # A trusted assignee beside an untrusted one, only untrusted, nobody, a fork, another branch.
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"credfeto"},{"login":"mallory"}]}' "${trusted}" testuser
+    [ "${status}" -eq 1 ]
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"mallory"}]}' "${trusted}" testuser
+    [ "${status}" -eq 1 ]
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[]}' "${trusted}" testuser
+    [ "${status}" -eq 1 ]
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x"}' "${trusted}" testuser
+    [ "${status}" -eq 1 ]
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","isCrossRepository":true,"assignees":[{"login":"credfeto"}]}' "${trusted}" testuser
+    [ "${status}" -eq 1 ]
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"feat/x","labels":[{"name":"dependencies"}],"assignees":[{"login":"credfeto"}]}' "${trusted}" testuser
+    [ "${status}" -eq 1 ]
+    # The orchestrator, the PR create bot and GitHub's bots never adopt one, even when listed as trusted.
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"TestUser"}]}' "${trusted}" testuser
+    [ "${status}" -eq 1 ]
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"credfeto"},{"login":"prpixie"}]}' "${trusted}" testuser
+    [ "${status}" -eq 1 ]
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"credfeto"},{"login":"Copilot-Pull-Request-Reviewer"}]}' "${trusted}" testuser
+    [ "${status}" -eq 1 ]
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"github-advanced-security[bot]"}]}' "${trusted}" testuser
+    [ "${status}" -eq 1 ]
+    # No trusted list, or one that is not JSON, adopts nothing.
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"credfeto"}]}' "" testuser
+    [ "${status}" -eq 1 ]
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"credfeto"}]}' "not json" testuser
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_json_assigned_to_another stands off any untrusted assignee, but not the orchestrator, nobody or the trusted maintainers of an adopted dependency PR (#1977)" {
+    local trusted='["credfeto","alice"]'
+    # Assigned to someone else: a feature PR, a dependency PR, a labelled one, a maintainer beside them.
+    run pr_json_assigned_to_another '{"headRefName":"feat/x","assignees":[{"login":"mallory"}]}' testuser "${trusted}"
+    [ "${status}" -eq 0 ]
+    run pr_json_assigned_to_another '{"headRefName":"dependabot/npm_and_yarn/x-1.0.0","assignees":[{"login":"mallory"}]}' testuser "${trusted}"
+    [ "${status}" -eq 0 ]
+    run pr_json_assigned_to_another '{"headRefName":"feat/x","labels":[{"name":"dependencies"}],"assignees":[{"login":"mallory"}]}' testuser "${trusted}"
+    [ "${status}" -eq 0 ]
+    run pr_json_assigned_to_another '{"headRefName":"depends/x","assignees":[{"login":"credfeto"},{"login":"mallory"}]}' testuser "${trusted}"
+    [ "${status}" -eq 0 ]
+    run pr_json_assigned_to_another '{"headRefName":"depends/x","assignees":[{"login":"prpixie"}]}' testuser '["credfeto","prpixie"]'
+    [ "${status}" -eq 0 ]
+    # A feature PR assigned to a trusted maintainer is still someone else's.
+    run pr_json_assigned_to_another '{"headRefName":"feat/x","assignees":[{"login":"credfeto"}]}' testuser "${trusted}"
+    [ "${status}" -eq 0 ]
+    # Without the trusted list, a dependency PR's maintainer is someone else too.
+    run pr_json_assigned_to_another '{"headRefName":"depends/x","assignees":[{"login":"credfeto"}]}' testuser
+    [ "${status}" -eq 0 ]
+    # Not someone else's: the orchestrator's (in any case, beside others), nobody's, the adopted one.
+    run pr_json_assigned_to_another '{"headRefName":"feat/x","assignees":[{"login":"mallory"},{"login":"TestUser"}]}' testuser "${trusted}"
+    [ "${status}" -eq 1 ]
+    run pr_json_assigned_to_another '{"headRefName":"feat/x","assignees":[]}' testuser "${trusted}"
+    [ "${status}" -eq 1 ]
+    run pr_json_assigned_to_another '{"headRefName":"feat/x"}' testuser "${trusted}"
+    [ "${status}" -eq 1 ]
+    run pr_json_assigned_to_another '{"headRefName":"depends/x","assignees":[{"login":"CREDFETO"},{"login":"alice"}]}' testuser "${trusted}"
+    [ "${status}" -eq 1 ]
+}
+
+@test "main gives a maintainer-adopted dependency PR with an unaddressed trusted comment the full flow, told it is a dependency PR (#1977)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    get_trusted_logins() { printf '["credfeto","testuser"]\n'; }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"dependabot/nuget/x-1.0.1","comments":[{"author":{"login":"credfeto"},"createdAt":"2026-11-18T10:00:00Z","body":"Please also bump y"}],"reviews":[],"statusCheckRollup":[],"files":[{"path":"a.csproj"}],"isCrossRepository":false,"assignees":[{"login":"credfeto"}]}\n'; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint() { printf 'fp-old\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    _GH_ME="testuser"
+    build_pr_claude_md() {
+        printf '%s %s\n' "$7" "${13:-}" > "${TEST_TMP}/flags"
+        printf '%s' "${10}" > "${TEST_TMP}/comments"
+        printf 'mock-pr-claude-md\n'
+    }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"assigned to another user"* ]]
+    [[ "${output}" == *"Found actionable PullRequest #5"* ]]
+    [ "$(cat "${TEST_TMP}/flags")" = "false true" ]
+    grep -q "Please also bump y" "${TEST_TMP}/comments"
+}
+
+@test "main keeps the verify-only prompt for a maintainer-adopted dependency PR with nothing unaddressed (#1977)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"depends/update-x/1.2.3","comments":[],"reviews":[],"statusCheckRollup":[],"files":[{"path":"a.csproj"}],"isCrossRepository":false,"assignees":[{"login":"credfeto"}]}\n'; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint() { printf 'fp-old\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    _GH_ME="testuser"
+    build_pr_claude_md() {
+        printf '%s %s\n' "$7" "${13:-}" > "${TEST_TMP}/flags"
+        printf 'mock-pr-claude-md\n'
+    }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${TEST_TMP}/flags")" = "true true" ]
+}
+
 @test "pr_json_has_placeholder_file detects .deleteme.now only" {
     run pr_json_has_placeholder_file '{"files":[{"path":".deleteme.now"}]}'
     [ "${status}" -eq 0 ]

@@ -80,7 +80,8 @@ source "${ONESHOT_DIR}/lib/podman" \
 # resolve_gh_me, list_bot_created_open_prs, fetch_pr_fields_json, json_has_commit_author_identity,
 # find_open_nonblocked_pr_for_repo, pr_has_bot_authored_commit, find_human_taken_over_pr_for_issue,
 # resolve_resumable_issue_branch, pr_has_dependency_label,
-# pr_has_dependency_update_branch, pr_should_use_dependency_prompt, dirty_branch_owned_by_queued_item,
+# pr_has_dependency_update_branch, pr_should_use_dependency_prompt, pr_json_is_owner_adopted_dependency_pr,
+# pr_json_assigned_to_another, dirty_branch_owned_by_queued_item,
 # and pr_is_human_driven are declared in lib/github. ensure_rules_current,
 # clean_local_git_url_rewrites, ensure_repo_current,
 # checkout_item_branch, checkout_head_sha, dirty_branch_belongs_to_item, autostash_dirty_checkout,
@@ -775,6 +776,12 @@ main() {
                                 info "PR #${open_pr} in ${item_repo}: idle budget exhausted with an unaddressed review request — blocking"
                                 block_pr_for_idle_exhausted_review "${open_pr}" "${item_repo}"
                                 item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "idle budget exhausted with an unaddressed review request - blocking")")
+                            elif [ "${pr_has_unaddressed_comment}" = "true" ]; then
+                                # Never "no known blocking reason" while a trusted comment the sessions have not
+                                # addressed is waiting (#1977): the reason names the comment instead.
+                                info "PR #${open_pr} in ${item_repo}: idle budget exhausted with an unaddressed trusted comment — blocking"
+                                block_pr_for_idle_exhausted_no_progress "${open_pr}" "${item_repo}" "${pr_required_checks_lookup_failed}" "${pr_json}" true
+                                item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "idle budget exhausted with an unaddressed trusted comment - blocking")")
                             else
                                 info "PR #${open_pr} in ${item_repo}: idle budget exhausted with no known blocking reason — blocking"
                                 block_pr_for_idle_exhausted_no_progress "${open_pr}" "${item_repo}" "${pr_required_checks_lookup_failed}" "${pr_json}"
@@ -1108,10 +1115,13 @@ main() {
             # Stand off if this PR is assigned to someone other than us — prevents
             # duplicate work when a human owns the item (#1142).  _GH_ME was resolved
             # above by pr_is_human_driven; resolve_gh_me is a no-op if already set.
-            # Dependency PRs are exempt here too, for the same reason pr_is_human_driven
-            # exempts them above: dependabot.yml-style `assignees:` config (or a human
-            # self-assigning to review) must not permanently block the CI-verify/auto-merge
-            # takeover prompt (observed on funfair-server-ethereum#1028).
+            # A dependency PR whose assignees are all trusted maintainers (trusted_logins,
+            # fetched above, never _GH_ME, the PR create bot or a GitHub bot) is the orchestrator's own
+            # (#1977, pr_json_is_owner_adopted_dependency_pr): that is how a maintainer adopts
+            # one, and the agent works it without changing its assignees. A dependency PR with
+            # any other assignee is stood off like any other:
+            # the agent's assign step is refused there (#1962), so a session could only stop
+            # at once, and each such session used to be charged against the idle budget.
             if ! resolve_gh_me; then
                 warn "Failed to determine current GitHub user for PR #${item_id} in ${item_repo} — skipping this item for now"
                 count_error=$((count_error + 1))
@@ -1119,15 +1129,11 @@ main() {
                 skip_repos+=("${item_repo}")
                 continue
             fi
-            if ! pr_has_dependency_update_branch "${pr_json}" && ! pr_has_dependency_label "${pr_json}"; then
-                if printf '%s' "${pr_json}" | jq -e --arg me "${_GH_ME}" \
-                    '((.assignees // []) | length > 0) and ([(.assignees // [])[].login] | index($me) == null)' \
-                    > /dev/null 2>&1; then
-                    info "PR #${item_id} in ${item_repo} is assigned to another user — standing off"
-                    count_human_driven=$((count_human_driven + 1))
-                    item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "assigned to another user - standing off")")
-                    continue
-                fi
+            if pr_json_assigned_to_another "${pr_json}" "${_GH_ME}" "${trusted_logins}"; then
+                info "PR #${item_id} in ${item_repo} is assigned to another user — standing off"
+                count_human_driven=$((count_human_driven + 1))
+                item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "assigned to another user - standing off")")
+                continue
             fi
 
             # Non-blocked, open PR = active work for this repo.
@@ -1297,6 +1303,12 @@ main() {
                         info "PR #${item_id} in ${item_repo}: idle budget exhausted with an unaddressed review request — blocking"
                         block_pr_for_idle_exhausted_review "${item_id}" "${item_repo}"
                         item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "idle budget exhausted with an unaddressed review request - blocking")")
+                    elif [ "${pr_has_unaddressed_comment}" = "true" ]; then
+                        # Never "no known blocking reason" while a trusted comment the sessions have not
+                        # addressed is waiting (#1977): the reason names the comment instead.
+                        info "PR #${item_id} in ${item_repo}: idle budget exhausted with an unaddressed trusted comment — blocking"
+                        block_pr_for_idle_exhausted_no_progress "${item_id}" "${item_repo}" "${pr_required_checks_lookup_failed}" "${pr_json}" true
+                        item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "idle budget exhausted with an unaddressed trusted comment - blocking")")
                     else
                         info "PR #${item_id} in ${item_repo}: idle budget exhausted with no known blocking reason — blocking"
                         block_pr_for_idle_exhausted_no_progress "${item_id}" "${item_repo}" "${pr_required_checks_lookup_failed}" "${pr_json}"
@@ -1581,7 +1593,7 @@ main() {
                 prepare_precheck_section main main \
                     "$(git -C "${REPO_WORK_DIR}" rev-parse --verify -q origin/main 2> /dev/null)" "${item_type}" "${item_id}"
             elif [ "${item_type}" = "PullRequest" ] && [ "${merge_state}" != "BEHIND" ] && [ "${merge_state}" != "DIRTY" ] \
-                && ! pr_should_use_dependency_prompt "${pr_json}"; then
+                && ! pr_should_use_dependency_prompt "${pr_json}" "${pr_has_unaddressed_comment}"; then
                 prepare_precheck_section pr "PullRequest_${item_id}" \
                     "$(printf '%s' "${pr_json}" | jq -r '.headRefOid // empty')" "${item_type}" "${item_id}"
             fi
@@ -1596,12 +1608,16 @@ main() {
             prompt=$(build_issue_prompt "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}")
             claude_md_content=$(build_issue_claude_md "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}" "${plan_approved_or_later}" "${trusted_logins}" "${DIRTY_BRANCH}" "${stale_issue_branch}" "${background_stall}" "${PRECHECK_SECTION}")
         else
-            local is_dependency_pr
-            if pr_should_use_dependency_prompt "${pr_json}"; then
+            # A trusted comment the agent has not addressed gets the full flow, which acts on it,
+            # even on a dependency PR (#1977); dependency_branch tells the full flow it is one, so
+            # the agent works it as the trusted maintainers' agent and leaves its assignees alone.
+            local is_dependency_pr dependency_branch=false
+            if pr_should_use_dependency_prompt "${pr_json}" "${pr_has_unaddressed_comment}"; then
                 is_dependency_pr=true
             else
                 is_dependency_pr=false
             fi
+            pr_has_dependency_update_branch "${pr_json}" && dependency_branch=true
             # Quoted into the generated CLAUDE.md so the agent sees exactly what a trusted commenter asked
             # since the last session read this PR. Best-effort: a failure only loses the quote,
             # the prompt still tells the agent to read both comment surfaces itself.
@@ -1609,7 +1625,7 @@ main() {
                 "$(load_pr_last_agent_comment_seen "${item_id}")" "${pr_review_comments}" "${pr_issue_comments}" "${_GH_ME:-}") \
                 || pr_unaddressed_comments_text=""
             prompt=$(build_pr_prompt "${item_id}" "${container_ai_instructions}" "${merge_state}" "${branch_name}" "${CONTAINER_REPO_PATH}")
-            claude_md_content=$(build_pr_claude_md "${item_id}" "${container_ai_instructions}" "${merge_state}" "${branch_name}" "${CONTAINER_REPO_PATH}" "${DIRTY_BRANCH}" "${is_dependency_pr}" "${trusted_logins}" "${background_stall}" "${pr_unaddressed_comments_text}" "${pr_next_phase}" "${PRECHECK_SECTION}")
+            claude_md_content=$(build_pr_claude_md "${item_id}" "${container_ai_instructions}" "${merge_state}" "${branch_name}" "${CONTAINER_REPO_PATH}" "${DIRTY_BRANCH}" "${is_dependency_pr}" "${trusted_logins}" "${background_stall}" "${pr_unaddressed_comments_text}" "${pr_next_phase}" "${PRECHECK_SECTION}" "${dependency_branch}")
         fi
 
         [ -n "${prompt}" ] || die "prompt is empty for ${item_type} #${item_id} in ${item_repo}"
@@ -1782,6 +1798,14 @@ main() {
                 fi
                 if [ "${post_run_ok}" -eq 0 ] && pr_json_has_pending_ci_checks "${post_run_pr_json}"; then
                     info "PR #${item_id} in ${item_repo}: still CI-pending after this session — not counting it against the idle budget"
+                    pr_new_idle="${PR_INVOCATION_IDLE}"
+                elif [ "${post_run_ok}" -eq 0 ] \
+                    && pr_json_assigned_to_another "${post_run_pr_json}" "${_GH_ME:-}" "${trusted_logins:-}"; then
+                    # Someone else claimed the PR before or during the session, so the agent's
+                    # assign step was refused and it stopped there (#1962). That is a stand-off,
+                    # not idleness: it is not charged (#1977), and the next tick stands off the PR
+                    # before any session (pr_json_assigned_to_another in the stand-off checks above).
+                    info "PR #${item_id} in ${item_repo}: assigned to another user after this session, so the session stopped at the assign step — not counting it against the idle budget"
                     pr_new_idle="${PR_INVOCATION_IDLE}"
                 else
                     # Not CI-pending, but a clean phase advance (e.g. "Simplify clean, advancing

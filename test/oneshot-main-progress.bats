@@ -521,6 +521,51 @@ use_file_backed_marker_and_pr_states() {
     [ "$(cat "${TEST_TMP}/required_checks_unknown")" = "true" ]
 }
 
+@test "main blocks an idle-exhausted PR with an unaddressed trusted comment as such, not for no known reason (#1977)" {
+    setup_unchanged_direct_draft_pr
+    fetch_pr_json() { draft_pr5_json '[{"author":{"login":"credfeto"},"createdAt":"2026-11-18T10:00:00Z","body":"please change x"}]'; }
+    save_pr_invocation_counts 5 4 "${MAX_PR_IDLE_INVOCATIONS}"
+    block_pr_for_idle_exhausted_no_progress() { printf '%s\n' "${5:-}" > "${TEST_TMP}/has_unaddressed_comment"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #5 in org/repo: idle budget exhausted with an unaddressed trusted comment — blocking"* ]]
+    [[ "${output}" != *"no known blocking reason"* ]]
+    [ "$(cat "${TEST_TMP}/has_unaddressed_comment")" = "true" ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+}
+
+@test "main does not charge the idle budget for a session that found the PR assigned to another user (#1977)" {
+    setup_unchanged_direct_draft_pr
+    stub_pr_json_pre_post "$(draft_pr5_json)" \
+        "$(draft_pr5_json | jq -c '. + {assignees: [{login: "alice"}]}')"
+    fetch_single_item_workflow_status() { printf 'AI Review'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"PR #5 in org/repo: assigned to another user after this session, so the session stopped at the assign step — not counting it against the idle budget"* ]]
+    [[ "${output}" != *"no progress this session"* ]]
+    load_pr_invocation_counts 5
+    [ "${PR_INVOCATION_IDLE}" -eq 2 ]
+    [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
+}
+
+@test "main still charges the idle budget for a no-progress session on a dependency PR adopted by a trusted maintainer (#1977)" {
+    setup_unchanged_direct_draft_pr
+    local adopted
+    adopted=$(draft_pr5_json | jq -c '. + {headRefName: "depends/update-x/1.2.3", assignees: [{login: "credfeto"}]}')
+    stub_pr_json_pre_post "${adopted}" "${adopted}"
+    fetch_single_item_workflow_status() { printf 'AI Review'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"PR #5 in org/repo: no progress this session"* ]]
+    load_pr_invocation_counts 5
+    [ "${PR_INVOCATION_IDLE}" -eq 3 ]
+}
+
 @test "main reports a failed required check on a repo with no required checks (#1557)" {
     setup_unchanged_direct_draft_pr
     fetch_pr_json() { draft_pr5_json '[]' '[{"name":"build","status":"COMPLETED","conclusion":"FAILURE"}]'; }
