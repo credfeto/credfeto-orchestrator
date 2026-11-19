@@ -606,7 +606,7 @@ block_pr_for_idle_exhausted_review() {
 # Optional fifth argument has_unaddressed_comment ("true"/"false", default "false"): set when a
 # trusted comment newer than the agent's last session is waiting (set_pr_has_unaddressed_comment).
 # The reason then names that comment instead of claiming there is no known blocking reason and no
-# unaddressed request (#1977): an owner's request on a dependency PR was blocked with exactly that
+# unaddressed request (#1977): a maintainer's request on a dependency PR was blocked with exactly that
 # claim while it sat unanswered.
 block_pr_for_idle_exhausted_no_progress() {
     local item_id="$1" item_repo="$2" required_checks_unknown="${3:-false}" pr_json="${4:-}" has_unaddressed_comment="${5:-false}"

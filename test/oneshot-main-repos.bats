@@ -125,9 +125,9 @@ stub_pr_merged() {
     [ "${status}" -eq 1 ]
 }
 
-# --- owner-adopted dependency PRs (#1977) ----------------------------------------------------
+# --- maintainer-adopted dependency PRs (#1977) -----------------------------------------------
 # A dependency PR is adopted by trusted maintainers assigning it; one whose assignees are all
-# trusted (never the orchestrator or the PR create bot) is the orchestrator's own PR, never a
+# trusted humans (never the orchestrator, the PR create bot or a GitHub bot) is the orchestrator's own PR, never a
 # claim by another user.
 
 @test "pr_should_use_dependency_prompt falls back to the full flow while a trusted comment is unaddressed (#1977)" {
@@ -140,7 +140,7 @@ stub_pr_merged() {
 }
 
 @test "pr_json_is_owner_adopted_dependency_pr is true only for a same-repository dependency branch whose assignees are all trusted, in any case (#1977)" {
-    local trusted='["credfeto","Alice","testuser","prpixie"]'
+    local trusted='["credfeto","Alice","testuser","prpixie","copilot-pull-request-reviewer","github-advanced-security[bot]"]'
     run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"dependabot/nuget/x-1.0.1","assignees":[{"login":"credfeto"}]}' "${trusted}" testuser
     [ "${status}" -eq 0 ]
     # An organisation's repository: a trusted human maintainer, not the owner, holds it.
@@ -161,10 +161,14 @@ stub_pr_merged() {
     [ "${status}" -eq 1 ]
     run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"feat/x","labels":[{"name":"dependencies"}],"assignees":[{"login":"credfeto"}]}' "${trusted}" testuser
     [ "${status}" -eq 1 ]
-    # The orchestrator and the PR create bot never adopt one, even when listed as trusted.
+    # The orchestrator, the PR create bot and GitHub's bots never adopt one, even when listed as trusted.
     run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"TestUser"}]}' "${trusted}" testuser
     [ "${status}" -eq 1 ]
     run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"credfeto"},{"login":"prpixie"}]}' "${trusted}" testuser
+    [ "${status}" -eq 1 ]
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"credfeto"},{"login":"Copilot-Pull-Request-Reviewer"}]}' "${trusted}" testuser
+    [ "${status}" -eq 1 ]
+    run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"github-advanced-security[bot]"}]}' "${trusted}" testuser
     [ "${status}" -eq 1 ]
     # No trusted list, or one that is not JSON, adopts nothing.
     run pr_json_is_owner_adopted_dependency_pr '{"headRefName":"depends/x","assignees":[{"login":"credfeto"}]}' "" testuser
@@ -203,7 +207,7 @@ stub_pr_merged() {
     [ "${status}" -eq 1 ]
 }
 
-@test "main gives an owner-adopted dependency PR with an unaddressed trusted comment the full flow, told it is a dependency PR (#1977)" {
+@test "main gives a maintainer-adopted dependency PR with an unaddressed trusted comment the full flow, told it is a dependency PR (#1977)" {
     setup_main_mocks
     fetch_all_priorities() {
         printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
@@ -228,7 +232,7 @@ stub_pr_merged() {
     grep -q "Please also bump y" "${TEST_TMP}/comments"
 }
 
-@test "main keeps the verify-only prompt for an owner-adopted dependency PR with nothing unaddressed (#1977)" {
+@test "main keeps the verify-only prompt for a maintainer-adopted dependency PR with nothing unaddressed (#1977)" {
     setup_main_mocks
     fetch_all_priorities() {
         printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'

@@ -55,7 +55,7 @@ recognised by its branch name) or, for the human-takeover check only, a
 `dependencies` label instead, and are not treated as a human takeover. A dependency PR is
 adopted by a trusted maintainer assigning it, so a same-repository `depends/` or `dependabot/`
 PR whose assignees are all trusted maintainers (the trusted logins above, never the orchestrator's
-own account or the PR create bot) is the orchestrator's own: it is worked, its assignees are
+own account, the PR create bot or GitHub's own bots) is the orchestrator's own: it is worked, its assignees are
 never changed (`cfwf --assign-self` leaves them as they are), and the agent acts on the
 maintainers' comments like any trusted commenter's. A dependency PR with no assignee is worked as
 before, and one with any assignee who is not trusted is stood off like any other PR (#1977).
