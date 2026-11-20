@@ -54,10 +54,12 @@ convention (`depends/` or `dependabot/`, on a branch in the same repository: a f
 recognised by its branch name) or, for the human-takeover check only, a
 `dependencies` label instead, and are not treated as a human takeover. A dependency PR is
 adopted by a trusted maintainer assigning it, so a same-repository `depends/` or `dependabot/`
-PR whose assignees are all trusted maintainers (the trusted logins above, never the orchestrator's
-own account, the PR create bot or GitHub's own bots) is the orchestrator's own and is worked. A
-dependency PR with no assignee is worked as before, and one with any assignee who is not trusted
-is stood off like any other PR (#1977).
+PR whose assignees are all trusted maintainers (the trusted logins above, never GitHub's own
+bots) is the orchestrator's own and is worked. The orchestrator's own account and the PR create
+bot are neutral assignees: they are left out before that check, so a maintainer beside the PR
+create bot still adopts the PR, while the PR create bot alone (or the orchestrator alone) does
+not (#1981). A dependency PR with no assignee is worked as before, and one with any other
+assignee who is not trusted is stood off like any other PR (#1977). Assignees are never changed.
 
 Both prompts for a dependency PR (the verify-only one and the full flow on a dependency branch)
 carry their own DEPENDENCY PR RULE in place of the assign step every other PR has: the PR is
