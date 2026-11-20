@@ -107,7 +107,10 @@ link in these pages is broken.
   glue mistake such as a missing space between two arguments is exactly what this catches.
 - Run one file with `bats test/<name>.bats`, or a subset of one with `bats -f '<pattern>'`. The
   `oneshot` tests are split by concern into `test/oneshot-<concern>.bats` files that share
-  `test/oneshot_helper.bash`, so run the one for the area you changed. The whole suite takes
+  `test/oneshot_helper.bash`, and the `cfwf` tests by subcommand into `test/cfwf-<area>.bats`
+  files that share `test/cfwf_helper.bash`, so run the one for the area you changed. Keep each
+  test file and script under 200 KB (`test/shell-file-size.bats`, which allows `cfwf` itself up
+  to 640 KB): shellcheck runs out of memory on much bigger files (#1982). The whole suite takes
   minutes; CI runs it as `shell-tests`. The global pre-commit hooks (the hooks are not in this
   repository; they come from the developer's global `core.hooksPath`) also run it when a `.bats`
   file is staged, and always under `pre-commit-check`, so such a commit takes minutes.
