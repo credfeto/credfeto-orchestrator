@@ -12,6 +12,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ### Security
 - Keep the GitHub, cfwf and kb MCP tokens out of the agent's readable environment: tokens are mounted as root-only files and served to MCP headers helpers by a root-owned broker (#1838)
 - Refuse symlinked, foreign-owned or wrong-mode OAuth token files: a shared token_file_problem check in lib/core is used by read_token_if_safe, validate_config and setup-owner, so a token file is only read when it is a regular file owned by the account that runs the tool with mode 0600 or 0400 (#1839)
+- Split the 992 KB test/cfwf.bats, which made shellcheck run out of memory and could take the host down, into per-subcommand test/cfwf-*.bats files sharing test/cfwf_helper.bash; the shell-tests workflow now shellchecks every test file one at a time under a 2 GB memory cap and a 120 s timeout, and test/shell-file-size.bats fails when a shell file grows past 200 KB (#1982)
 ### Added
 - The development-full sanity check also requires the build-node MCP server binary (the `credfeto.build.node.server` package and an executable `credfeto-build-node`), now that the published development-credfeto-tools image carries it (#1972)
 - The development-tools image installs `clang` and `zlib1g-dev`, so agents can run Native AOT `dotnet publish` builds inside the container; the build-time sanity step checks for both (#1861)
