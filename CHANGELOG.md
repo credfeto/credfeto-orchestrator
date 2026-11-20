@@ -62,6 +62,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - oneshot's GitHub health gate reads githubstatus.com's status summary and skips the tick only for a serious incident on a component sessions use: major or critical impact, or the component in partial or major outage. A minor incident there (the component only degraded) logs `GitHub incident open (<name>, since <time>, <component>: <status>) — minor, continuing` and the tick goes ahead, so a GitHub slowdown no longer stops the fleet; the lookup still fails open; Actions is now a used component too, because CI on it gates PR merges (#1964)
 ### Deprecated
 ### Removed
+- `cfwf run rerun` no longer refuses a run on its third attempt or later: the `attempt limit` rule is gone, so a check whose cause was fixed elsewhere (a broken shared CI tool, say) can be rerun however many attempts it has used. The default branch, open pull request head and pending rules are unchanged (#1991)
 - The agent images no longer install PowerShell or the PSScriptAnalyzer module, now that the global pre-commit has dropped its PSScriptAnalyzer hook: the development-dotnet-tools PowerShell install and its version pin, the module install, their sanity and installed-versions checks, the pwsh and run-psscriptanalyzer checks in development-full and the agent image, and the run-psscriptanalyzer agent allow rules are gone (#1925)
 ### Deployment Changes
 
