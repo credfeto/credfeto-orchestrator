@@ -12216,12 +12216,14 @@ assert_unexpected_run() {
         [[ "${output}" == *$'\n'"--failed, --job, --debug, --all, --json, --jq, --template and --web are not options."$'\n'* ]]
         [[ "${output}" != *"never reruns a whole run"* ]]
         [[ "${output}" != *"no option for a full rerun"* ]]
-        [[ "${output}" == *"with \"cfwf: rerun refused: <rule>\" on stderr, which names only the rule:"$'\n'"  attempt limit                  the run is on attempt 3 or later."*$'\n'"  default branch                 "*$'\n'"  not an open pull request head  the run's head commit is not the head of an open pull request"* ]]
+        [[ "${output}" == *"with \"cfwf: rerun refused: <rule>\" on stderr, which names only the rule:"$'\n'"  default branch                 "*$'\n'"  not an open pull request head  the run's head commit is not the head of an open pull request"* ]]
         [[ "${output}" == *"At most 1000 open pull requests on the branch are looked at; more is a runtime failure."* ]]
         [[ "${output}" == *"(queued, in progress or waiting) exits 4"*"So a run that is refused is never reported as pending."* ]]
         [[ "${output}" == *"So a run that is refused is never reported as pending."*"Otherwise it is refused, after"$'\n'"the rules above:"$'\n'"  no failed jobs and no required check missing"$'\n'* ]]
         [[ "${output}" == *$'\n'"  Rerunning failed jobs of run <id> (attempt <n>)"$'\n'"  Rerunning all jobs of run <id> (attempt <n>): required check <name> never ran"$'\n'"where <n> is the attempt the rerun starts: one more than the run's attempt when it was read."* ]]
         [[ "${output}" == *"the request may still have reached GitHub."* ]]
+        [[ "${output}" == *"leaves the run in progress (exit 4)."$'\n'"A run is rerun whatever its attempt."$'\n'* ]]
+        [[ "${output}" != *"attempt limit"* && "${output}" != *"or later"* ]]
         [[ "${output}" == *"Exit codes: 0 the rerun was requested; 8 refused by a rule (naming the rule; nothing was"$'\n'"written); 4 the run is still in progress; 9 the run was not found in the repository; 1 a runtime"*"2 a"$'\n'"usage error." ]]
     done
     [ ! -f "${GH_LOG}" ]
@@ -12342,15 +12344,28 @@ assert_unexpected_run() {
     [ "$(grep -cxF -- "${RUN_RERUN_CALL}" "${GH_LOG}")" -eq 1 ]
 }
 
-@test "run rerun refuses a run on its third attempt or later (exit 8) from the run read alone, writing nothing" {
+@test "run rerun reruns a failed run on its third attempt or later, printing the attempt it starts (#1991)" {
     local attempt
-    for attempt in 3 4 10; do
+    for attempt in 3 5 10; do
         prepare_run_rerun "${attempt}"
         rm -f "${GH_LOG}"
         run_run_rerun --run 123
-        assert_rerun_refused "attempt limit" "${status}" "${output}" "${stderr}"
-        [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
+        if [ "${status}" -ne 0 ]; then
+            echo "attempt ${attempt}: ${status} ${stderr}" >&2
+            return 1
+        fi
+        [ "${output}" = "Rerunning failed jobs of run 123 (attempt $((attempt + 1)))" ]
+        [ -z "${stderr}" ]
+        [ "$(wc -l < "${GH_LOG}")" -eq 4 ]
+        [ "$(tail -n 1 "${GH_LOG}")" = "${RUN_RERUN_CALL}" ]
     done
+
+    # A whole-run rerun has no attempt limit either.
+    prepare_whole_run_rerun 4
+    run_run_rerun --run 123
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Rerunning all jobs of run 123 (attempt 5): required check pre-release never ran" ]
+    [ "$(grep -cxF -- "${RUN_RERUN_ALL_CALL}" "${GH_LOG}")" -eq 1 ]
 }
 
 @test "run rerun refuses a run whose head branch is the default branch (exit 8), naming only the rule, before listing pull requests" {
@@ -12393,10 +12408,7 @@ assert_unexpected_run() {
 }
 
 @test "run rerun refuses a run that has not completed but breaks a rule (exit 8), never reporting it as pending" {
-    prepare_run_rerun 3 in_progress
-    run_run_rerun --run 123
-    assert_rerun_refused "attempt limit" "${status}" "${output}" "${stderr}"
-
+    prepare_run_rerun 1 in_progress
     write_run 123 queued "" "${RUN_SHA}" main 1
     run_run_rerun --run 123
     assert_rerun_refused "default branch" "${status}" "${output}" "${stderr}"
@@ -12695,16 +12707,7 @@ prepare_whole_run_rerun() {
     [ "$(gh_call_count "/pulls/7")" -eq 0 ]
 }
 
-@test "run rerun still refuses a run with no failed job and a missing required check under the attempt limit, the default branch and the open pull request head rules first (#1884)" {
-    local attempt
-    for attempt in 3 4; do
-        prepare_whole_run_rerun "${attempt}"
-        rm -f "${GH_LOG}"
-        run_run_rerun --run 123
-        assert_rerun_refused "attempt limit" "${status}" "${output}" "${stderr}"
-        [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
-    done
-
+@test "run rerun still refuses a run with no failed job and a missing required check under the default branch and the open pull request head rules first (#1884)" {
     prepare_whole_run_rerun
     write_run_repository feat/x
     run_run_rerun --run 123
