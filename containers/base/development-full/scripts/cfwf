@@ -39,8 +39,6 @@ readonly RUN_PENDING_EXIT="${CHECKS_PENDING_EXIT}"
 # A refusal by a rule is the same code as a refused body: the call must change, and nothing was
 # written.
 readonly POLICY_REFUSED_EXIT="${BODY_REFUSED_EXIT}"
-# The run attempt at or past which a rerun is refused, so a flaky check cannot be rerun for ever.
-readonly RUN_ATTEMPT_LIMIT=3
 # run list: how many runs it lists by default and at most.
 readonly RUN_LIST_LIMIT_DEFAULT=20
 readonly RUN_LIST_LIMIT_MAX=50
@@ -3188,8 +3186,6 @@ is decided from the run and the pull request's checks, never by an option.
 
 Each rule is checked in this order, before anything is written. A run that breaks one is refused
 with "cfwf: rerun refused: <rule>" on stderr, which names only the rule:
-  attempt limit                  the run is on attempt ${RUN_ATTEMPT_LIMIT} or later. The limit is per run, not
-                                 per check: a new push starts a new run.
   default branch                 the run's head branch has the name of the repository's default
                                  branch, whichever repository the branch is in.
   not an open pull request head  the run's head commit is not the head of an open pull request in
@@ -3224,8 +3220,8 @@ not read back, because GitHub can lag behind a write. <name> is the first requir
 name, that never ran.
 
 A failed rerun request is a runtime failure, and the request may still have reached GitHub. Running
-the command again is safe: a rerun that did start leaves the run in progress (exit ${RUN_PENDING_EXIT}), and the
-attempt limit still applies.
+the command again is safe: a rerun that did start leaves the run in progress (exit ${RUN_PENDING_EXIT}).
+A run is rerun whatever its attempt.
 
 Exit codes: 0 the rerun was requested; ${POLICY_REFUSED_EXIT} refused by a rule (naming the rule; nothing was
 written); ${RUN_PENDING_EXIT} the run is still in progress; ${RUN_NOT_FOUND_EXIT} the run was not found in the repository; 1 a runtime
@@ -9929,7 +9925,6 @@ run_rerun() {
     require RUN_ID --run
     require_gh
     read_run
-    [ "${RUN_ATTEMPT}" -lt "${RUN_ATTEMPT_LIMIT}" ] || refuse_policy rerun "attempt limit"
     refuse_default_branch_run
     refuse_run_not_open_pull_request_head
     if [ "${RUN_STATUS}" != completed ]; then
