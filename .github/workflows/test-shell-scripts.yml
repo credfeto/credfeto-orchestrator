@@ -41,13 +41,15 @@ jobs:
 
       # shfmt is needed because the Claude Code hook scripts under test parse
       # commands with it (see containers/base/development-full/claude-hooks/)
-      # and fail closed without it.
-      # Both tools come from pinned upstream GitHub releases, each verified
+      # and fail closed without it. shellcheck is pinned to the version the
+      # development images and developer machines use (0.11), so the lint
+      # step below reports what a local run reports.
+      # All three tools come from pinned upstream GitHub releases, each verified
       # against its SHA256 before use, not from apt: Ubuntu's package mirrors
       # can hang or fail to resolve on the hosted runners, which blocked this
       # check while every other one passed. Update a tool's VERSION and SHA256
       # together when bumping it.
-      - name: "Install bats and shfmt"
+      - name: "Install bats, shfmt and shellcheck"
         shell: bash
         timeout-minutes: 5
         env:
@@ -55,6 +57,8 @@ jobs:
           BATS_SHA256: "bb537b70b15b732f6d8827dd6578e3d8ce166636ce1f18ea9a074184fcce9177"
           SHFMT_VERSION: "3.14.1"
           SHFMT_SHA256_AMD64: "76e77641faa025814b77f153b29796b8e6fa2fca03e0c76a691608b86c7ea7bf"
+          SHELLCHECK_VERSION: "0.11.0"
+          SHELLCHECK_SHA256_AMD64: "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
         run: |
           set -euo pipefail
           download() {
@@ -72,9 +76,29 @@ jobs:
           echo "${SHFMT_SHA256_AMD64}  ${tools_dir}/bin/shfmt" | sha256sum -c -
           chmod 0755 "${tools_dir}/bin/shfmt"
 
+          shellcheck_release="https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}"
+          download "${shellcheck_release}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" "${tools_dir}/shellcheck.tar.xz"
+          echo "${SHELLCHECK_SHA256_AMD64}  ${tools_dir}/shellcheck.tar.xz" | sha256sum -c -
+          tar -xJf "${tools_dir}/shellcheck.tar.xz" -C "${tools_dir}/src"
+          install -m 0755 "${tools_dir}/src/shellcheck-v${SHELLCHECK_VERSION}/shellcheck" "${tools_dir}/bin/shellcheck"
+
           echo "${tools_dir}/bin" >> "$GITHUB_PATH"
           "${tools_dir}/bin/bats" --version
           "${tools_dir}/bin/shfmt" --version
+          "${tools_dir}/bin/shellcheck" --version
+
+      # One shellcheck run per file, each capped at 2 GB of address space and
+      # 120 s, so a file that makes shellcheck run away fails this step instead
+      # of exhausting the runner. The former 992 KB test/cfwf.bats ran out of
+      # memory even under a 6 GB cap (#1982); test/shell-file-size.bats keeps
+      # every file small enough to stay inside this cap.
+      - name: "Lint shell tests (memory-capped shellcheck)"
+        shell: bash
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          git ls-files -z -- 'test/*.bats' 'test/*.bash' |
+            xargs -0r -n1 prlimit --as=2147483648 timeout 120 shellcheck -s bash
 
       - name: "Run shell tests"
         shell: bash

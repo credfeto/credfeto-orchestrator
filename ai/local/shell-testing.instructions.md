@@ -9,6 +9,8 @@
 - Tests use [bats-core](https://github.com/bats-core/bats-core) (the `bats` command), which is already installed.
 - Tests live in the `test/` directory as `*.bats` files, with shared setup in `test/test_helper.bash`.
 - The `oneshot` tests are split by concern into `test/oneshot-<concern>.bats` files, each loading `test/test_helper.bash` and then `test/oneshot_helper.bash` (the shared `setup()`/`teardown()` and the fixture helpers more than one of those files uses). Add a test to the file for its area, and keep a helper that only one file uses in that file.
+- The `cfwf` tests are split the same way, by subcommand, into `test/cfwf-<area>.bats` files that load `test/test_helper.bash` and then `test/cfwf_helper.bash` (the shared `setup()` with its `gh` stand-in, `teardown()`, and the fixture helpers and constants more than one file uses). The file list is in `docs/development/scripts/cfwf.md` under Tests.
+- Keep every `*.bats` file, `*.bash` helper and shell script under 200 KB: `test/shell-file-size.bats` fails past that (it allows `containers/base/development-full/scripts/cfwf` up to 640 KB). shellcheck's memory use grows much faster than the file it checks; the former 992 KB `test/cfwf.bats` ran it out of memory and took build hosts down with it (#1982). When a file nears the limit, split it as above rather than raising the limit.
 - Run only the bats files that cover what you changed: `bats test/<file>.bats`, or `bats -f '<name>' test/<file>.bats` for a subset. Do this after every change and before every commit.
 - Do not run the whole suite yourself: CI runs every test on each push (the `shell-tests` check), and a full run in the agent container takes 15 minutes or more, which uses up the session's time limit. If CI then fails, fix the failing tests it names.
 - The exception is a change to something every test depends on and no single test file covers, such as `test/test_helper.bash`, `lib/globals` or a shared fixture. Then run the whole suite once with `bats --jobs 4 test/`, in the background with its output in a file, and wait for it with one blocking `cfwf task wait --output <file>`, not by polling.
@@ -178,8 +180,13 @@ path.
   from the top-level-scripts invocation above - a plain `shellcheck oneshot loop create-project
   setup-owner teardown-owner` run does **not** cover `test/*.bats`, so a `.bats`-only issue (e.g.
   SC2314, "In Bats, `!` will not fail the test if it is not the last command") can pass local
-  verification and only surface at commit time. Run `shellcheck test/*.bats` alongside the
-  top-level-scripts check before committing a test change. Prefer the repo's existing bare
+  verification and only surface at commit time. Before committing a test change, shellcheck each
+  `.bats` file you changed alongside the top-level-scripts check: `shellcheck -s bash
+  test/<file>.bats`, one file per run and never several in parallel, because each run can use
+  gigabytes on a large file. CI checks every `test/*.bats` and `test/*.bash` file in the
+  `shell-tests` workflow, one file per run, each capped with `prlimit --as=2147483648 timeout
+  120`, so a file that makes shellcheck run away fails that check instead of the runner. On a
+  developer machine use the same cap. Prefer the repo's existing bare
   `! cmd` idiom (see the `apply_blocked_label`-style `if [ -f ... ]; then ! grep ...; fi` guard)
   over `run ! cmd` for a negative assertion inside a `@test` - `run !` only asserts non-zero on
   bats >= 1.5.0, and this repo does not pin a minimum bats version, so it can silently no-op on
