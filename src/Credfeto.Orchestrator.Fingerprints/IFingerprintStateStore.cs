@@ -50,10 +50,10 @@ public interface IFingerprintStateStore
 
     void ClearPullRequestUnknownMergeState(string itemId);
 
-    ValueTask<bool> PullRequestUnknownMergeStateTimedOutAsync(
+    ValueTask<bool> PullRequestUnknownMergeStateRecheckDueAsync(
         string itemId,
         string mergeState,
-        int timeoutMinutes,
+        int recheckMinutes,
         CancellationToken cancellationToken
     );
 
