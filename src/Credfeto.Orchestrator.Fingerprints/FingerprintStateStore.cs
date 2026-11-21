@@ -170,12 +170,13 @@ public sealed partial class FingerprintStateStore : IFingerprintStateStore
         Delete(this.PullRequestUnknownMergeStatePath(itemId));
     }
 
-    // pr_unknown_merge_state_timed_out: any other merge state clears the clock, the first UNKNOWN
-    // starts it, and reaching the timeout restarts it so the follow-up runs once per window
-    public async ValueTask<bool> PullRequestUnknownMergeStateTimedOutAsync(
+    // pr_unknown_merge_state_recheck_due: any other merge state clears the record; an UNKNOWN with no
+    // readable record is compared now, and one found not behind is compared again only once the
+    // recheck interval has passed
+    public async ValueTask<bool> PullRequestUnknownMergeStateRecheckDueAsync(
         string itemId,
         string mergeState,
-        int timeoutMinutes,
+        int recheckMinutes,
         CancellationToken cancellationToken
     )
     {
@@ -186,7 +187,6 @@ public sealed partial class FingerprintStateStore : IFingerprintStateStore
             return false;
         }
 
-        long now = this.Now();
         string saved = await ReadAsync(
             path: this.PullRequestUnknownMergeStatePath(itemId),
             cancellationToken: cancellationToken
@@ -194,27 +194,10 @@ public sealed partial class FingerprintStateStore : IFingerprintStateStore
 
         if (!TryParseTimestamp(text: saved, out long? since))
         {
-            await this.SavePullRequestUnknownMergeStateSinceAsync(
-                itemId: itemId,
-                timestamp: now,
-                cancellationToken: cancellationToken
-            );
-
-            return false;
+            return true;
         }
 
-        if (since is null || ElapsedMinutes(now: now, since: since.Value) < timeoutMinutes)
-        {
-            return false;
-        }
-
-        await this.SavePullRequestUnknownMergeStateSinceAsync(
-            itemId: itemId,
-            timestamp: now,
-            cancellationToken: cancellationToken
-        );
-
-        return true;
+        return since is not null && ElapsedMinutes(now: this.Now(), since: since.Value) >= recheckMinutes;
     }
 
     public ValueTask SavePullRequestLastAgentCommentSeenAsync(
