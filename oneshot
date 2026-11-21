@@ -627,10 +627,10 @@ main() {
                 saved_fp=$(load_pr_fingerprint "${open_pr}")
                 pr_is_draft=$(printf '%s' "${pr_json}" | jq -r '.isDraft // false')
                 pr_merge_state=$(printf '%s' "${pr_json}" | jq -r '.mergeStateStatus // "UNKNOWN"')
-                # A merge state stuck at UNKNOWN on a branch that is behind its base is handled as
-                # BEHIND (#1701); see pr_merge_state_stuck_behind (lib/github-status).
+                # An UNKNOWN merge state on a branch that is behind its base is handled as BEHIND on
+                # the tick it is seen (#1701, #2055); see pr_merge_state_stuck_behind (lib/github-status).
                 if pr_merge_state_stuck_behind "${open_pr}" "${item_repo}" "${pr_json}" "${pr_merge_state}"; then
-                    info "PR #${open_pr} in ${item_repo}: merge state UNKNOWN for at least ${UNKNOWN_MERGE_STATE_TIMEOUT_MINUTES} minute(s) and the branch is behind its base — treating as BEHIND"
+                    info "PR #${open_pr} in ${item_repo}: merge state UNKNOWN and the branch is behind its base — treating as BEHIND"
                     pr_merge_state="BEHIND"
                 fi
                 # Freshly recomputed every iteration (never left to a stale value from a prior
@@ -1172,9 +1172,9 @@ main() {
             saved_fp=$(load_pr_fingerprint "${item_id}")
             pr_is_draft=$(printf '%s' "${pr_json}" | jq -r '.isDraft // false')
             pr_merge_state=$(printf '%s' "${pr_json}" | jq -r '.mergeStateStatus // "UNKNOWN"')
-            # See the matching comment on the issue-pivot path above (#1701).
+            # See the matching comment on the issue-pivot path above (#1701, #2055).
             if pr_merge_state_stuck_behind "${item_id}" "${item_repo}" "${pr_json}" "${pr_merge_state}"; then
-                info "PR #${item_id} in ${item_repo}: merge state UNKNOWN for at least ${UNKNOWN_MERGE_STATE_TIMEOUT_MINUTES} minute(s) and the branch is behind its base — treating as BEHIND"
+                info "PR #${item_id} in ${item_repo}: merge state UNKNOWN and the branch is behind its base — treating as BEHIND"
                 pr_merge_state="BEHIND"
             fi
             # See the matching comment on the issue-pivot path above (#1307): freshly
