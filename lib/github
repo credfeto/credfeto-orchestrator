@@ -148,6 +148,12 @@ list_bot_created_open_prs() {
 
     resolve_gh_me || return 1
 
+    if [ "${ORCHESTRATOR_DOTNET_GITHUB}" = 1 ]; then
+        _github_read_with_orchestrator_cmd own-open-prs --repo "${repo_full}" --me "${_GH_ME}" \
+            --creator "${PR_CREATOR_LOGIN}" --include-blocked "${include_blocked}"
+        return
+    fi
+
     # --limit raised from gh's default page of 30: in a dependency-bot-heavy repo the bot's own
     # PR can rank past 30, and a truncated list makes the pivot AND the stand-off blind to it —
     # the issue then looks PR-less and gets duplicate work (#1134 review round 3).

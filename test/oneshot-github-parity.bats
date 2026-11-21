@@ -33,12 +33,13 @@ _parity_field() {
 }
 
 # A gh stand-in serving the case's responses: pr list applies its --jq filter to pulls.json, as gh
-# does, and the branch and rules endpoints print branch.json and rules.json. A missing file fails
+# does, or prints pulls.json when it has none, and the branch and rules endpoints print branch.json and rules.json. A missing file fails
 # the call.
 make_parity_gh_stub() {
     make_stub_multiline gh \
         'case "$*" in' \
-        '    "pr list "*) [ -f "${TEST_TMP}/pulls.json" ] || exit 1; jq -r "${@: -1}" "${TEST_TMP}/pulls.json" ;;' \
+        '    "pr list "*"--jq "*) [ -f "${TEST_TMP}/pulls.json" ] || exit 1; jq -r "${@: -1}" "${TEST_TMP}/pulls.json" ;;' \
+        '    "pr list "*) [ -f "${TEST_TMP}/pulls.json" ] || exit 1; cat "${TEST_TMP}/pulls.json" ;;' \
         '    *"/rules/branches/"*) [ -f "${TEST_TMP}/rules.json" ] || exit 1; cat "${TEST_TMP}/rules.json" ;;' \
         '    *"/branches/"*) [ -f "${TEST_TMP}/branch.json" ] || exit 1; cat "${TEST_TMP}/branch.json" ;;' \
         '    *) exit 1 ;;' \
@@ -98,8 +99,31 @@ _check_open_pr_cases() {
     [ "${failures}" -eq 0 ]
 }
 
+@test "list_bot_created_open_prs prints the golden numbers for every own open pull request parity case (#252)" {
+    unset ORCHESTRATOR_DOTNET_GITHUB
+    local count i name repo include_blocked expected actual failures=0
+    make_parity_gh_stub
+    count=$(jq '.ownOpenPullRequests | length' "${PARITY_FIXTURE}")
+    [ "${count}" -gt 0 ]
+    for ((i = 0; i < count; i++)); do
+        name=$(_parity_field ownOpenPullRequests "${i}" name)
+        repo=$(_parity_field ownOpenPullRequests "${i}" repo)
+        _GH_ME=$(_parity_field ownOpenPullRequests "${i}" me)
+        PR_CREATOR_LOGIN=$(_parity_field ownOpenPullRequests "${i}" creator)
+        include_blocked=$(_parity_field ownOpenPullRequests "${i}" includeBlocked)
+        expected=$(_parity_field ownOpenPullRequests "${i}" numbers)
+        _parity_gh_response ownOpenPullRequests "${i}" gh "${TEST_TMP}/pulls.json"
+        actual=$(list_bot_created_open_prs "${repo}" "${include_blocked}" 2> /dev/null) || actual=null
+        if [ "${actual}" != "${expected}" ]; then
+            printf 'own open pull request case %d (%s): expected %s, got %s\n' "${i}" "${name}" "${expected}" "${actual}"
+            failures=$((failures + 1))
+        fi
+    done
+    [ "${failures}" -eq 0 ]
+}
+
 @test "every parity case gives the tool either a cfwf MCP result or a failure, never both (#252)" {
-    run jq -r '[.openPullRequests[], .branchRequiresStatusChecks[] | select(has("mcp") == has("mcpError"))] | length' "${PARITY_FIXTURE}"
+    run jq -r '[.openPullRequests[], .branchRequiresStatusChecks[], .ownOpenPullRequests[] | select(has("mcp") == has("mcpError"))] | length' "${PARITY_FIXTURE}"
     [ "${status}" -eq 0 ]
     [ "${output}" = "0" ]
 }
