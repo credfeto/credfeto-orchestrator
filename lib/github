@@ -511,39 +511,78 @@ resolve_resumable_issue_branch() {
     return 0
 }
 
+# Says whether PR pr_number in repo carries the Blocked label (case-insensitive). Returns 0 when it
+# does, 1 when it does not, and 2 when its labels cannot be read.
+_dirty_owner_pr_is_blocked() {
+    local repo="$1" pr_number="$2" labels_json
+    labels_json=$(fetch_pr_fields_json "${pr_number}" labels "${repo}") || return 2
+    if printf '%s' "${labels_json}" | jq -e '[(.labels // [])[] | .name | ascii_downcase] | any(. == "blocked")' > /dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
 # Says whether another item in this run's queue (items_json, the priorities feed after the owner
 # filter) owns a dirty checkout's branch, by the same rule as dirty_branch_belongs_to_item
 # (lib/git): a queued Issue in the repository owns main and a branch named for it, and a queued
-# PR owns its head branch. The current item (item_type, item_id) is left out. Outputs the owner
-# as "<type> #<id>" and returns 0 when one is queued: that item recovers the work, so the caller
-# keeps skipping. Returns 1 when none is, and always for a detached HEAD (an empty branch), so
-# the caller may stash the checkout. Returns 2 when the open PRs on the branch cannot be listed:
-# whether a queued PR owns it is then unknown, and the caller must not stash.
+# PR owns its head branch. The current item (item_type, item_id) is left out. An owner that cannot
+# be worked does not count (#2053): a queued PR that is on hold in the feed (the dispatcher's
+# record of its Blocked label), and a queued Issue when an open PR on the dirty branch carries the Blocked label (the
+# Issue's session pivots to that PR, which is skipped while it is Blocked). Without this the
+# checkout stayed dirty for good and every other item in the repository was skipped on every
+# tick. Outputs the owner as "<type> #<id>" and returns 0 when one is queued: that item recovers
+# the work, so the caller keeps skipping. Returns 1 when none is, and always for a detached HEAD
+# (an empty branch), so the caller may stash the checkout. Returns 2 when the open PRs on the
+# branch, or a candidate owner's labels, cannot be read: whether a queued item owns it is then
+# unknown, and the caller must not stash.
 dirty_branch_owned_by_queued_item() {
     local items_json="$1" repo="$2" dirty_branch="$3" item_type="$4" item_id="$5"
     [ -n "${dirty_branch}" ] || return 1
 
-    local queued_type queued_id head_prs pr_number
-    local -a queued_prs=()
-    while IFS=$'\t' read -r queued_type queued_id; do
+    local queued_type queued_id queued_on_hold head_prs pr_number blocked_rc
+    local -a queued_prs=() owning_issues=()
+    while IFS=$'\t' read -r queued_type queued_id queued_on_hold; do
         [ -n "${queued_id}" ] || continue
         [ "${queued_type}" = "${item_type}" ] && [ "${queued_id}" = "${item_id}" ] && continue
         if [ "${queued_type}" = "Issue" ]; then
             if dirty_branch_belongs_to_item Issue "${queued_id}" "${dirty_branch}" ""; then
-                printf 'Issue #%s' "${queued_id}"
-                return 0
+                owning_issues+=("${queued_id}")
             fi
-        elif [ "${queued_type}" = "PullRequest" ]; then
+        elif [ "${queued_type}" = "PullRequest" ] && [ "${queued_on_hold}" != "true" ]; then
             queued_prs+=("${queued_id}")
         fi
     done < <(printf '%s' "${items_json}" | jq -r --arg repo "${repo}" \
-        '.[] | select(.repository == $repo) | [.itemType, (.id | tostring)] | @tsv' 2> /dev/null)
+        '.[] | select(.repository == $repo) | [.itemType, (.id | tostring), ((.isOnHold // false) | tostring)] | @tsv' 2> /dev/null)
 
-    [ "${#queued_prs[@]}" -gt 0 ] || return 1
+    [ "${#owning_issues[@]}" -gt 0 ] || [ "${#queued_prs[@]}" -gt 0 ] || return 1
     if ! head_prs=$(fetch_open_pr_numbers_on_head "${repo}" "${dirty_branch}"); then
         warn "Could not list the open PRs on '${dirty_branch}' in ${repo} to tell whether a queued item owns it"
         return 2
     fi
+
+    # A queued Issue owns the branch unless an open PR on it is Blocked.
+    if [ "${#owning_issues[@]}" -gt 0 ]; then
+        local issue_blocked=false
+        while IFS= read -r pr_number; do
+            [ -n "${pr_number}" ] || continue
+            blocked_rc=0
+            _dirty_owner_pr_is_blocked "${repo}" "${pr_number}" || blocked_rc=$?
+            if [ "${blocked_rc}" -eq 2 ]; then
+                warn "Could not read the labels of PR #${pr_number} in ${repo} to tell whether a queued item owns '${dirty_branch}'"
+                return 2
+            fi
+            if [ "${blocked_rc}" -eq 0 ]; then
+                issue_blocked=true
+                break
+            fi
+        done <<< "${head_prs}"
+        if [ "${issue_blocked}" = false ]; then
+            printf 'Issue #%s' "${owning_issues[0]}"
+            return 0
+        fi
+    fi
+
+    [ "${#queued_prs[@]}" -gt 0 ] || return 1
     while IFS= read -r pr_number; do
         [ -n "${pr_number}" ] || continue
         for queued_id in "${queued_prs[@]}"; do
