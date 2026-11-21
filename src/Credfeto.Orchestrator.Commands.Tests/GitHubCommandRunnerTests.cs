@@ -55,6 +55,24 @@ public sealed class GitHubCommandRunnerTests : TestBase
     }
 
     [Fact]
+    public async Task OwnPullRequestsArePrintedNewestFirstOneALineAsync()
+    {
+        Result result = await RunAsync(
+            tools: new(
+                result: """{"pullRequests":[{"number":4,"author":"app/prpixie","labels":[]},{"number":9,"author":"x","labels":[]},{"number":19,"author":"me","labels":[]}]}""",
+                error: null
+            ),
+            args: ["github", "own-open-prs", "--repo", "org/repo", "--me", "me", "--creator", "app/prpixie"],
+            cancellationToken: this.CancellationToken()
+        );
+
+        Assert.Equal(
+            expected: new(ExitCode: ExitCodes.Success, Output: "19\n4\n", Error: string.Empty),
+            actual: result
+        );
+    }
+
+    [Fact]
     public async Task AFailedReadExitsOneWithItsMessageAsync()
     {
         Result result = await RunAsync(

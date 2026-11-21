@@ -74,6 +74,27 @@ internal static class GitHubParityFixture
         );
     }
 
+    public const string OwnOpenPullRequests = "ownOpenPullRequests";
+
+    public static async Task<GitHubOwnParityCase> OwnCaseAsync(int index, CancellationToken cancellationToken)
+    {
+        using JsonDocument document = await LoadAsync(cancellationToken);
+        JsonElement item = document.RootElement.GetProperty(OwnOpenPullRequests)[index];
+
+        return new(
+            Case: item.GetProperty("name").GetString() ?? string.Empty,
+            Repository: item.GetProperty("repo").GetString() ?? string.Empty,
+            Me: item.GetProperty("me").GetString() ?? string.Empty,
+            Creator: item.GetProperty("creator").GetString() ?? string.Empty,
+            IncludeBlocked: item.GetProperty("includeBlocked").GetString() ?? string.Empty,
+            McpResult: item.TryGetProperty(propertyName: "mcp", value: out JsonElement mcp) ? mcp.GetRawText() : null,
+            McpError: item.TryGetProperty(propertyName: "mcpError", value: out JsonElement error)
+                ? error.GetString()
+                : null,
+            Expected: item.GetProperty("numbers").GetString()
+        );
+    }
+
     private static async Task<JsonDocument> LoadAsync(CancellationToken cancellationToken)
     {
         await using Stream stream = typeof(GitHubParityFixture).Assembly.GetManifestResourceStream(RESOURCE_NAME)
