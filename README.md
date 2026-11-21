@@ -221,6 +221,9 @@ one log line saying why, no agent and no invocation or idle budget charged, when
   An item skipped this way does not count as active work in its repository, so the owning issue
   is not held back by "repo already has active work" and still runs in the same tick.
 
+An owner that cannot be worked does not count: a queued PR that is on hold (`Blocked`),
+or a queued issue whose open PR on that branch is labelled `Blocked`.
+
 When the uncommitted changes are on a branch that no queued item owns, or on a detached HEAD,
 nothing would ever recover them, so `oneshot` stashes them (`git stash push --include-untracked`)
 with the message `orchestrator-autostash <branch, or detached> <UTC time>: dirty tree on unowned

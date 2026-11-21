@@ -1885,6 +1885,8 @@ setup_main_feed_issue() {
     }
     find_open_nonblocked_pr_for_repo() { printf ''; }
     fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    # No open PR on the Issue's branch, so the Issue still owns it (#2053).
+    make_stub gh 'exit 0'
     ensure_repo_current() {
         DIRTY_BRANCH="fix/10-precheck"
         return 1
@@ -1926,6 +1928,37 @@ setup_main_feed_issue() {
     # PR #5 only drops its own mark: the repo stays serialized by PR #4.
     [[ "${output}" == *"Skipping Issue #10 in org/repo — repo already has active work"* ]]
     [ ! -f "${log}" ]
+}
+
+@test "main stashes a dirty checkout whose owning Issue has a Blocked PR, and works a same-repo PR (#2053)" {
+    setup_main_feed_pr feature/sdk-bump
+    local log="${TEST_TMP}/calls"
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":10,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]'
+    }
+    make_stub gh 'case "$*" in *"pr list"*"--head fix/10-precheck"*) printf "77\n" ;; *"pr view 77"*) printf "{\"labels\":[{\"name\":\"Blocked\"}]}" ;; esac'
+    ensure_repo_current() {
+        printf 'ensure\n' >> "${log}"
+        if [ -z "${_dirty_reported:-}" ]; then
+            _dirty_reported=1
+            DIRTY_BRANCH="fix/10-precheck"
+            return 1
+        fi
+        return 0
+    }
+    autostash_dirty_checkout() { printf 'stash %s\n' "$1" >> "${log}"; }
+    checkout_item_branch() { printf 'checkout %s\n' "$1" >> "${log}"; }
+    invoke_claude() { printf 'invoke %s\n' "$3" >> "${log}"; }
+    apply_blocked_label() {
+        printf 'BLOCKED %s #%s\n' "$1" "$2"
+        return 0
+    }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"uncommitted changes on"* ]]
+    [[ "${output}" != *"BLOCKED"* ]]
+    [ "$(cat "${log}")" = "$(printf 'ensure\nstash fix/10-precheck\nensure\ncheckout feature/sdk-bump\ninvoke 5')" ]
 }
 
 @test "main stashes a dirty checkout on a branch no queued item owns and runs the item on its own branch (#1917)" {

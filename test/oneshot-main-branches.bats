@@ -541,6 +541,45 @@ make_dirty_branch_checkout() {
     [ "${status}" -eq 1 ]
 }
 
+@test "dirty_branch_owned_by_queued_item does not count a queued Issue whose open PR on the branch is Blocked (#2053)" {
+    local queue='[{"id":5,"itemType":"PullRequest","repository":"org/repo"},{"id":42,"itemType":"Issue","repository":"org/repo"}]'
+    make_stub gh 'case "$*" in *"pr list"*"--head fix/42-sdk"*) printf "77\n" ;; *"pr view 77"*) printf "{\"labels\":[{\"name\":\"Blocked\"}]}" ;; esac'
+
+    run dirty_branch_owned_by_queued_item "${queue}" org/repo fix/42-sdk PullRequest 5
+    [ "${status}" -eq 1 ]
+    [ "${output}" = "" ]
+}
+
+@test "dirty_branch_owned_by_queued_item still counts a queued Issue whose open PR on the branch is not Blocked (#2053)" {
+    local queue='[{"id":5,"itemType":"PullRequest","repository":"org/repo"},{"id":42,"itemType":"Issue","repository":"org/repo"}]'
+    make_stub gh 'case "$*" in *"pr list"*"--head fix/42-sdk"*) printf "77\n" ;; *"pr view 77"*) printf "{\"labels\":[{\"name\":\"AI-Work\"}]}" ;; esac'
+
+    run dirty_branch_owned_by_queued_item "${queue}" org/repo fix/42-sdk PullRequest 5
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Issue #42" ]
+}
+
+@test "dirty_branch_owned_by_queued_item does not count a queued PR that is on hold in the feed (#2053)" {
+    make_stub gh 'case "$*" in *"pr list"*"--head feature/other"*) printf "6\n" ;; *) exit 1 ;; esac'
+
+    run dirty_branch_owned_by_queued_item '[{"id":5,"itemType":"PullRequest","repository":"org/repo"},{"id":6,"itemType":"PullRequest","repository":"org/repo","isOnHold":true}]' org/repo feature/other PullRequest 5
+    [ "${status}" -eq 1 ]
+    # The same PR, not on hold, still owns it, with no label lookup.
+    run dirty_branch_owned_by_queued_item '[{"id":5,"itemType":"PullRequest","repository":"org/repo"},{"id":6,"itemType":"PullRequest","repository":"org/repo","isOnHold":false}]' org/repo feature/other PullRequest 5
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "PullRequest #6" ]
+}
+
+@test "dirty_branch_owned_by_queued_item returns 2 when a candidate owner's labels cannot be read (#2053)" {
+    local queue='[{"id":5,"itemType":"PullRequest","repository":"org/repo"},{"id":42,"itemType":"Issue","repository":"org/repo"}]'
+    make_stub gh 'case "$*" in *"pr list"*"--head fix/42-sdk"*) printf "77\n" ;; *"pr view 77"*) exit 1 ;; esac'
+    GH_ITEM_FETCH_RETRY_ATTEMPTS=1
+
+    run dirty_branch_owned_by_queued_item "${queue}" org/repo fix/42-sdk PullRequest 5
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"Could not read the labels of PR #77 in org/repo"* ]]
+}
+
 # --- git_commits_behind unit tests (#1298) --------------------------------------
 
 @test "git_commits_behind reports 0 when ref and upstream are the same commit" {
