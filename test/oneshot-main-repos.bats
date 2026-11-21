@@ -1877,6 +1877,57 @@ setup_main_feed_issue() {
     [ ! -f "$(pr_invocation_guard_file_path 5)" ]
 }
 
+@test "main still works the queued Issue that owns a dirty checkout after a same-repo PR is skipped for it (#2051)" {
+    setup_main_feed_pr feature/sdk-bump
+    local log="${TEST_TMP}/calls"
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":10,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    ensure_repo_current() {
+        DIRTY_BRANCH="fix/10-precheck"
+        return 1
+    }
+    autostash_dirty_checkout() { printf 'stash %s\n' "$1" >> "${log}"; }
+    invoke_claude() { printf 'invoke %s %s\n' "$2" "$3" >> "${log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Skipping PullRequest #5 in org/repo: the checkout has uncommitted changes on 'fix/10-precheck', which is not this item's branch (Issue #10 in the queue owns it)"* ]]
+    # The skipped PR did not serialize the repo, so the owning Issue gets the checkout.
+    [[ "${output}" != *"Skipping Issue #10 in org/repo — repo already has active work"* ]]
+    [ "$(cat "${log}")" = "invoke Issue 10" ]
+}
+
+@test "main keeps a repo serialized by an earlier item when a later PR is skipped for a dirty checkout (#2051)" {
+    setup_main_feed_pr feature/sdk-bump
+    local log="${TEST_TMP}/calls"
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":4,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":2,"status":"Open","isOnHold":false},{"id":10,"itemType":"Issue","repository":"org/repo","priority":3,"status":"Open","isOnHold":false}]'
+    }
+    # PR #4's state cannot be fetched, which serializes the repo (#1134).
+    fetch_pr_json() {
+        [ "$1" = "4" ] && return 1
+        printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"%s","comments":[],"reviews":[],"statusCheckRollup":[],"files":[],"isCrossRepository":false}\n' "${PR_HEAD}"
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    ensure_repo_current() {
+        DIRTY_BRANCH="fix/10-precheck"
+        return 1
+    }
+    autostash_dirty_checkout() { printf 'stash %s\n' "$1" >> "${log}"; }
+    invoke_claude() { printf 'invoke %s %s\n' "$2" "$3" >> "${log}"; }
+
+    run main
+    [[ "${output}" == *"Failed to fetch state for PR #4 in org/repo"* ]]
+    [[ "${output}" == *"Skipping PullRequest #5 in org/repo: the checkout has uncommitted changes on 'fix/10-precheck'"* ]]
+    # PR #5 only drops its own mark: the repo stays serialized by PR #4.
+    [[ "${output}" == *"Skipping Issue #10 in org/repo — repo already has active work"* ]]
+    [ ! -f "${log}" ]
+}
+
 @test "main stashes a dirty checkout on a branch no queued item owns and runs the item on its own branch (#1917)" {
     setup_main_feed_pr feature/sdk-bump
     local log="${TEST_TMP}/calls"

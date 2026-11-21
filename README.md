@@ -218,6 +218,8 @@ one log line saying why, no agent and no invocation or idle budget charged, when
 - it holds uncommitted changes on the branch of another item in the same run's queue (a PR's
   head branch, or for an issue `main` or a branch named for the issue). That item is the one
   that recovers them: a dirty checkout goes to the agent only for the item whose branch it is on.
+  An item skipped this way does not count as active work in its repository, so the owning issue
+  is not held back by "repo already has active work" and still runs in the same tick.
 
 When the uncommitted changes are on a branch that no queued item owns, or on a detached HEAD,
 nothing would ever recover them, so `oneshot` stashes them (`git stash push --include-untracked`)
