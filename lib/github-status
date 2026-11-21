@@ -373,17 +373,34 @@ set_pr_has_unaddressed_comment() {
         && pr_has_unaddressed_comment=true
 }
 
-# Returns 0 (true) when a PR whose mergeStateStatus has stayed UNKNOWN for at least
-# UNKNOWN_MERGE_STATE_TIMEOUT_MINUTES is behind its base branch, so the caller should treat this
-# tick's merge state as BEHIND and give it the usual non-agentic rebase (#1701). A rebase makes
-# GitHub recompute the merge state. Without this, an auto-merge-armed PR stuck at UNKNOWN reads as
-# settled forever: pr_json_is_terminal ignores mergeStateStatus by design (#1266), and only
-# BEHIND/DIRTY trigger a rebase. A failed compare lookup, a PR that is not behind, and a short-lived
-# UNKNOWN all return 1 and leave the merge state as it is.
+# Returns 0 (true) when a PR whose mergeStateStatus is UNKNOWN is behind its base branch, so the
+# caller should treat this tick's merge state as BEHIND: a clean checkout gets the usual
+# non-agentic rebase, and a dirty one on the PR's own branch gets the agent's rebase-first step
+# (#1701, #2055). A rebase makes GitHub recompute the merge state. Without this, an UNKNOWN PR
+# reads as up to date: pr_json_is_terminal ignores mergeStateStatus by design (#1266), and only
+# BEHIND/DIRTY trigger a rebase. UNKNOWN is resolved on the tick it is seen (#2055), with one
+# compare lookup (pr_branch_behind_base). A branch found not behind is recorded, so a PR that stays
+# UNKNOWN is compared again only once UNKNOWN_MERGE_STATE_TIMEOUT_MINUTES have passed
+# (pr_unknown_merge_state_recheck_due). A failed lookup returns 1, leaves the merge state as it is
+# and records nothing, so the next tick tries again.
 pr_merge_state_stuck_behind() {
     local item_id="$1" repo_full="$2" pr_json="$3" merge_state="$4"
-    pr_unknown_merge_state_timed_out "${item_id}" "${merge_state}" || return 1
-    pr_branch_behind_base "${repo_full}" "${pr_json}"
+    pr_unknown_merge_state_recheck_due "${item_id}" "${merge_state}" || return 1
+    local behind_rc=0
+    pr_branch_behind_base "${repo_full}" "${pr_json}" || behind_rc=$?
+    case "${behind_rc}" in
+        0)
+            clear_pr_unknown_merge_state "${item_id}"
+            return 0
+            ;;
+        1)
+            save_pr_unknown_merge_state_since "${item_id}" "$(date +%s)"
+            return 1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
 }
 
 # Returns 0 (true) if any required check has definitively failed (an unsuccessful CheckRun

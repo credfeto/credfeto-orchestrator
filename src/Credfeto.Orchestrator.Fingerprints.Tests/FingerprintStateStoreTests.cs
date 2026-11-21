@@ -371,27 +371,25 @@ public sealed class FingerprintStateStoreTests : LoggingFolderCleanupTestBase
     }
 
     [Fact]
-    public async Task TheFirstUnknownMergeStateStartsTheClockAsync()
+    public async Task AnUnknownMergeStateWithNoRecordIsComparedNowAsync()
     {
-        bool timedOut = await this._store.PullRequestUnknownMergeStateTimedOutAsync(
-            itemId: ITEM,
-            mergeState: "UNKNOWN",
-            timeoutMinutes: TIMEOUT_MINUTES,
-            cancellationToken: this.CancellationToken()
-        );
-
-        Assert.False(timedOut, userMessage: "The first UNKNOWN only starts the clock");
-        Assert.Equal(
-            expected: Invariant($"{this.Now}\n"),
-            actual: await File.ReadAllTextAsync(
-                path: this._store.PullRequestUnknownMergeStatePath(ITEM),
+        Assert.True(
+            await this._store.PullRequestUnknownMergeStateRecheckDueAsync(
+                itemId: ITEM,
+                mergeState: "UNKNOWN",
+                recheckMinutes: TIMEOUT_MINUTES,
                 cancellationToken: this.CancellationToken()
-            )
+            ),
+            userMessage: "The first UNKNOWN is compared on the tick it is seen"
+        );
+        Assert.False(
+            File.Exists(this._store.PullRequestUnknownMergeStatePath(ITEM)),
+            userMessage: "Deciding to compare writes no record"
         );
     }
 
     [Fact]
-    public async Task AnUnknownMergeStateYoungerThanTheTimeoutHasNotTimedOutAsync()
+    public async Task ARecentNotBehindRecordDefersTheNextCompareAsync()
     {
         await this._store.SavePullRequestUnknownMergeStateSinceAsync(
             itemId: ITEM,
@@ -400,18 +398,18 @@ public sealed class FingerprintStateStoreTests : LoggingFolderCleanupTestBase
         );
 
         Assert.False(
-            await this._store.PullRequestUnknownMergeStateTimedOutAsync(
+            await this._store.PullRequestUnknownMergeStateRecheckDueAsync(
                 itemId: ITEM,
                 mergeState: "UNKNOWN",
-                timeoutMinutes: TIMEOUT_MINUTES,
+                recheckMinutes: TIMEOUT_MINUTES,
                 cancellationToken: this.CancellationToken()
             ),
-            userMessage: "A minute of UNKNOWN has not timed out"
+            userMessage: "Found not behind a minute ago, so no compare yet"
         );
     }
 
     [Fact]
-    public async Task AnUnknownMergeStateTimesOutOnceAndRestartsTheClockAsync()
+    public async Task AnOldNotBehindRecordIsComparedAgainAsync()
     {
         long old = this.Now - 7200;
         await this._store.SavePullRequestUnknownMergeStateSinceAsync(
@@ -421,34 +419,25 @@ public sealed class FingerprintStateStoreTests : LoggingFolderCleanupTestBase
         );
 
         Assert.True(
-            await this._store.PullRequestUnknownMergeStateTimedOutAsync(
+            await this._store.PullRequestUnknownMergeStateRecheckDueAsync(
                 itemId: ITEM,
                 mergeState: "UNKNOWN",
-                timeoutMinutes: TIMEOUT_MINUTES,
+                recheckMinutes: TIMEOUT_MINUTES,
                 cancellationToken: this.CancellationToken()
             ),
-            userMessage: "Two hours of UNKNOWN has timed out after an hour"
+            userMessage: "Found not behind two hours ago, so compare again"
         );
         Assert.Equal(
-            expected: Invariant($"{this.Now}\n"),
+            expected: Invariant($"{old}\n"),
             actual: await File.ReadAllTextAsync(
                 path: this._store.PullRequestUnknownMergeStatePath(ITEM),
                 cancellationToken: this.CancellationToken()
             )
         );
-        Assert.False(
-            await this._store.PullRequestUnknownMergeStateTimedOutAsync(
-                itemId: ITEM,
-                mergeState: "UNKNOWN",
-                timeoutMinutes: TIMEOUT_MINUTES,
-                cancellationToken: this.CancellationToken()
-            ),
-            userMessage: "The restarted clock has not timed out yet"
-        );
     }
 
     [Fact]
-    public async Task AnyOtherMergeStateClearsTheClockAsync()
+    public async Task AnyOtherMergeStateClearsTheRecordAsync()
     {
         await this._store.SavePullRequestUnknownMergeStateSinceAsync(
             itemId: ITEM,
@@ -457,55 +446,48 @@ public sealed class FingerprintStateStoreTests : LoggingFolderCleanupTestBase
         );
 
         Assert.False(
-            await this._store.PullRequestUnknownMergeStateTimedOutAsync(
+            await this._store.PullRequestUnknownMergeStateRecheckDueAsync(
                 itemId: ITEM,
                 mergeState: "CLEAN",
-                timeoutMinutes: TIMEOUT_MINUTES,
+                recheckMinutes: TIMEOUT_MINUTES,
                 cancellationToken: this.CancellationToken()
             ),
             userMessage: "CLEAN is not UNKNOWN"
         );
         Assert.False(
             File.Exists(this._store.PullRequestUnknownMergeStatePath(ITEM)),
-            userMessage: "The clock is cleared"
+            userMessage: "The record is cleared"
         );
     }
 
     [Theory]
     [InlineData("garbage")]
     [InlineData("")]
-    public async Task AnUnreadableUnknownMergeStateRestartsTheClockAsync(string content)
+    public async Task AnUnreadableRecordIsComparedNowAsync(string content)
     {
         await this.WriteStateAsync(path: this._store.PullRequestUnknownMergeStatePath(ITEM), content: content);
 
-        Assert.False(
-            await this._store.PullRequestUnknownMergeStateTimedOutAsync(
+        Assert.True(
+            await this._store.PullRequestUnknownMergeStateRecheckDueAsync(
                 itemId: ITEM,
                 mergeState: "UNKNOWN",
-                timeoutMinutes: TIMEOUT_MINUTES,
+                recheckMinutes: TIMEOUT_MINUTES,
                 cancellationToken: this.CancellationToken()
             ),
-            userMessage: "An unreadable clock restarts"
-        );
-        Assert.Equal(
-            expected: Invariant($"{this.Now}\n"),
-            actual: await File.ReadAllTextAsync(
-                path: this._store.PullRequestUnknownMergeStatePath(ITEM),
-                cancellationToken: this.CancellationToken()
-            )
+            userMessage: "An unreadable record does not defer the compare"
         );
     }
 
     [Fact]
-    public async Task AnOctalUnknownMergeStateThatBashCannotReadIsNotTimedOutAsync()
+    public async Task AnOctalRecordThatBashCannotReadDefersTheCompareAsync()
     {
         await this.WriteStateAsync(path: this._store.PullRequestUnknownMergeStatePath(ITEM), content: "089");
 
         Assert.False(
-            await this._store.PullRequestUnknownMergeStateTimedOutAsync(
+            await this._store.PullRequestUnknownMergeStateRecheckDueAsync(
                 itemId: ITEM,
                 mergeState: "UNKNOWN",
-                timeoutMinutes: TIMEOUT_MINUTES,
+                recheckMinutes: TIMEOUT_MINUTES,
                 cancellationToken: this.CancellationToken()
             ),
             userMessage: "bash cannot do arithmetic on 089"
