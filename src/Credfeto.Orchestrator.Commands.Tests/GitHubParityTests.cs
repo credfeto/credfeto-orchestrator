@@ -40,6 +40,52 @@ public sealed class GitHubParityTests : TestBase
         return this.CheckAsync(read: GitHubParityFixture.BranchRequiresStatusChecks, index: index, name: name);
     }
 
+    public static Task<TheoryData<int, string>> OwnPullRequestCasesAsync()
+    {
+        return GitHubParityFixture.CaseNamesAsync(GitHubParityFixture.OwnOpenPullRequests);
+    }
+
+    [Theory]
+    [MemberData(nameof(OwnPullRequestCasesAsync))]
+    public async Task OwnOpenPullRequestsMatchTheShellVersionAsync(int index, string name)
+    {
+        GitHubOwnParityCase parity = await GitHubParityFixture.OwnCaseAsync(
+            index: index,
+            cancellationToken: this.CancellationToken()
+        );
+        FakeMcpToolCaller tools = new(result: parity.McpResult, error: parity.McpError);
+
+        string? actual = await this.RunAsync(
+            runner: Runner(tools),
+            "github",
+            "own-open-prs",
+            "--repo",
+            parity.Repository,
+            "--me",
+            parity.Me,
+            "--creator",
+            parity.Creator,
+            "--include-blocked",
+            parity.IncludeBlocked
+        );
+
+        Assert.Equal(
+            expected: Describe(name: name, printed: parity.Expected),
+            actual: Describe(name: name, printed: actual)
+        );
+        Assert.Equal(expected: "pr_list", actual: tools.Tool);
+        Assert.Equal(expected: parity.Repository, actual: tools.Arguments?["repo"]);
+    }
+
+    private static CommandRunner Runner(FakeMcpToolCaller tools)
+    {
+        return new(
+            fingerprints: new FingerprintCalculator(),
+            files: new FakeFileContentReader(),
+            github: new GitHubReader(tools)
+        );
+    }
+
     private async Task CheckAsync(GitHubParityRead read, int index, string name)
     {
         GitHubParityCase parity = await GitHubParityFixture.CaseAsync(
@@ -48,11 +94,7 @@ public sealed class GitHubParityTests : TestBase
             cancellationToken: this.CancellationToken()
         );
         FakeMcpToolCaller tools = new(result: parity.McpResult, error: parity.McpError);
-        CommandRunner runner = new(
-            fingerprints: new FingerprintCalculator(),
-            files: new FakeFileContentReader(),
-            github: new GitHubReader(tools)
-        );
+        CommandRunner runner = Runner(tools);
 
         string? actual = await this.RunAsync(
             runner: runner,

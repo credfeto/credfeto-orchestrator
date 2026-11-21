@@ -20,6 +20,7 @@ public sealed class CommandRunner
                credfeto-orchestrator fingerprint issue [--trusted-file <file>] [--plan-approved <value>] [--schema-version <n>]
                credfeto-orchestrator github open-prs|open-pr-count --repo <owner/repo> --head <branch>
                credfeto-orchestrator github branch-requires-status-checks --repo <owner/repo> --branch <branch>
+               credfeto-orchestrator github own-open-prs --repo <owner/repo> --me <login> --creator <login> [--include-blocked true|false]
 
         fingerprint reads the pull request or issue JSON on stdin and prints its fingerprint, exactly
         as fingerprint_pr_json / fingerprint_issue_json in lib/fingerprints do.
@@ -27,7 +28,9 @@ public sealed class CommandRunner
         github asks the cfwf MCP server (ORCHESTRATOR_CFWF_MCP_URL, with the token in
         GH_ENTERPRISE_TOKEN or GH_TOKEN) and prints what the gh call in lib/github it replaces prints:
         open-prs the numbers of the open pull requests on the head branch, newest first, one a line;
-        open-pr-count how many there are; branch-requires-status-checks true or false.
+        open-pr-count how many there are; branch-requires-status-checks true or false; own-open-prs
+        the numbers of the open pull requests authored by --me or --creator, newest first, one a line,
+        leaving out those labelled Blocked unless --include-blocked is true.
 
         Exit codes: 0 printed; 1 the fingerprint could not be computed or the read failed; 2 a usage
         error.
@@ -144,19 +147,54 @@ public sealed class CommandRunner
     }
 
     // Each prints what the gh call it replaces prints: gh's --jq output ends every value with a newline
-    private async ValueTask<string> ReadGitHubAsync(GitHubCommand command, CancellationToken cancellationToken)
+    private ValueTask<string> ReadGitHubAsync(GitHubCommand command, CancellationToken cancellationToken)
     {
-        if (command.Read == GitHubRead.BRANCH_REQUIRES_STATUS_CHECKS)
+        return command.Read switch
         {
-            bool required = await this._github.BranchRequiresStatusChecksAsync(
-                repository: command.Repository,
-                branch: command.Name,
+            GitHubRead.BRANCH_REQUIRES_STATUS_CHECKS => this.BranchRequiresStatusChecksAsync(
+                command: command,
                 cancellationToken: cancellationToken
-            );
+            ),
+            GitHubRead.OWN_OPEN_PULL_REQUESTS => this.OwnOpenPullRequestsAsync(
+                command: command,
+                cancellationToken: cancellationToken
+            ),
+            _ => this.OpenPullRequestsOnHeadAsync(command: command, cancellationToken: cancellationToken),
+        };
+    }
 
-            return required ? "true\n" : "false\n";
-        }
+    private async ValueTask<string> BranchRequiresStatusChecksAsync(
+        GitHubCommand command,
+        CancellationToken cancellationToken
+    )
+    {
+        bool required = await this._github.BranchRequiresStatusChecksAsync(
+            repository: command.Repository,
+            branch: command.Name,
+            cancellationToken: cancellationToken
+        );
 
+        return required ? "true\n" : "false\n";
+    }
+
+    private async ValueTask<string> OwnOpenPullRequestsAsync(GitHubCommand command, CancellationToken cancellationToken)
+    {
+        IReadOnlyList<int> numbers = await this._github.OwnOpenPullRequestsAsync(
+            repository: command.Repository,
+            me: command.Name,
+            creator: command.Creator ?? string.Empty,
+            includeBlocked: command.IncludeBlocked,
+            cancellationToken: cancellationToken
+        );
+
+        return string.Concat(numbers.Select(Line));
+    }
+
+    private async ValueTask<string> OpenPullRequestsOnHeadAsync(
+        GitHubCommand command,
+        CancellationToken cancellationToken
+    )
+    {
         IReadOnlyList<int> numbers = await this._github.OpenPullRequestsOnHeadAsync(
             repository: command.Repository,
             head: command.Name,
