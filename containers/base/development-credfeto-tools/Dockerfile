@@ -13,14 +13,6 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # ships a new release (not on a blind daily schedule).
 ARG CREDFETO_FUNFAIR_TOOLS_CACHE_BUST
 
-# The Credfeto.Git.Mcp version to install: the one pinned tool in this image.
-# Every other tool installs its latest stable release, but Credfeto.Git.Mcp has
-# only pre-release builds so far, which dotnet tool install never picks without
-# an explicit version. Swap this for the first stable release (or remove the
-# pin so it tracks the latest stable like the rest) before the change that
-# introduced it is merged.
-ARG CREDFETO_GIT_MCP_VERSION=0.0.3.75-main
-
 # Bakes the same hash in as an inspectable label so check-credfeto-tools-updates.yml
 # can read back "what this published image was built against" without re-running
 # nuget-latest-versions against the image itself: it just compares this label to a
@@ -74,10 +66,9 @@ RUN su developer -c ": ${CREDFETO_FUNFAIR_TOOLS_CACHE_BUST}; dotnet tool install
 # The git MCP server (credfeto-git-mcp), registered for agent sessions as the
 # git server in development-full's managed-mcp.json, whose git-mcp wrapper
 # starts it from its global tool path,
-# /home/developer/.dotnet/tools/credfeto-git-mcp. Installed at the version
-# pinned by CREDFETO_GIT_MCP_VERSION above.
+# /home/developer/.dotnet/tools/credfeto-git-mcp.
 # hadolint ignore=DL3059
-RUN su developer -c ": ${CREDFETO_FUNFAIR_TOOLS_CACHE_BUST}; dotnet tool install -g Credfeto.Git.Mcp --version ${CREDFETO_GIT_MCP_VERSION}"
+RUN su developer -c ": ${CREDFETO_FUNFAIR_TOOLS_CACHE_BUST}; dotnet tool install -g Credfeto.Git.Mcp"
 
 # dotnet- subcommand aliases. Several tools install only as `<name>` but
 # agents invoke them via `dotnet <name>` subcommand syntax — which makes
