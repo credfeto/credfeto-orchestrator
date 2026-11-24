@@ -240,7 +240,10 @@ RUN mkdir -p /home/developer/.claude/agents \
 # development-credfeto-tools, is started the same way through the root-owned
 # mcp/changelog-mcp wrapper, with CHANGELOG_MCP_REPO_ROOT and
 # CHANGELOG_MCP_TOOL=global in place of BUILD_MCP_REPO_ROOT and BUILD_MCP_TOOL.
-# The three wrappers are thin entries that only name their tool and source the
+# git, the git status/diff/log/fetch server installed by
+# development-credfeto-tools, is started the same way through the root-owned
+# mcp/git-mcp wrapper, with GIT_MCP_REPO_ROOT and GIT_MCP_TOOL=global.
+# The four wrappers are thin entries that only name their tool and source the
 # shared, root-owned mcp/dotnet-tool-mcp-launcher beside them, which holds the
 # logic for all of them.
 # codegraph, the code knowledge graph server
@@ -263,6 +266,9 @@ ENV BUILD_MCP_TOOL=global
 COPY --chown=root:root --chmod=0755 claude-mcp/changelog-mcp /etc/claude-code/mcp/changelog-mcp
 ENV CHANGELOG_MCP_REPO_ROOT=/workspace/repo
 ENV CHANGELOG_MCP_TOOL=global
+COPY --chown=root:root --chmod=0755 claude-mcp/git-mcp /etc/claude-code/mcp/git-mcp
+ENV GIT_MCP_REPO_ROOT=/workspace/repo
+ENV GIT_MCP_TOOL=global
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-policy /etc/claude-code/hooks/enforce-git-policy
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-identity /etc/claude-code/hooks/enforce-git-identity
 COPY --chown=root:root --chmod=0755 claude-hooks/reject-obfuscated-commands /etc/claude-code/hooks/reject-obfuscated-commands
@@ -514,6 +520,12 @@ RUN set -e; \
         || { echo "FATAL sanity: CHANGELOG_MCP_REPO_ROOT must be /workspace/repo, the repo mount the changelog MCP server works on" >&2; exit 1; }; \
     [ "${CHANGELOG_MCP_TOOL}" = "global" ] \
         || { echo "FATAL sanity: CHANGELOG_MCP_TOOL must be global, so the changelog MCP wrapper runs the image's global tool without probing" >&2; exit 1; }; \
+    jq -e '.mcpServers.git == {"type": "stdio", "command": "/etc/claude-code/mcp/git-mcp"}' /etc/claude-code/managed-mcp.json >/dev/null \
+        || { echo "FATAL sanity: managed-mcp.json must hold the required git server, and as the file is world-readable it must be exactly the stdio server started by /etc/claude-code/mcp/git-mcp, with no env" >&2; exit 1; }; \
+    [ "${GIT_MCP_REPO_ROOT}" = "/workspace/repo" ] \
+        || { echo "FATAL sanity: GIT_MCP_REPO_ROOT must be /workspace/repo, the repo mount the git MCP server works on" >&2; exit 1; }; \
+    [ "${GIT_MCP_TOOL}" = "global" ] \
+        || { echo "FATAL sanity: GIT_MCP_TOOL must be global, so the git MCP wrapper runs the image's global tool without probing" >&2; exit 1; }; \
     jq -e '.mcpServers.codegraph == {"type": "stdio", "command": "codegraph", "args": ["serve", "--mcp"], "alwaysLoad": true}' /etc/claude-code/managed-mcp.json >/dev/null \
         || { echo "FATAL sanity: managed-mcp.json must hold the required codegraph server, exactly the stdio codegraph serve --mcp entry that codegraph install writes for Claude Code, carrying no env" >&2; exit 1; }; \
     ! grep -qi 'authorization' /etc/claude-code/managed-mcp.json \
@@ -523,13 +535,15 @@ RUN set -e; \
     [ "$(stat -c '%U:%G %a' /etc/claude-code/mcp/kb-mcp-headers)" = "root:root 755" ] \
         || { echo "FATAL sanity: kb-mcp-headers missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
     [ "$(stat -c '%U:%G %a' /etc/claude-code/mcp/dotnet-tool-mcp-launcher)" = "root:root 755" ] \
-        || { echo "FATAL sanity: dotnet-tool-mcp-launcher, the shared launcher the build-dotnet, build-node and changelog wrappers source, missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
+        || { echo "FATAL sanity: dotnet-tool-mcp-launcher, the shared launcher the build-dotnet, build-node, changelog and git wrappers source, missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
     [ "$(stat -c '%U:%G %a' /etc/claude-code/mcp/build-dotnet-mcp)" = "root:root 755" ] \
         || { echo "FATAL sanity: build-dotnet-mcp missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
     [ "$(stat -c '%U:%G %a' /etc/claude-code/mcp/build-node-mcp)" = "root:root 755" ] \
         || { echo "FATAL sanity: build-node-mcp missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
     [ "$(stat -c '%U:%G %a' /etc/claude-code/mcp/changelog-mcp)" = "root:root 755" ] \
         || { echo "FATAL sanity: changelog-mcp missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
+    [ "$(stat -c '%U:%G %a' /etc/claude-code/mcp/git-mcp)" = "root:root 755" ] \
+        || { echo "FATAL sanity: git-mcp missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
     jq -e '.permissions.allow | index("mcp__cfwf__*")' /etc/claude-code/managed-settings.json >/dev/null \
         || { echo "FATAL sanity: managed-settings.json does not allow the cfwf MCP tools (mcp__cfwf__*)" >&2; exit 1; }; \
     jq -e '.permissions.allow | index("mcp__build-dotnet__*")' /etc/claude-code/managed-settings.json >/dev/null \
@@ -538,6 +552,8 @@ RUN set -e; \
         || { echo "FATAL sanity: managed-settings.json does not allow the build-node MCP tools (mcp__build-node__*)" >&2; exit 1; }; \
     jq -e '.permissions.allow | index("mcp__changelog__*")' /etc/claude-code/managed-settings.json >/dev/null \
         || { echo "FATAL sanity: managed-settings.json does not allow the changelog MCP tools (mcp__changelog__*)" >&2; exit 1; }; \
+    jq -e '.permissions.allow | index("mcp__git__*")' /etc/claude-code/managed-settings.json >/dev/null \
+        || { echo "FATAL sanity: managed-settings.json does not allow the git MCP tools (mcp__git__*)" >&2; exit 1; }; \
     jq -e '.permissions.allow | index("mcp__kb__*")' /etc/claude-code/managed-settings.json >/dev/null \
         || { echo "FATAL sanity: managed-settings.json does not allow the kb MCP tools (mcp__kb__*)" >&2; exit 1; }; \
     jq -e '.permissions.allow | index("mcp__codegraph__*")' /etc/claude-code/managed-settings.json >/dev/null \

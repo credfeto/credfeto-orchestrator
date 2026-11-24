@@ -77,13 +77,16 @@ image requires six:
 - `changelog`, the CHANGELOG.md server (`changelog-mcp`, a local stdio process), working on the
   repository at `/workspace/repo`. It is registered for every session, whatever the repository's
   language.
+- `git`, the git server (`credfeto-git-mcp`, a local stdio process), working on the repository at
+  `/workspace/repo` (#2067). So far it has the read-only `status`, `diff`, `log` and `fetch` tools;
+  raw `git` stays allowed beside it.
 - `codegraph`, the code knowledge graph server (`codegraph serve --mcp`, a local stdio process).
   In a repository with no `.codegraph/` index its tools answer that the project is not indexed, so
   it does no harm there. [codegraph.md](codegraph.md) covers how it is set up here and everywhere
   else, and how to roll it back.
 
 The file may list others, such as `rider` and `webstorm`, the JetBrains IDEs' own MCP servers over
-`http` on the loopback address. The image build checks only the six required servers, so adding
+`http` on the loopback address. The image build checks only the seven required servers, so adding
 another server does not break it (#1850).
 
 ## What the entrypoint checks before the agent ever starts
