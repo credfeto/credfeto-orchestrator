@@ -266,8 +266,8 @@ once this change is on main. See
 [docs/development/claude-hooks.md](../../../docs/development/claude-hooks.md#the-changelog-mcp-server).
 
 `git` is the git MCP server (#2067), `credfeto-git-mcp` from the `Credfeto.Git.Mcp` package that
-`development-credfeto-tools` installs, at the pre-release version pinned by its `CREDFETO_GIT_MCP_VERSION` ARG
-until the package has a stable release. So far it has the read-only `status`, `diff`, `log` and `fetch`
+`development-credfeto-tools` installs at its latest stable release, like the other tools there.
+So far it has the read-only `status`, `diff`, `log` and `fetch`
 tools. It is a stdio server started by the root-owned wrapper `/etc/claude-code/mcp/git-mcp`, with no `env`,
 and `mcp__git__*` in `permissions.allow` allows all of its tools; raw `git` stays allowed beside it. It is
 registered for every session, whatever the repository's language. The wrapper is a thin entry that sources

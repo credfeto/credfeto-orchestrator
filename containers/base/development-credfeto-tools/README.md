@@ -42,18 +42,10 @@ blob sizes manageable and to avoid cascading cache invalidation.
 | `Credfeto.Build.Dotnet.Server` | `credfeto-build-dotnet` (the `build-dotnet` MCP server, which `development-full`'s `build-dotnet-mcp` wrapper starts from its global tool path, `/home/developer/.dotnet/tools/credfeto-build-dotnet`) |
 | `Credfeto.Build.Node.Server` | `credfeto-build-node` (the `build-node` MCP server, which `development-full`'s `build-node-mcp` wrapper starts from its global tool path, `/home/developer/.dotnet/tools/credfeto-build-node`) |
 | `Credfeto.ChangeLog.Mcp` | `changelog-mcp` (the `changelog` MCP server, which `development-full`'s `changelog-mcp` wrapper starts from its global tool path, `/home/developer/.dotnet/tools/changelog-mcp`) |
-| `Credfeto.Git.Mcp` | `credfeto-git-mcp` (the `git` MCP server, which `development-full`'s `git-mcp` wrapper starts from its global tool path, `/home/developer/.dotnet/tools/credfeto-git-mcp`); installed at the version in the `CREDFETO_GIT_MCP_VERSION` ARG, see below |
+| `Credfeto.Git.Mcp` | `credfeto-git-mcp` (the `git` MCP server, which `development-full`'s `git-mcp` wrapper starts from its global tool path, `/home/developer/.dotnet/tools/credfeto-git-mcp`) |
 
 `dotnet <name>` subcommand aliases (e.g. `dotnet-buildcheck`) are created via `ln -sf` so the
 dotnet CLI can locate tools invoked through subcommand syntax.
-
-## Pinned version
-
-Every package above installs its latest stable release except `Credfeto.Git.Mcp`. It has only
-pre-release builds so far, which `dotnet tool install` never picks without an explicit version, so
-the Dockerfile's `CREDFETO_GIT_MCP_VERSION` ARG pins one. That ARG is the only place the version is
-set: swap it for the first stable release (or remove the pin so the tool tracks the latest stable
-release like the rest) before the change that introduced it is merged.
 
 ## Cache-bust mechanism
 
