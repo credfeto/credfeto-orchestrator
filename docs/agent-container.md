@@ -186,7 +186,9 @@ prompt built by `oneshot` (see [oneshot.md](oneshot.md) and
 [workflow-board.md](workflow-board.md) for what that prompt actually contains).
 
 The one exception is the pre-check (#1785): when `oneshot` starts the image with
-`ORCHESTRATOR_PRECHECK=1`, the entrypoint runs the same checks, prints
+`ORCHESTRATOR_PRECHECK=1`, the entrypoint runs the same checks, except those for the Claude
+token, the commit signing key and GPG signing, which the pre-check container is not given
+(#1858), prints
 `orchestrator-precheck: running pre-commit-check`, and execs `pre-commit-check` in the repo
 checkout instead of `claude`. No model runs. `oneshot` uses it before a session to check a PR's
 head (or `main`'s tip for an issue session) and puts the result in the agent's prompt; see
