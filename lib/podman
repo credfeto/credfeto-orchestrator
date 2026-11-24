@@ -743,6 +743,43 @@ add_gpg_podman_args() {
     PODMAN_RUN_ARGS+=( --volume "${extra_socket}:/home/developer/.gnupg/S.gpg-agent:ro" )
 }
 
+# Appends to PODMAN_RUN_ARGS what only an agent session needs, never the pre-commit pre-check:
+# GPG signing (after verify_gpg_signing_ready), ~/.database, the persistent ~/.claude state
+# mounts, the work item's transcript directory (transcript_dir, already created) as
+# ~/.claude/projects, the ~/.cache/orchestrator/global mount and GIT_SIGNING_KEY.
+# Kept above run_precommit_precheck: shellcheck tracks PODMAN_RUN_ARGS in file order, and an append
+# below that function's subshell is reported as a change the subshell might lose (SC2030/SC2031).
+add_agent_session_podman_args() {
+    local transcript_dir="$1" d
+
+    verify_gpg_signing_ready
+    add_gpg_podman_args
+    if [ -f "${HOME}/.database" ]; then
+        PODMAN_RUN_ARGS+=( --volume "${HOME}/.database:/home/developer/.database:ro" )
+    else
+        warn "\$HOME/.database not found — database credentials will not be available in the agent container"
+    fi
+    for d in sessions session-env plans cache backups; do
+        PODMAN_RUN_ARGS+=( --volume "${CLAUDE_STATE_DIR}/${d}:/home/developer/.claude/${d}:rw" )
+    done
+    PODMAN_RUN_ARGS+=( --volume "${transcript_dir}:/home/developer/.claude/projects:rw" )
+    # /home/developer/.cache/orchestrator/global (#1380): this fixed, known-in-advance mount
+    # target assumes XDG_CACHE_HOME is unset in this image, matching entrypoint.sh's and
+    # cache-gh-lookups' own "${XDG_CACHE_HOME:-${HOME}/.cache}" fallback for the same
+    # directory (test/entrypoint-cache-path-parity.bats asserts the two literal copies of
+    # that expression match). Deliberately not pinned via an image-wide ENV XDG_CACHE_HOME:
+    # that would also redirect every other XDG-aware tool's cache in the container (npm, pip,
+    # eslint/stylelint wrappers, ...) onto this same path for no benefit to them, and some
+    # tools resolve their own default differently once XDG_CACHE_HOME is explicitly set versus
+    # left unset. containers/agent/Dockerfile instead pre-creates
+    # /home/developer/.cache/orchestrator/{local,global} with correct ownership directly, so
+    # this mount target already exists rather than depending on this assumption at all.
+    PODMAN_RUN_ARGS+=( --volume "${ORCHESTRATOR_CACHE_DIR}/global:/home/developer/.cache/orchestrator/global:rw" )
+    if [ -n "${GIT_SIGNING_KEY}" ]; then
+        PODMAN_RUN_ARGS+=( --env "GIT_SIGNING_KEY=${GIT_SIGNING_KEY}" )
+    fi
+}
+
 # Appends a read-only /dev/null mount over every untracked regular file under REPO_WORK_DIR whose
 # basename matches a pattern in the secret-files list (secret-files.local takes precedence when
 # present), so the agent reads an empty file even through a command the block-secret-file-reads hook
@@ -1145,9 +1182,9 @@ precheck_log_tail() {
 
 # Runs pre-commit-check non-agentically in the agent image (#1785) on whatever REPO_WORK_DIR has
 # checked out, writing its output to log_file, and sets PRECHECK_STATUS (and PRECHECK_ERROR).
-# The launch is the agent's own: the same ensure_agent_container_ready pre-flight and the same
-# prepare_claude_container_args mounts, environment and secrets (except the kb token secret,
-# which only the agent session uses), plus ORCHESTRATOR_PRECHECK=1,
+# The launch uses the agent's ensure_agent_container_ready pre-flight and prepare_claude_container_args
+# in its precheck mode, which leaves out everything only an agent session uses (the token secrets,
+# GPG signing, ~/.database and the persistent Claude state), plus ORCHESTRATOR_PRECHECK=1,
 # which makes containers/agent/entrypoint.sh exec pre-commit-check instead of claude. No model
 # runs and no prompt is given. The container gets its own limit, PRECHECK_TIMEOUT_SECS, and has
 # exited before the agent's container starts, so the agent's AGENT_TIMEOUT_MINUTES are untouched.
@@ -1184,7 +1221,7 @@ run_precommit_precheck() {
         # gets no kb token secret. Unset here only: the agent launch after the check still has it.
         unset KB_MCP_TOKEN
         prepare_claude_container_args "Pre-commit pre-check (#1785): no agent session runs in this container." \
-            "${owner_token}" "${container_name}" "${item_type}" "${item_id}"
+            "${owner_token}" "${container_name}" "${item_type}" "${item_id}" precheck
         # CLAUDECODE=1 is the marker Claude Code sets for the agent's own shells (#1843). The
         # global pre-commit hook skips its installation freshness check only for an AI agent in
         # a container, so without it the pre-check failed whenever the hooks had released since
@@ -1402,13 +1439,18 @@ pull_agent_image_once() {
 # container gets none). Any earlier secret of each kind for the container is removed
 # either way. item_type and item_id (both set, checked by invoke_claude) select the
 # transcript directory and feed the WORK_ITEM_URL banner and the Discord error notifications.
+# An optional sixth argument, precheck, builds the pre-commit pre-check's container instead: it
+# runs no agent session, so it gets none of add_agent_session_podman_args, no transcript or
+# persistent state directories are created, and no Claude OAuth, GH_ENTERPRISE_TOKEN or kb secret
+# is created (earlier ones are still removed). The ssh-agent stays: pre-commit-check fetches origin.
 # Installs the EXIT trap before the first mktemp, so a die() from inside here cannot leak a
 # tmpfile or a secret (#1103). Bash traps replace rather than append, so the one trap also stops
 # the ssh-agent the service unit's ExecStartPre started for this run (stop_ssh_agent). The
 # cleanup half is a backstop only: every normal exit path in invoke_claude runs it itself.
 prepare_claude_container_args() {
     local claude_md_content="$1" owner_token="$2" container_name="$3" item_type="$4" item_id="$5"
-    local d transcript_dir
+    local d transcript_dir precheck=""
+    [ "${6:-}" = "precheck" ] && precheck=1
 
     trap 'cleanup_claude_invocation_tmpfiles; stop_ssh_agent' EXIT
 
@@ -1447,15 +1489,17 @@ prepare_claude_container_args() {
     PODMAN_SECRET_NAME=""
     GH_ENTERPRISE_SECRET_NAME=""
     KB_MCP_SECRET_NAME=""
-    for d in sessions session-env plans cache backups; do
-        mkdir -p "${CLAUDE_STATE_DIR}/${d}" || die "Failed to create persistent Claude state directory: ${CLAUDE_STATE_DIR}/${d}"
-    done
-    transcript_dir=$(transcript_dir_path "${item_type}" "${item_id}")
-    ensure_item_state_dir "${transcript_dir}" || die "Failed to create transcript directory: ${transcript_dir}"
-    # Backs the container's ~/.cache/orchestrator/global (#1380): only "global" gets a
-    # persistent host directory; "local" is created by entrypoint.sh itself and stays
-    # container-ephemeral.
-    mkdir -p "${ORCHESTRATOR_CACHE_DIR}/global" || die "Failed to create persistent orchestrator cache directory: ${ORCHESTRATOR_CACHE_DIR}/global"
+    if [ -z "${precheck}" ]; then
+        for d in sessions session-env plans cache backups; do
+            mkdir -p "${CLAUDE_STATE_DIR}/${d}" || die "Failed to create persistent Claude state directory: ${CLAUDE_STATE_DIR}/${d}"
+        done
+        transcript_dir=$(transcript_dir_path "${item_type}" "${item_id}")
+        ensure_item_state_dir "${transcript_dir}" || die "Failed to create transcript directory: ${transcript_dir}"
+        # Backs the container's ~/.cache/orchestrator/global (#1380): only "global" gets a
+        # persistent host directory; "local" is created by entrypoint.sh itself and stays
+        # container-ephemeral.
+        mkdir -p "${ORCHESTRATOR_CACHE_DIR}/global" || die "Failed to create persistent orchestrator cache directory: ${ORCHESTRATOR_CACHE_DIR}/global"
+    fi
 
     # Export invocation-scoped globals so helper functions can read them.
     PODMAN_CONTAINER_NAME="${container_name}"
@@ -1500,35 +1544,14 @@ prepare_claude_container_args() {
     else
         warn "SSH_AUTH_SOCK is not set or socket is absent — SSH git operations will not be available in the agent container"
     fi
-    verify_gpg_signing_ready
-    add_gpg_podman_args
     add_secret_mask_podman_args
-    if [ -f "${HOME}/.database" ]; then
-        PODMAN_RUN_ARGS+=( --volume "${HOME}/.database:/home/developer/.database:ro" )
-    else
-        warn "\$HOME/.database not found — database credentials will not be available in the agent container"
-    fi
     PODMAN_RUN_ARGS+=( --volume "${CLAUDE_MD_TMPFILE}:/home/developer/.claude/CLAUDE.md:ro" )
-    for d in sessions session-env plans cache backups; do
-        PODMAN_RUN_ARGS+=( --volume "${CLAUDE_STATE_DIR}/${d}:/home/developer/.claude/${d}:rw" )
-    done
-    PODMAN_RUN_ARGS+=( --volume "${transcript_dir}:/home/developer/.claude/projects:rw" )
-    # /home/developer/.cache/orchestrator/global (#1380): this fixed, known-in-advance mount
-    # target assumes XDG_CACHE_HOME is unset in this image, matching entrypoint.sh's and
-    # cache-gh-lookups' own "${XDG_CACHE_HOME:-${HOME}/.cache}" fallback for the same
-    # directory (test/entrypoint-cache-path-parity.bats asserts the two literal copies of
-    # that expression match). Deliberately not pinned via an image-wide ENV XDG_CACHE_HOME:
-    # that would also redirect every other XDG-aware tool's cache in the container (npm, pip,
-    # eslint/stylelint wrappers, ...) onto this same path for no benefit to them, and some
-    # tools resolve their own default differently once XDG_CACHE_HOME is explicitly set versus
-    # left unset. containers/agent/Dockerfile instead pre-creates
-    # /home/developer/.cache/orchestrator/{local,global} with correct ownership directly, so
-    # this mount target already exists rather than depending on this assumption at all.
-    PODMAN_RUN_ARGS+=( --volume "${ORCHESTRATOR_CACHE_DIR}/global:/home/developer/.cache/orchestrator/global:rw" )
+    if [ -z "${precheck}" ]; then
+        add_agent_session_podman_args "${transcript_dir}"
+    fi
 
     [ -n "${GIT_USER_NAME}" ]  && PODMAN_RUN_ARGS+=( --env "GIT_USER_NAME=${GIT_USER_NAME}" )
     [ -n "${GIT_USER_EMAIL}" ] && PODMAN_RUN_ARGS+=( --env "GIT_USER_EMAIL=${GIT_USER_EMAIL}" )
-    [ -n "${GIT_SIGNING_KEY}" ] && PODMAN_RUN_ARGS+=( --env "GIT_SIGNING_KEY=${GIT_SIGNING_KEY}" )
     # #1351 experiment: CONTAINER_SCRATCH_PATH is a fixed, known-in-advance container path
     # (like CONTAINER_REPO_PATH/CONTAINER_RULES_PATH above) - unlike those two, though, its
     # host-side backing directory is created fresh per invocation (below) and only its
@@ -1549,7 +1572,7 @@ prepare_claude_container_args() {
     # Removed on every launch, token or not: a run killed before its EXIT trap leaves the secret
     # behind, and once the owner's token file is gone nothing else would ever sweep it.
     remove_podman_secret "claude-oauth-${container_name}"
-    if [ -n "${owner_token}" ]; then
+    if [ -z "${precheck}" ] && [ -n "${owner_token}" ]; then
         PODMAN_SECRET_NAME="claude-oauth-${container_name}"
         create_podman_secret "${item_type}" "${item_id}" "${PODMAN_SECRET_NAME}" "${owner_token}" \
             "type=env,target=CLAUDE_CODE_OAUTH_TOKEN" "Claude OAuth token"
@@ -1559,7 +1582,7 @@ prepare_claude_container_args() {
     # The token broker picks the variable gh needs (GH_TOKEN for github.com, GH_ENTERPRISE_TOKEN
     # otherwise) from GH_HOST when it runs gh.
     remove_podman_secret "gh-enterprise-token-${container_name}"
-    if [ -n "${GH_ENTERPRISE_TOKEN:-}" ]; then
+    if [ -z "${precheck}" ] && [ -n "${GH_ENTERPRISE_TOKEN:-}" ]; then
         GH_ENTERPRISE_SECRET_NAME="gh-enterprise-token-${container_name}"
         create_podman_secret "${item_type}" "${item_id}" "${GH_ENTERPRISE_SECRET_NAME}" "${GH_ENTERPRISE_TOKEN}" \
             "$(root_only_secret_options gh-token)" "GH_ENTERPRISE_TOKEN"
@@ -1569,7 +1592,7 @@ prepare_claude_container_args() {
     # launch, set or not: a run killed before its EXIT trap leaves the secret behind, and once
     # KB_MCP_TOKEN is dropped from .env nothing else would ever sweep it.
     remove_podman_secret "kb-mcp-token-${container_name}"
-    if [ -n "${KB_MCP_TOKEN:-}" ]; then
+    if [ -z "${precheck}" ] && [ -n "${KB_MCP_TOKEN:-}" ]; then
         KB_MCP_SECRET_NAME="kb-mcp-token-${container_name}"
         create_podman_secret "${item_type}" "${item_id}" "${KB_MCP_SECRET_NAME}" "${KB_MCP_TOKEN}" \
             "$(root_only_secret_options kb-mcp-token)" "KB_MCP_TOKEN"
