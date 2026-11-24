@@ -1026,12 +1026,12 @@ run_dockerfile_mcp_checks() {
     grep -qxF '            Credfeto.ChangeLog.Mcp' "${REPO_ROOT}/.github/workflows/check-credfeto-tools-updates.yml"
 }
 
-@test "development-credfeto-tools installs Credfeto.Git.Mcp at its one pinned version behind the cache bust and its sanity check requires it (#2067)" {
+@test "development-credfeto-tools installs Credfeto.Git.Mcp unpinned behind the cache bust and its sanity check requires it (#2067)" {
     local dockerfile="${REPO_ROOT}/containers/base/development-credfeto-tools/Dockerfile"
-    # The version is pinned by one ARG with a default, and the install line uses it.
-    [ "$(grep -cE '^ARG CREDFETO_GIT_MCP_VERSION=[0-9]+\.[0-9]+\.[0-9]+' "${dockerfile}")" -eq 1 ]
+    # Like every other tool there, it installs the latest stable release: no version pin.
     # shellcheck disable=SC2016  # the literal ${...} of the Dockerfile's ARG substitution
-    grep -qxF 'RUN su developer -c ": ${CREDFETO_FUNFAIR_TOOLS_CACHE_BUST}; dotnet tool install -g Credfeto.Git.Mcp --version ${CREDFETO_GIT_MCP_VERSION}"' "${dockerfile}"
+    grep -qxF 'RUN su developer -c ": ${CREDFETO_FUNFAIR_TOOLS_CACHE_BUST}; dotnet tool install -g Credfeto.Git.Mcp"' "${dockerfile}"
+    [ "$(grep -c 'CREDFETO_GIT_MCP_VERSION' "${dockerfile}")" -eq 0 ]
     # Both the installed-versions report and the sanity check list the package.
     [ "$(grep -cE 'for tool in .* credfeto\.git\.mcp( .*)?; do' "${dockerfile}")" -eq 2 ]
     grep -qF '[ -x /home/developer/.dotnet/tools/credfeto-git-mcp ]' "${dockerfile}"
