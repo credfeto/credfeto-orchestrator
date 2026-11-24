@@ -1,6 +1,6 @@
---- # Resolve the latest published version of a set of NuGet packages into one hash
+--- # Resolve the latest stable version of a set of NuGet packages into one hash
 name: "Resolve latest NuGet package versions"
-description: "Resolves the latest published version of each given NuGet package and outputs a hash of them, changing only when one actually ships a release"
+description: "Hashes the latest stable (non-pre-release) version of each given NuGet package, changing only when one ships a stable release"
 inputs:
   package-ids:
     description: "Newline-separated list of NuGet package IDs to check"
@@ -8,7 +8,7 @@ inputs:
 
 outputs:
   version-hash:
-    description: "SHA-256 hash of the concatenated package-id/latest-version pairs"
+    description: "SHA-256 hash of the concatenated package-id/latest-stable-version pairs"
     value: "${{steps.resolve.outputs.version-hash}}"
 
 runs:
@@ -44,12 +44,18 @@ runs:
             }
             const body = await response.json();
             const versions = body.versions || [];
-            if (versions.length === 0) {
-              core.setFailed("❌ NuGet returned no versions for " + id);
-              return;
+            // Pre-release versions carry a "-" suffix (e.g. 1.2.3-main). The
+            // images only install stable releases, so ignore pre-releases or
+            // every pre-release push would change the hash for nothing.
+            const stable = versions.filter((version) => !version.includes("-"));
+            let latest;
+            if (stable.length === 0) {
+              latest = "none";
+              core.warning("⚠️ NuGet has no stable release of " + id + "; hashing it as none");
+            } else {
+              latest = stable[stable.length - 1];
+              core.info("✅ " + id + ": " + latest);
             }
-            const latest = versions[versions.length - 1];
-            core.info("✅ " + id + ": " + latest);
             pairs.push(lowerId + "=" + latest);
           }
 
