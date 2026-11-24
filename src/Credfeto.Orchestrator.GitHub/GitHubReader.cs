@@ -48,6 +48,61 @@ public sealed class GitHubReader : IGitHubReader
         ];
     }
 
+    public async ValueTask<IReadOnlyList<int>> OwnOpenPullRequestsAsync(
+        string repository,
+        string me,
+        string creator,
+        bool includeBlocked,
+        CancellationToken cancellationToken
+    )
+    {
+        PullRequestListResult result = await this.CallAsync(
+            tool: PR_LIST,
+            arguments: new Dictionary<string, string>(StringComparer.Ordinal) { ["repo"] = repository },
+            typeInfo: GitHubJsonContext.Default.PullRequestListResult,
+            cancellationToken: cancellationToken
+        );
+
+        IReadOnlyList<PullRequestListResultEntry?> entries = result.PullRequests ?? throw Unexpected(PR_LIST);
+
+        return
+        [
+            .. entries
+                .Select(Own)
+                .Where(entry =>
+                    IsAuthor(author: entry.Author, me: me, creator: creator)
+                    && (includeBlocked || !IsBlocked(entry.Labels))
+                )
+                .Select(entry => entry.Number)
+                .OrderDescending(),
+        ];
+    }
+
+    // Every entry is checked, not only those the filter keeps, so a list in another shape always fails the read
+    private static OwnPullRequest Own(PullRequestListResultEntry? entry)
+    {
+        return
+            entry is { Number: > 0, Author: not null, Labels: not null } valid
+            && valid.Labels.All(label => label is not null)
+            ? new(Number: valid.Number, Author: valid.Author, Labels: [.. valid.Labels.OfType<string>()])
+            : throw Unexpected(PR_LIST);
+    }
+
+    // The server writes "-" for a pull request GitHub gives no author, where gh gives none, which own_pr_author reads
+    // as an empty login
+    private static bool IsAuthor(string author, string me, string creator)
+    {
+        string login = StringComparer.Ordinal.Equals(x: author, y: "-") ? string.Empty : author;
+
+        return StringComparer.OrdinalIgnoreCase.Equals(x: login, y: me)
+            || StringComparer.OrdinalIgnoreCase.Equals(x: login, y: creator);
+    }
+
+    private static bool IsBlocked(IReadOnlyList<string> labels)
+    {
+        return labels.Any(label => StringComparer.OrdinalIgnoreCase.Equals(x: label, y: "blocked"));
+    }
+
     public async ValueTask<bool> BranchRequiresStatusChecksAsync(
         string repository,
         string branch,

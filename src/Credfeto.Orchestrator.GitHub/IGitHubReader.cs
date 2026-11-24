@@ -20,4 +20,15 @@ public interface IGitHubReader
         string branch,
         CancellationToken cancellationToken
     );
+
+    // The numbers of the open pull requests the orchestrator itself opened (authored by me or by the pull request bot,
+    // creator, compared case-insensitively), leaving out those labelled Blocked unless includeBlocked, newest first as
+    // list_bot_created_open_prs prints them
+    ValueTask<IReadOnlyList<int>> OwnOpenPullRequestsAsync(
+        string repository,
+        string me,
+        string creator,
+        bool includeBlocked,
+        CancellationToken cancellationToken
+    );
 }

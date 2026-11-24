@@ -485,5 +485,481 @@
       "mcpError": "could not read the required checks of org/repo branch main",
       "expected": null
     }
+  ],
+  "ownOpenPullRequests": [
+    {
+      "name": "no open pull request in the repository",
+      "repo": "org/repo",
+      "me": "bot-user",
+      "creator": "app/prpixie",
+      "includeBlocked": "false",
+      "gh": [],
+      "mcp": {
+        "repository": "org/repo",
+        "pullRequests": []
+      },
+      "numbers": ""
+    },
+    {
+      "name": "only pull requests by the agent or the pull request bot are kept, newest first",
+      "repo": "org/repo",
+      "me": "bot-user",
+      "creator": "app/prpixie",
+      "includeBlocked": "false",
+      "gh": [
+        {
+          "number": 40,
+          "author": {
+            "login": "app/dependabot",
+            "id": "X",
+            "is_bot": true,
+            "name": ""
+          },
+          "labels": [
+            {
+              "id": "L",
+              "name": "dependencies",
+              "description": "",
+              "color": "ffffff"
+            }
+          ]
+        },
+        {
+          "number": 31,
+          "author": {
+            "login": "app/prpixie",
+            "id": "X",
+            "is_bot": true,
+            "name": ""
+          },
+          "labels": [
+            {
+              "id": "L",
+              "name": "auto-pr",
+              "description": "",
+              "color": "ffffff"
+            }
+          ]
+        },
+        {
+          "number": 12,
+          "author": {
+            "login": "someone",
+            "id": "X",
+            "is_bot": false,
+            "name": ""
+          },
+          "labels": []
+        },
+        {
+          "number": 5,
+          "author": {
+            "login": "bot-user",
+            "id": "X",
+            "is_bot": false,
+            "name": ""
+          },
+          "labels": []
+        }
+      ],
+      "mcp": {
+        "repository": "org/repo",
+        "pullRequests": [
+          {
+            "number": 5,
+            "head": "branch",
+            "base": "main",
+            "author": "bot-user",
+            "state": "ready",
+            "flags": [],
+            "url": "https://github.com/org/repo/pull/5",
+            "title": "A change",
+            "labels": []
+          },
+          {
+            "number": 12,
+            "head": "branch",
+            "base": "main",
+            "author": "someone",
+            "state": "ready",
+            "flags": [],
+            "url": "https://github.com/org/repo/pull/12",
+            "title": "A change",
+            "labels": []
+          },
+          {
+            "number": 31,
+            "head": "branch",
+            "base": "main",
+            "author": "app/prpixie",
+            "state": "ready",
+            "flags": [],
+            "url": "https://github.com/org/repo/pull/31",
+            "title": "A change",
+            "labels": [
+              "auto-pr"
+            ]
+          },
+          {
+            "number": 40,
+            "head": "branch",
+            "base": "main",
+            "author": "app/dependabot",
+            "state": "ready",
+            "flags": [],
+            "url": "https://github.com/org/repo/pull/40",
+            "title": "A change",
+            "labels": [
+              "dependencies"
+            ]
+          }
+        ]
+      },
+      "numbers": "31\n5"
+    },
+    {
+      "name": "logins are compared case-insensitively",
+      "repo": "org/repo",
+      "me": "Bot-User",
+      "creator": "app/prpixie",
+      "includeBlocked": "false",
+      "gh": [
+        {
+          "number": 9,
+          "author": {
+            "login": "app/PRPixie",
+            "id": "X",
+            "is_bot": true,
+            "name": ""
+          },
+          "labels": []
+        },
+        {
+          "number": 7,
+          "author": {
+            "login": "BOT-USER",
+            "id": "X",
+            "is_bot": false,
+            "name": ""
+          },
+          "labels": []
+        }
+      ],
+      "mcp": {
+        "repository": "org/repo",
+        "pullRequests": [
+          {
+            "number": 7,
+            "head": "branch",
+            "base": "main",
+            "author": "BOT-USER",
+            "state": "ready",
+            "flags": [],
+            "url": "https://github.com/org/repo/pull/7",
+            "title": "A change",
+            "labels": []
+          },
+          {
+            "number": 9,
+            "head": "branch",
+            "base": "main",
+            "author": "app/PRPixie",
+            "state": "ready",
+            "flags": [],
+            "url": "https://github.com/org/repo/pull/9",
+            "title": "A change",
+            "labels": []
+          }
+        ]
+      },
+      "numbers": "9\n7"
+    },
+    {
+      "name": "a Blocked pull request is left out, whatever the label's case",
+      "repo": "org/repo",
+      "me": "bot-user",
+      "creator": "app/prpixie",
+      "includeBlocked": "false",
+      "gh": [
+        {
+          "number": 22,
+          "author": {
+            "login": "app/prpixie",
+            "id": "X",
+            "is_bot": true,
+            "name": ""
+          },
+          "labels": [
+            {
+              "id": "L",
+              "name": "auto-pr",
+              "description": "",
+              "color": "ffffff"
+            },
+            {
+              "id": "L",
+              "name": "BLOCKED",
+              "description": "",
+              "color": "ffffff"
+            }
+          ]
+        },
+        {
+          "number": 21,
+          "author": {
+            "login": "app/prpixie",
+            "id": "X",
+            "is_bot": true,
+            "name": ""
+          },
+          "labels": [
+            {
+              "id": "L",
+              "name": "Blocked",
+              "description": "",
+              "color": "ffffff"
+            }
+          ]
+        },
+        {
+          "number": 20,
+          "author": {
+            "login": "bot-user",
+            "id": "X",
+            "is_bot": false,
+            "name": ""
+          },
+          "labels": [
+            {
+              "id": "L",
+              "name": "auto-pr",
+              "description": "",
+              "color": "ffffff"
+            }
+          ]
+        }
+      ],
+      "mcp": {
+        "repository": "org/repo",
+        "pullRequests": [
+          {
+            "number": 20,
+            "head": "branch",
+            "base": "main",
+            "author": "bot-user",
+            "state": "ready",
+            "flags": [],
+            "url": "https://github.com/org/repo/pull/20",
+            "title": "A change",
+            "labels": [
+              "auto-pr"
+            ]
+          },
+          {
+            "number": 21,
+            "head": "branch",
+            "base": "main",
+            "author": "app/prpixie",
+            "state": "ready",
+            "flags": [],
+            "url": "https://github.com/org/repo/pull/21",
+            "title": "A change",
+            "labels": [
+              "Blocked"
+            ]
+          },
+          {
+            "number": 22,
+            "head": "branch",
+            "base": "main",
+            "author": "app/prpixie",
+            "state": "ready",
+            "flags": [],
+            "url": "https://github.com/org/repo/pull/22",
+            "title": "A change",
+            "labels": [
+              "auto-pr",
+              "BLOCKED"
+            ]
+          }
+        ]
+      },
+      "numbers": "20"
+    },
+    {
+      "name": "Blocked pull requests are kept when asked for",
+      "repo": "org/repo",
+      "me": "bot-user",
+      "creator": "app/prpixie",
+      "includeBlocked": "true",
+      "gh": [
+        {
+          "number": 22,
+          "author": {
+            "login": "app/prpixie",
+            "id": "X",
+            "is_bot": true,
+            "name": ""
+          },
+          "labels": [
+            {
+              "id": "L",
+              "name": "auto-pr",
+              "description": "",
+              "color": "ffffff"
+            },
+            {
+              "id": "L",
+              "name": "BLOCKED",
+              "description": "",
+              "color": "ffffff"
+            }
+          ]
+        },
+        {
+          "number": 20,
+          "author": {
+            "login": "bot-user",
+            "id": "X",
+            "is_bot": false,
+            "name": ""
+          },
+          "labels": [
+            {
+              "id": "L",
+              "name": "auto-pr",
+              "description": "",
+              "color": "ffffff"
+            }
+          ]
+        }
+      ],
+      "mcp": {
+        "repository": "org/repo",
+        "pullRequests": [
+          {
+            "number": 20,
+            "head": "branch",
+            "base": "main",
+            "author": "bot-user",
+            "state": "ready",
+            "flags": [],
+            "url": "https://github.com/org/repo/pull/20",
+            "title": "A change",
+            "labels": [
+              "auto-pr"
+            ]
+          },
+          {
+            "number": 22,
+            "head": "branch",
+            "base": "main",
+            "author": "app/prpixie",
+            "state": "ready",
+            "flags": [],
+            "url": "https://github.com/org/repo/pull/22",
+            "title": "A change",
+            "labels": [
+              "auto-pr",
+              "BLOCKED"
+            ]
+          }
+        ]
+      },
+      "numbers": "22\n20"
+    },
+    {
+      "name": "a label that only contains blocked does not count as Blocked",
+      "repo": "org/repo",
+      "me": "bot-user",
+      "creator": "app/prpixie",
+      "includeBlocked": "false",
+      "gh": [
+        {
+          "number": 3,
+          "author": {
+            "login": "bot-user",
+            "id": "X",
+            "is_bot": false,
+            "name": ""
+          },
+          "labels": [
+            {
+              "id": "L",
+              "name": "unblocked",
+              "description": "",
+              "color": "ffffff"
+            },
+            {
+              "id": "L",
+              "name": "blocked-by-ci",
+              "description": "",
+              "color": "ffffff"
+            }
+          ]
+        }
+      ],
+      "mcp": {
+        "repository": "org/repo",
+        "pullRequests": [
+          {
+            "number": 3,
+            "head": "branch",
+            "base": "main",
+            "author": "bot-user",
+            "state": "ready",
+            "flags": [],
+            "url": "https://github.com/org/repo/pull/3",
+            "title": "A change",
+            "labels": [
+              "unblocked",
+              "blocked-by-ci"
+            ]
+          }
+        ]
+      },
+      "numbers": "3"
+    },
+    {
+      "name": "a pull request GitHub gives no author is not the agent's",
+      "repo": "org/repo",
+      "me": "bot-user",
+      "creator": "app/prpixie",
+      "includeBlocked": "false",
+      "gh": [
+        {
+          "number": 6,
+          "author": null,
+          "labels": []
+        }
+      ],
+      "mcp": {
+        "repository": "org/repo",
+        "pullRequests": [
+          {
+            "number": 6,
+            "head": "branch",
+            "base": "main",
+            "author": "-",
+            "state": "ready",
+            "flags": [],
+            "url": "https://github.com/org/repo/pull/6",
+            "title": "A change",
+            "labels": []
+          }
+        ]
+      },
+      "numbers": ""
+    },
+    {
+      "name": "the list cannot be read",
+      "repo": "org/repo",
+      "me": "bot-user",
+      "creator": "app/prpixie",
+      "includeBlocked": "false",
+      "gh": null,
+      "mcpError": "pull request list failed",
+      "numbers": null
+    }
   ]
 }

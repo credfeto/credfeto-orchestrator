@@ -187,6 +187,43 @@ make_orchestrator_github_stub() {
     [ "$(tr '\n' ' ' < "${TEST_TMP}/cmd_args")" = "github branch-requires-status-checks --repo org/other --branch main " ]
 }
 
+@test "list_bot_created_open_prs hands the repository, logins and Blocked choice to ORCHESTRATOR_CMD github when switched on (#252)" {
+    make_orchestrator_github_stub
+    make_stub gh 'exit 1'
+    ORCHESTRATOR_DOTNET_GITHUB=1
+    _GH_ME=bot-user
+    PR_CREATOR_LOGIN=app/prpixie
+
+    printf '31\n5\n' > "${TEST_TMP}/github_output"
+    run list_bot_created_open_prs org/repo
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(printf '31\n5')" ]
+    [ "$(tr '\n' ' ' < "${TEST_TMP}/cmd_args")" = "github own-open-prs --repo org/repo --me bot-user --creator app/prpixie --include-blocked false " ]
+
+    run list_bot_created_open_prs org/repo true
+    [ "$(tr '\n' ' ' < "${TEST_TMP}/cmd_args")" = "github own-open-prs --repo org/repo --me bot-user --creator app/prpixie --include-blocked true " ]
+
+    touch "${TEST_TMP}/fail"
+    run list_bot_created_open_prs org/repo
+    [ "${status}" -ne 0 ]
+    [ -z "${output}" ]
+}
+
+@test "list_bot_created_open_prs never runs ORCHESTRATOR_CMD while ORCHESTRATOR_DOTNET_GITHUB is off (#252)" {
+    make_orchestrator_github_stub
+    ORCHESTRATOR_DOTNET_GITHUB=0
+    _GH_ME=bot-user
+    PR_CREATOR_LOGIN=app/prpixie
+    make_stub gh 'case "$*" in
+        "pr list --repo org/repo --state open --limit 200 --json number,labels,author") printf "%s" "[{\"number\":4,\"author\":{\"login\":\"bot-user\"},\"labels\":[]}]" ;;
+        *) exit 1 ;;
+    esac'
+    run list_bot_created_open_prs org/repo
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "4" ]
+    [ ! -f "${TEST_TMP}/cmd_args" ]
+}
+
 @test "fetch_branch_requires_status_checks still fails on an empty base without running ORCHESTRATOR_CMD (#252)" {
     make_orchestrator_github_stub
     ORCHESTRATOR_DOTNET_GITHUB=1
