@@ -63,6 +63,12 @@ RUN su developer -c ": ${CREDFETO_FUNFAIR_TOOLS_CACHE_BUST}; dotnet tool install
 # /home/developer/.dotnet/tools/changelog-mcp.
 # hadolint ignore=DL3059
 RUN su developer -c ": ${CREDFETO_FUNFAIR_TOOLS_CACHE_BUST}; dotnet tool install -g Credfeto.ChangeLog.Mcp"
+# The git MCP server (credfeto-git-mcp), registered for agent sessions as the
+# git server in development-full's managed-mcp.json, whose git-mcp wrapper
+# starts it from its global tool path,
+# /home/developer/.dotnet/tools/credfeto-git-mcp.
+# hadolint ignore=DL3059
+RUN su developer -c ": ${CREDFETO_FUNFAIR_TOOLS_CACHE_BUST}; dotnet tool install -g Credfeto.Git.Mcp"
 
 # dotnet- subcommand aliases. Several tools install only as `<name>` but
 # agents invoke them via `dotnet <name>` subcommand syntax — which makes
@@ -85,7 +91,7 @@ RUN su developer -c '\
 # post-build by .github/actions/report-installed-versions.
 RUN su developer -c "dotnet tool list -g" > /tmp/dotnet-tools-list.txt \
     && { \
-      for tool in credfeto.changelog.cmd credfeto.dotnet.code.analysis.overrides.cmd funfair.buildcheck funfair.buildversion credfeto.dotnet.repo.formatter credfeto.build.dotnet.server credfeto.build.node.server credfeto.changelog.mcp; do \
+      for tool in credfeto.changelog.cmd credfeto.dotnet.code.analysis.overrides.cmd funfair.buildcheck funfair.buildversion credfeto.dotnet.repo.formatter credfeto.build.dotnet.server credfeto.build.node.server credfeto.changelog.mcp credfeto.git.mcp; do \
         awk -v t="$tool" '{if (tolower($1)==t) print $1": "$2}' /tmp/dotnet-tools-list.txt; \
       done; \
     } > /opt/installed-versions.txt \
@@ -100,7 +106,7 @@ RUN su developer -c "dotnet tool list -g" > /tmp/dotnet-tools-list.txt \
 # hadolint ignore=DL3059
 RUN set -e; \
     echo "== dotnet tools =="; \
-    for tool in credfeto.changelog.cmd credfeto.dotnet.code.analysis.overrides.cmd funfair.buildcheck funfair.buildversion credfeto.dotnet.repo.formatter credfeto.build.dotnet.server credfeto.build.node.server credfeto.changelog.mcp; do \
+    for tool in credfeto.changelog.cmd credfeto.dotnet.code.analysis.overrides.cmd funfair.buildcheck funfair.buildversion credfeto.dotnet.repo.formatter credfeto.build.dotnet.server credfeto.build.node.server credfeto.changelog.mcp credfeto.git.mcp; do \
         if ! su developer -c "dotnet tool list -g" | awk '{print tolower($1)}' | grep -Fxq "$tool"; then \
             echo "FATAL sanity: dotnet tool '$tool' is missing" >&2; exit 1; \
         fi; \
@@ -120,6 +126,11 @@ RUN set -e; \
         || { echo "FATAL sanity: /home/developer/.dotnet/tools/changelog-mcp is missing or not executable" >&2; exit 1; }; \
     su developer -c "command -v changelog-mcp >/dev/null 2>&1" \
         || { echo "FATAL sanity: changelog-mcp is missing from PATH" >&2; exit 1; }; \
+    echo "== credfeto-git-mcp (development-full's git-mcp wrapper starts it by this path) =="; \
+    [ -x /home/developer/.dotnet/tools/credfeto-git-mcp ] \
+        || { echo "FATAL sanity: /home/developer/.dotnet/tools/credfeto-git-mcp is missing or not executable" >&2; exit 1; }; \
+    su developer -c "command -v credfeto-git-mcp >/dev/null 2>&1" \
+        || { echo "FATAL sanity: credfeto-git-mcp is missing from PATH" >&2; exit 1; }; \
     echo "== dotnet-* alias probe =="; \
     for alias in dotnet-cscleanup dotnet-buildcheck dotnet-buildversion dotnet-changelog dotnet-code-analysis; do \
         su developer -c "command -v ${alias} >/dev/null 2>&1" \

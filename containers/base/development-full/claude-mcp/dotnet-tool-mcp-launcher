@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # The shared launcher behind the dotnet tool MCP servers in managed-mcp.json. Each server's
-# launcher (build-dotnet-mcp, build-node-mcp, changelog-mcp) is a thin entry that only names its
+# launcher (build-dotnet-mcp, build-node-mcp, changelog-mcp, git-mcp) is a thin entry that only names its
 # tool and then sources this file from its own directory, so every server is found and started
 # the same way, for whichever user runs Claude Code: one root-owned set of files serves every
 # user on a host and the container alike. Run on its own it only stops with a message.

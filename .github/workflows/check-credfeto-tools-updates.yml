@@ -54,6 +54,7 @@ jobs:
             Credfeto.Build.Dotnet.Server
             Credfeto.Build.Node.Server
             Credfeto.ChangeLog.Mcp
+            Credfeto.Git.Mcp
 
       - name: "Log in to GHCR"
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
