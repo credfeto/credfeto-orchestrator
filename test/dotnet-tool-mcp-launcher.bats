@@ -2,8 +2,8 @@
 # shellcheck disable=SC2030,SC2031  # bats test bodies run in subshells; variable modifications are intentionally scoped
 # shellcheck disable=SC2154  # stderr is set by run --separate-stderr
 
-# The dotnet tool MCP server launchers: the thin build-dotnet-mcp, build-node-mcp and
-# changelog-mcp entries and the shared dotnet-tool-mcp-launcher they source. Every case runs
+# The dotnet tool MCP server launchers: the thin build-dotnet-mcp, build-node-mcp, changelog-mcp
+# and git-mcp entries and the shared dotnet-tool-mcp-launcher they source. Every case runs
 # against every entry (for_each_entry), so the entries cannot drift apart again.
 
 bats_require_minimum_version 1.5.0
@@ -11,7 +11,7 @@ bats_require_minimum_version 1.5.0
 load test_helper
 
 MCP_DIR="${REPO_ROOT}/containers/base/development-full/claude-mcp"
-ENTRIES=(build-dotnet-mcp build-node-mcp changelog-mcp)
+ENTRIES=(build-dotnet-mcp build-node-mcp changelog-mcp git-mcp)
 # The runtime the dotnet stub's --info reports, and one it does not.
 HOST_RID="test-x64"
 OTHER_RID="other-arm64"
@@ -63,6 +63,10 @@ use_entry() {
             ;;
         changelog-mcp)
             TOOL_COMMAND=changelog-mcp PACKAGE_ID=Credfeto.ChangeLog.Mcp PREFIX=CHANGELOG_MCP
+            LOG_DIR_NAME='' QUIET_SDK_PREVIEW=no
+            ;;
+        git-mcp)
+            TOOL_COMMAND=credfeto-git-mcp PACKAGE_ID=Credfeto.Git.Mcp PREFIX=GIT_MCP
             LOG_DIR_NAME='' QUIET_SDK_PREVIEW=no
             ;;
         *) return 1 ;;

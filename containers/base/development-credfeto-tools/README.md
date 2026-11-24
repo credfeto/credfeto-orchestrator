@@ -42,9 +42,18 @@ blob sizes manageable and to avoid cascading cache invalidation.
 | `Credfeto.Build.Dotnet.Server` | `credfeto-build-dotnet` (the `build-dotnet` MCP server, which `development-full`'s `build-dotnet-mcp` wrapper starts from its global tool path, `/home/developer/.dotnet/tools/credfeto-build-dotnet`) |
 | `Credfeto.Build.Node.Server` | `credfeto-build-node` (the `build-node` MCP server, which `development-full`'s `build-node-mcp` wrapper starts from its global tool path, `/home/developer/.dotnet/tools/credfeto-build-node`) |
 | `Credfeto.ChangeLog.Mcp` | `changelog-mcp` (the `changelog` MCP server, which `development-full`'s `changelog-mcp` wrapper starts from its global tool path, `/home/developer/.dotnet/tools/changelog-mcp`) |
+| `Credfeto.Git.Mcp` | `credfeto-git-mcp` (the `git` MCP server, which `development-full`'s `git-mcp` wrapper starts from its global tool path, `/home/developer/.dotnet/tools/credfeto-git-mcp`); installed at the version in the `CREDFETO_GIT_MCP_VERSION` ARG, see below |
 
 `dotnet <name>` subcommand aliases (e.g. `dotnet-buildcheck`) are created via `ln -sf` so the
 dotnet CLI can locate tools invoked through subcommand syntax.
+
+## Pinned version
+
+Every package above installs its latest stable release except `Credfeto.Git.Mcp`. It has only
+pre-release builds so far, which `dotnet tool install` never picks without an explicit version, so
+the Dockerfile's `CREDFETO_GIT_MCP_VERSION` ARG pins one. That ARG is the only place the version is
+set: swap it for the first stable release (or remove the pin so the tool tracks the latest stable
+release like the rest) before the change that introduced it is merged.
 
 ## Cache-bust mechanism
 
@@ -52,7 +61,7 @@ dotnet CLI can locate tools invoked through subcommand syntax.
 the `.github/actions/nuget-latest-versions` composite action: it queries the NuGet flat-container
 API for the latest published version of every package this image installs (`Credfeto.Changelog.Cmd`,
 `Credfeto.DotNet.Code.Analysis.Overrides.Cmd`, `FunFair.BuildCheck`, `FunFair.BuildVersion`,
-`Credfeto.DotNet.Repo.Formatter`, `Credfeto.Build.Dotnet.Server`, `Credfeto.Build.Node.Server`, `Credfeto.ChangeLog.Mcp`) and hashes them together. The value only changes when one of
+`Credfeto.DotNet.Repo.Formatter`, `Credfeto.Build.Dotnet.Server`, `Credfeto.Build.Node.Server`, `Credfeto.ChangeLog.Mcp`, `Credfeto.Git.Mcp`) and hashes them together. The value only changes when one of
 those packages actually ships a new release, so an unchanged run is a full build-cache hit
 rather than a blind reinstall.
 
@@ -61,10 +70,11 @@ rather than a blind reinstall.
 The build-time sanity `RUN` step verifies everything this stage adds and fails the build (not
 the container at runtime) if anything is missing:
 
-- Each of the eight .NET tools above is present in `dotnet tool list -g`.
+- Each of the nine .NET tools above is present in `dotnet tool list -g`.
 - `/home/developer/.dotnet/tools/credfeto-build-dotnet` is executable and `credfeto-build-dotnet` resolves on `PATH`.
 - `/home/developer/.dotnet/tools/credfeto-build-node` is executable and `credfeto-build-node` resolves on `PATH`.
 - `/home/developer/.dotnet/tools/changelog-mcp` is executable and `changelog-mcp` resolves on `PATH`.
+- `/home/developer/.dotnet/tools/credfeto-git-mcp` is executable and `credfeto-git-mcp` resolves on `PATH`.
 - Each of the five `dotnet-*` subcommand aliases resolves on `PATH`.
 
 `development-full`'s own build-time sanity check still probes the full inherited toolchain
