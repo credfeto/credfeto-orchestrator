@@ -158,11 +158,9 @@ write_failing_run_body() {
 
     [ "${PRECHECK_STATUS}" = "pass" ]
     local args="${TEST_TMP}/podman_run_args"
-    # The pre-check launch itself happened, with the other secrets untouched.
+    # The pre-check launch itself happened.
     grep -qx -- "ORCHESTRATOR_PRECHECK=1" "${args}"
     grep -q -- ":/home/developer/.claude/CLAUDE.md:ro$" "${args}"
-    grep -q -- "^gh-enterprise-token-orchestrator-credfeto,type=mount,target=gh-token," "${args}"
-    grep -qx -- "secret create gh-enterprise-token-orchestrator-credfeto -" "${TEST_TMP}/podman_secret"
     # No kb secret is created for it or passed to it, and the token never reaches its argv.
     [ "$(grep -c 'kb-mcp-token' "${args}")" -eq 0 ]
     [ "$(grep -c 'KB_MCP_TOKEN' "${args}")" -eq 0 ]
@@ -186,6 +184,86 @@ write_failing_run_body() {
     grep -qx -- "ORCHESTRATOR_PRECHECK=1" "${args}"
     [ "$(grep -c -- "${CONTAINER_REPO_PATH}/.codegraph" "${args}")" -eq 0 ]
     [ ! -e "${SESSION_BASE_DIR}/codegraph" ]
+}
+
+# Everything an agent launch can hand its container: the owner's Claude token, GH_ENTERPRISE_TOKEN,
+# a live ssh-agent socket, ~/.database, GPG signing and the git identity.
+setup_full_agent_environment() {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator/tokens" "${HOME}"
+    printf 'claude-secret-token\n' > "${XDG_CONFIG_HOME}/orchestrator/tokens/credfeto"
+    chmod 600 "${XDG_CONFIG_HOME}/orchestrator/tokens/credfeto"
+    export GH_ENTERPRISE_TOKEN="gh-secret-token"
+    local sock="${TEST_TMP}/ssh-agent.sock"
+    python3 -c "import socket, sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])" "${sock}"
+    export SSH_AUTH_SOCK="${sock}"
+    printf 'db credentials\n' > "${HOME}/.database"
+    make_gpg_stubs
+    export GIT_SIGNING_KEY="ABCD1234"
+    export GIT_USER_NAME="Alice"
+    export GIT_USER_EMAIL="alice@example.com"
+}
+
+@test "the pre-check container gets no token secrets, signing, database or Claude session state, but keeps the ssh-agent" {
+    setup_precheck_repo
+    stub_precheck_podman
+    write_run_body \
+        'printf "\n-> orchestrator-precheck: running pre-commit-check\n"' \
+        'exit 0'
+    setup_full_agent_environment
+
+    prepare_precheck_section pr "PullRequest_7" "${HEAD_SHA}" PullRequest 7 2> /dev/null
+
+    [ "${PRECHECK_STATUS}" = "pass" ]
+    local args="${TEST_TMP}/podman_run_args" secrets="${TEST_TMP}/podman_secret"
+    grep -qx -- "ORCHESTRATOR_PRECHECK=1" "${args}"
+    grep -qx -- "${REPO_WORK_DIR}:${CONTAINER_REPO_PATH}:rw" "${args}"
+    grep -qx -- "GIT_USER_NAME=Alice" "${args}"
+    grep -qx -- "GIT_USER_EMAIL=alice@example.com" "${args}"
+    # pre-commit-check fetches origin over SSH, so the ssh-agent stays.
+    grep -qx -- "${SSH_AUTH_SOCK}:/tmp/ssh-agent.sock:ro" "${args}"
+    # No token secret is created or handed over, but any left from an earlier run is removed.
+    [ "$(grep -c 'claude-oauth-' "${args}")" -eq 0 ]
+    [ "$(grep -c 'gh-enterprise-token-' "${args}")" -eq 0 ]
+    [ "$(grep -c '^secret create' "${secrets}")" -eq 0 ]
+    grep -qx -- "secret rm claude-oauth-orchestrator-credfeto" "${secrets}"
+    grep -qx -- "secret rm gh-enterprise-token-orchestrator-credfeto" "${secrets}"
+    [ "$(grep -c 'claude-secret-token\|gh-secret-token' "${args}")" -eq 0 ]
+    # No signing, database, Claude session state, transcripts or orchestrator cache.
+    [ "$(grep -c 'GIT_SIGNING_KEY' "${args}")" -eq 0 ]
+    [ "$(grep -c ':/home/developer/.gnupg' "${args}")" -eq 0 ]
+    [ "$(grep -c ':/home/developer/.database' "${args}")" -eq 0 ]
+    [ "$(grep -cE ':/home/developer/\.claude/(sessions|session-env|plans|cache|backups|projects):rw$' "${args}")" -eq 0 ]
+    [ "$(grep -c ':/home/developer/.cache/orchestrator/global' "${args}")" -eq 0 ]
+    [ ! -e "${ORCHESTRATOR_CACHE_DIR}/global" ]
+}
+
+@test "the agent launch still gets the token secrets, signing, database and Claude session state" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    stub_precheck_podman
+    write_run_body \
+        'printf "{\"session_id\":\"12345678-1234-1234-1234-123456789abc\",\"result\":\"done\"}\n"' \
+        'exit 0'
+    setup_full_agent_environment
+
+    invoke_claude "prompt" "PullRequest" "7" "# mock CLAUDE.md" 2> /dev/null
+
+    local args="${TEST_TMP}/podman_run_args" secrets="${TEST_TMP}/podman_secret"
+    [ "$(grep -c 'ORCHESTRATOR_PRECHECK' "${args}")" -eq 0 ]
+    grep -qx -- "${SSH_AUTH_SOCK}:/tmp/ssh-agent.sock:ro" "${args}"
+    grep -qx -- "claude-oauth-orchestrator-credfeto,type=env,target=CLAUDE_CODE_OAUTH_TOKEN" "${args}"
+    grep -q -- "^gh-enterprise-token-orchestrator-credfeto,type=mount,target=gh-token," "${args}"
+    grep -qx -- "secret create claude-oauth-orchestrator-credfeto -" "${secrets}"
+    grep -qx -- "secret create gh-enterprise-token-orchestrator-credfeto -" "${secrets}"
+    grep -qx -- "GIT_SIGNING_KEY=ABCD1234" "${args}"
+    grep -q -- ":/home/developer/.gnupg:rw$" "${args}"
+    grep -q -- ":/home/developer/.gnupg/S.gpg-agent:ro$" "${args}"
+    grep -qx -- "${HOME}/.database:/home/developer/.database:ro" "${args}"
+    local d
+    for d in sessions session-env plans cache backups; do
+        grep -qx -- "${CLAUDE_STATE_DIR}/${d}:/home/developer/.claude/${d}:rw" "${args}"
+    done
+    grep -q -- ":/home/developer/.claude/projects:rw$" "${args}"
+    grep -qx -- "${ORCHESTRATOR_CACHE_DIR}/global:/home/developer/.cache/orchestrator/global:rw" "${args}"
 }
 
 @test "the pre-check runs with the PR head checked out, and fixer changes are reset afterwards (#1785)" {
