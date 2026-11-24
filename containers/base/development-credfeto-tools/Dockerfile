@@ -19,7 +19,7 @@ ARG CREDFETO_FUNFAIR_TOOLS_CACHE_BUST
 # an explicit version. Swap this for the first stable release (or remove the
 # pin so it tracks the latest stable like the rest) before the change that
 # introduced it is merged.
-ARG CREDFETO_GIT_MCP_VERSION=0.0.3.72-pull-7-merge
+ARG CREDFETO_GIT_MCP_VERSION=0.0.3.75-main
 
 # Bakes the same hash in as an inspectable label so check-credfeto-tools-updates.yml
 # can read back "what this published image was built against" without re-running
