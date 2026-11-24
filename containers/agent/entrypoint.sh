@@ -50,10 +50,14 @@ info "  development-agent:   ${IMAGE_SHA_DEVELOPMENT_AGENT:-unknown}"
 # line entirely rather than printing a confusing "unknown".
 [ -n "${WORK_ITEM_URL:-}" ] && info "Working on: ${WORK_ITEM_URL}"
 
-[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] || die "CLAUDE_CODE_OAUTH_TOKEN is required but not set"
+# The pre-commit pre-check (ORCHESTRATOR_PRECHECK=1, below) runs no model and makes no commit,
+# so oneshot gives it no Claude token, signing key or GPG agent, and nothing here may need them.
+is_precheck() { [ "${ORCHESTRATOR_PRECHECK:-}" = "1" ]; }
+
+is_precheck || [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] || die "CLAUDE_CODE_OAUTH_TOKEN is required but not set"
 [ -n "${GIT_USER_NAME:-}" ]           || die "GIT_USER_NAME is required but not set"
 [ -n "${GIT_USER_EMAIL:-}" ]          || die "GIT_USER_EMAIL is required but not set"
-[ -n "${GIT_SIGNING_KEY:-}" ]         || die "GIT_SIGNING_KEY is required but not set"
+is_precheck || [ -n "${GIT_SIGNING_KEY:-}" ] || die "GIT_SIGNING_KEY is required but not set"
 
 # Check that the pre-commit rules checkout at /workspace/rules is up-to-date.
 # Compares the SHA recorded in /workspace/rules/.env against the published SHA.
@@ -483,7 +487,7 @@ exclude_codegraph_from_git() {
         || warn "Failed to add .codegraph/ to ${exclude_file}, .codegraph/ is not excluded from git"
 }
 
-verify_gpg_signing
+is_precheck || verify_gpg_signing
 ensure_github_known_hosts
 verify_ssh_signing
 verify_repo_ssh_remotes
@@ -495,10 +499,11 @@ verify_hooks_fresh
 
 git config --global user.name      "${GIT_USER_NAME}"
 git config --global user.email     "${GIT_USER_EMAIL}"
-git config --global user.signingkey "${GIT_SIGNING_KEY}"
-git config --global commit.gpgsign  true
-
-seed_orchestrator_cache
+if ! is_precheck; then
+    git config --global user.signingkey "${GIT_SIGNING_KEY}"
+    git config --global commit.gpgsign  true
+    seed_orchestrator_cache
+fi
 
 # Claude Code requires ~/.claude.json to exist; without it every invocation prints
 # a "configuration file not found" warning on stderr before backing up and continuing.
@@ -549,10 +554,11 @@ exclude_codegraph_from_git
 
 # Pre-check mode (#1785): oneshot's run_precommit_precheck (lib/podman) launches this image
 # with ORCHESTRATOR_PRECHECK=1 to run pre-commit-check on the checked-out head before an agent
-# session, with the same mounts, environment and pre-flight checks as the agent itself, but no
-# model. The marker line tells oneshot the check really started: an older image without this
-# mode runs the claude --version oneshot passes as its arguments instead, and prints no marker.
-if [ "${ORCHESTRATOR_PRECHECK:-}" = "1" ]; then
+# session, with the agent's repository mounts and pre-flight checks but no model, Claude token,
+# commit signing or orchestrator cache (#1858). The marker line tells oneshot the check really
+# started: an older image without this mode runs the claude --version oneshot passes as its
+# arguments instead, and prints no marker.
+if is_precheck; then
     cd "${WORKSPACE_REPO_DIR:-/workspace/repo}" || die "Cannot enter ${WORKSPACE_REPO_DIR:-/workspace/repo} to run pre-commit-check"
     info "orchestrator-precheck: running pre-commit-check"
     exec pre-commit-check

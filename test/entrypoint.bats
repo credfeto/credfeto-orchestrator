@@ -218,6 +218,46 @@ STUBEOF
     [ ! -e "${TEST_TMP}/claude_ran" ]
 }
 
+@test "entrypoint runs pre-commit-check with no Claude token, signing key, GPG or gh when ORCHESTRATOR_PRECHECK=1" {
+    setup_entrypoint_stubs
+    local repo="${TEST_TMP}/precheck-repo"
+    mkdir -p "${repo}"
+    make_stub pre-commit-check 'exit 0'
+    # shellcheck disable=SC2016  # the stub bodies expand at stub run time
+    make_stub_multiline gpg 'touch "${TEST_TMP}/gpg_ran"' 'exit 1'
+    # shellcheck disable=SC2016
+    make_stub_multiline gpg-connect-agent 'touch "${TEST_TMP}/gpg_ran"' 'exit 1'
+    # shellcheck disable=SC2016
+    make_stub_multiline gh 'touch "${TEST_TMP}/gh_ran"' 'exit 1'
+
+    run env -u CLAUDE_CODE_OAUTH_TOKEN -u GIT_SIGNING_KEY ORCHESTRATOR_PRECHECK=1 \
+        WORKSPACE_REPO_DIR="${repo}" GIT_USER_NAME="Alice" GIT_USER_EMAIL="alice@example.com" \
+        bash "${ENTRYPOINT}" --version
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"orchestrator-precheck: running pre-commit-check"* ]]
+    [ ! -e "${TEST_TMP}/gpg_ran" ]
+    [ ! -e "${TEST_TMP}/gh_ran" ]
+    grep -qx 'user.email' "${TEST_TMP}/git_args"
+    [ "$(grep -cx 'user.signingkey' "${TEST_TMP}/git_args")" -eq 0 ]
+    [ "$(grep -cx 'commit.gpgsign' "${TEST_TMP}/git_args")" -eq 0 ]
+}
+
+@test "entrypoint still requires CLAUDE_CODE_OAUTH_TOKEN and GIT_SIGNING_KEY when ORCHESTRATOR_PRECHECK is not 1" {
+    setup_entrypoint_stubs
+
+    run env -u CLAUDE_CODE_OAUTH_TOKEN ORCHESTRATOR_PRECHECK=0 \
+        GIT_USER_NAME="Alice" GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"CLAUDE_CODE_OAUTH_TOKEN is required"* ]]
+
+    run env -u GIT_SIGNING_KEY ORCHESTRATOR_PRECHECK=0 CLAUDE_CODE_OAUTH_TOKEN=token \
+        GIT_USER_NAME="Alice" GIT_USER_EMAIL="alice@example.com" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"GIT_SIGNING_KEY is required"* ]]
+}
+
 @test "entrypoint exports TMPDIR, TMP, TEMP, XDG_RUNTIME_DIR, and CLAUDE_CODE_TMPDIR to /workspace/tmp before invoking claude (#1351)" {
     setup_entrypoint_stubs
     cat > "${STUB_BIN}/claude" << 'STUBEOF'
