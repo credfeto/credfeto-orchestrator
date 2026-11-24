@@ -8,9 +8,10 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # ---- Build-time arguments ----------------------------------------------------
 # Resolved by build-development-credfeto-tools.yml via the nuget-latest-versions
-# composite action — a hash of the latest published version of every tool this
-# image installs, so the layers below only re-run when one of them actually
-# ships a new release (not on a blind daily schedule).
+# composite action — a hash of the latest stable (non-pre-release) version of
+# every tool this image installs, so the layers below only re-run when one of
+# them actually ships a new stable release (not on a blind daily schedule, and
+# not on a pre-release push).
 ARG CREDFETO_FUNFAIR_TOOLS_CACHE_BUST
 
 # Bakes the same hash in as an inspectable label so check-credfeto-tools-updates.yml

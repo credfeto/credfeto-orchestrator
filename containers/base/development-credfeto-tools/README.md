@@ -50,11 +50,14 @@ dotnet CLI can locate tools invoked through subcommand syntax.
 
 `CREDFETO_FUNFAIR_TOOLS_CACHE_BUST` is resolved by `build-development-credfeto-tools.yml` via
 the `.github/actions/nuget-latest-versions` composite action: it queries the NuGet flat-container
-API for the latest published version of every package this image installs (`Credfeto.Changelog.Cmd`,
+API for the latest stable (non-pre-release) version of every package this image installs (`Credfeto.Changelog.Cmd`,
 `Credfeto.DotNet.Code.Analysis.Overrides.Cmd`, `FunFair.BuildCheck`, `FunFair.BuildVersion`,
-`Credfeto.DotNet.Repo.Formatter`, `Credfeto.Build.Dotnet.Server`, `Credfeto.Build.Node.Server`, `Credfeto.ChangeLog.Mcp`) and hashes them together. The value only changes when one of
-those packages actually ships a new release, so an unchanged run is a full build-cache hit
-rather than a blind reinstall.
+`Credfeto.DotNet.Repo.Formatter`, `Credfeto.Build.Dotnet.Server`, `Credfeto.Build.Node.Server`, `Credfeto.ChangeLog.Mcp`) and hashes them together. Pre-release versions
+(any version with a `-` suffix) are ignored, because `dotnet tool install -g` without `--version`
+only installs stable releases; a package with no stable release is hashed as `none` and logged
+as a warning instead of failing the build. The value only changes when one of those packages
+actually ships a new stable release, so an unchanged run, or one where only a pre-release was
+pushed, is a full build-cache hit rather than a blind reinstall.
 
 ## Self-checks
 
