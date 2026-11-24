@@ -31,4 +31,29 @@ public interface IGitHubReader
         bool includeBlocked,
         CancellationToken cancellationToken
     );
+
+    // The login the GitHub token authenticates as, as gh api user prints it; empty when GitHub gives none
+    ValueTask<string> CurrentLoginAsync(CancellationToken cancellationToken);
+
+    // Every open pull request with its author, the issues it closes and its head branch, newest first as gh pr list
+    // orders them
+    ValueTask<IReadOnlyList<OpenPullRequestReferences>> OpenPullRequestsWithClosingIssuesAsync(
+        string repository,
+        CancellationToken cancellationToken
+    );
+
+    // The authors and co-authors of every commit on the pull request
+    ValueTask<IReadOnlyList<PullRequestCommit>> PullRequestCommitsAsync(
+        string repository,
+        int pullRequest,
+        CancellationToken cancellationToken
+    );
+
+    // How many of the base branch's commits the head branch lacks, counted from their merge base
+    ValueTask<int> BranchBehindByAsync(
+        string repository,
+        string baseBranch,
+        string headBranch,
+        CancellationToken cancellationToken
+    );
 }

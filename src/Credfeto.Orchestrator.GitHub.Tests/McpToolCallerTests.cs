@@ -15,10 +15,10 @@ public sealed class McpToolCallerTests : TestBase
 {
     private const string TOKEN = "tok-123";
 
-    private static readonly Dictionary<string, string> PrListArguments = new(StringComparer.Ordinal)
+    private static readonly Dictionary<string, JsonElement> PrListArguments = new(StringComparer.Ordinal)
     {
-        ["repo"] = "org/repo",
-        ["head"] = "fix/7-typo",
+        ["repo"] = McpArgument.Of("org/repo"),
+        ["head"] = McpArgument.Of("fix/7-typo"),
     };
 
     [Fact]
@@ -171,6 +171,42 @@ public sealed class McpToolCallerTests : TestBase
 
         Assert.Equal(expected: "no GitHub token: set GH_ENTERPRISE_TOKEN or GH_TOKEN", actual: exception.Message);
         Assert.Empty(server.Requests);
+    }
+
+    [Fact]
+    public async Task FlagNumberAndListArgumentsAreSentAsJsonValuesAsync()
+    {
+        using FakeMcpServerHandler server = new(id => Result(id: id, content: TextContent("{\"commits\":[]}")));
+        using HttpClient httpClient = new(handler: server, disposeHandler: false);
+        McpToolCaller caller = new(httpClient: httpClient, settings: static () =>
+            new(endpoint: new("https://mcp.example.test/mcp"), token: TOKEN)
+        );
+
+        await caller.CallAsync(
+            tool: "pr_view",
+            arguments: new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+            {
+                ["pr"] = McpArgument.Of(12),
+                ["closingIssues"] = McpArgument.Of(true),
+                ["fields"] = McpArgument.Of(["commits", "labels"]),
+            },
+            cancellationToken: this.CancellationToken()
+        );
+
+        RecordedRequest call = Assert.Single(server.Requests, request =>
+            request.Body.Contains(value: "\"tools/call\"", comparisonType: StringComparison.Ordinal)
+        );
+        using JsonDocument body = JsonDocument.Parse(call.Body);
+
+        Assert.Equal(
+            expected: ["closingIssues=true", "fields=[\"commits\",\"labels\"]", "pr=12"],
+            actual: body.RootElement.GetProperty("params")
+                .GetProperty("arguments")
+                .EnumerateObject()
+                .Select(argument => argument.Name + "=" + argument.Value.GetRawText())
+                .Order(StringComparer.Ordinal),
+            comparer: StringComparer.Ordinal
+        );
     }
 
     [Fact]

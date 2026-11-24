@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 
 namespace Credfeto.Orchestrator.Commands;
@@ -7,6 +8,10 @@ namespace Credfeto.Orchestrator.Commands;
 // github open-prs|open-pr-count --repo <owner/repo> --head <branch>
 // github branch-requires-status-checks --repo <owner/repo> --branch <branch>
 // github own-open-prs --repo <owner/repo> --me <login> --creator <login> [--include-blocked true|false]
+// github whoami
+// github open-prs-closing-issues --repo <owner/repo>
+// github pr-commit-authors --repo <owner/repo> --pr <number>
+// github branch-behind-by --repo <owner/repo> --base <branch> --head <branch>
 public static class GitHubCommandParser
 {
     public const string Verb = "github";
@@ -17,14 +22,18 @@ public static class GitHubCommandParser
     private const string ME = "--me";
     private const string CREATOR = "--creator";
     private const string INCLUDE_BLOCKED = "--include-blocked";
+    private const string PR = "--pr";
+    private const string BASE = "--base";
 
-    private const string READS = "open-prs, open-pr-count, branch-requires-status-checks or own-open-prs";
+    private const string READS =
+        "open-prs, open-pr-count, branch-requires-status-checks, own-open-prs, whoami, open-prs-closing-issues, "
+        + "pr-commit-authors or branch-behind-by";
 
     public static GitHubCommand? Parse(IReadOnlyList<string> args, out string error)
     {
         if (args.Count < 2 || !StringComparer.Ordinal.Equals(x: args[0], y: Verb))
         {
-            error = "expected: github open-prs|open-pr-count|branch-requires-status-checks|own-open-prs [options]";
+            error = "expected: github <read> [options], where <read> is " + READS;
 
             return null;
         }
@@ -51,6 +60,10 @@ public static class GitHubCommandParser
             "open-pr-count" => GitHubRead.OPEN_PULL_REQUEST_COUNT,
             "branch-requires-status-checks" => GitHubRead.BRANCH_REQUIRES_STATUS_CHECKS,
             "own-open-prs" => GitHubRead.OWN_OPEN_PULL_REQUESTS,
+            "whoami" => GitHubRead.CURRENT_LOGIN,
+            "open-prs-closing-issues" => GitHubRead.OPEN_PULL_REQUESTS_WITH_CLOSING_ISSUES,
+            "pr-commit-authors" => GitHubRead.PULL_REQUEST_COMMIT_AUTHORS,
+            "branch-behind-by" => GitHubRead.BRANCH_BEHIND_BY,
             _ => null,
         };
     }
@@ -61,6 +74,10 @@ public static class GitHubCommandParser
         {
             GitHubRead.BRANCH_REQUIRES_STATUS_CHECKS => [REPO, BRANCH],
             GitHubRead.OWN_OPEN_PULL_REQUESTS => [REPO, ME, CREATOR, INCLUDE_BLOCKED],
+            GitHubRead.CURRENT_LOGIN => [],
+            GitHubRead.OPEN_PULL_REQUESTS_WITH_CLOSING_ISSUES => [REPO],
+            GitHubRead.PULL_REQUEST_COMMIT_AUTHORS => [REPO, PR],
+            GitHubRead.BRANCH_BEHIND_BY => [REPO, BASE, HEAD],
             _ => [REPO, HEAD],
         };
     }
@@ -102,6 +119,13 @@ public static class GitHubCommandParser
 
     private static GitHubCommand? Complete(GitHubRead read, Dictionary<string, string> options, out string error)
     {
+        if (read == GitHubRead.CURRENT_LOGIN)
+        {
+            error = string.Empty;
+
+            return new(Read: read, Repository: string.Empty, Name: string.Empty);
+        }
+
         string? repository = Required(options: options, option: REPO, error: out error);
 
         if (repository is null)
@@ -119,6 +143,17 @@ public static class GitHubCommandParser
                 error: out error
             ),
             GitHubRead.OWN_OPEN_PULL_REQUESTS => Own(repository: repository, options: options, error: out error),
+            GitHubRead.OPEN_PULL_REQUESTS_WITH_CLOSING_ISSUES => new(
+                Read: read,
+                Repository: repository,
+                Name: string.Empty
+            ),
+            GitHubRead.PULL_REQUEST_COMMIT_AUTHORS => Commits(
+                repository: repository,
+                options: options,
+                error: out error
+            ),
+            GitHubRead.BRANCH_BEHIND_BY => Behind(repository: repository, options: options, error: out error),
             _ => Named(read: read, repository: repository, options: options, nameOption: HEAD, error: out error),
         };
     }
@@ -163,6 +198,47 @@ public static class GitHubCommandParser
                 Creator: creator,
                 IncludeBlocked: includeBlocked.Value
             );
+    }
+
+    private static GitHubCommand? Commits(string repository, Dictionary<string, string> options, out string error)
+    {
+        string? value = Required(options: options, option: PR, error: out error);
+
+        if (value is null)
+        {
+            return null;
+        }
+
+        // Digits only, as gh pr view takes a pull request number: no sign, spaces or leading zeros
+        if (value.Length > 9 || value[0] == '0' || !value.All(char.IsAsciiDigit))
+        {
+            error = $"{PR} must be a pull request number";
+
+            return null;
+        }
+
+        return new(
+            Read: GitHubRead.PULL_REQUEST_COMMIT_AUTHORS,
+            Repository: repository,
+            Name: string.Empty,
+            PullRequest: int.Parse(s: value, provider: CultureInfo.InvariantCulture)
+        );
+    }
+
+    private static GitHubCommand? Behind(string repository, Dictionary<string, string> options, out string error)
+    {
+        string? baseBranch = Required(options: options, option: BASE, error: out error);
+
+        if (baseBranch is null)
+        {
+            return null;
+        }
+
+        string? head = Required(options: options, option: HEAD, error: out error);
+
+        return head is null
+            ? null
+            : new(Read: GitHubRead.BRANCH_BEHIND_BY, Repository: repository, Name: head, Base: baseBranch);
     }
 
     // Matches list_bot_created_open_prs' second argument, which jq reads as JSON: only true and false are accepted

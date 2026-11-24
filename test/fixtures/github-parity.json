@@ -961,5 +961,610 @@
       "mcpError": "pull request list failed",
       "numbers": null
     }
+  ],
+  "currentLogin": [
+    {
+      "name": "the login the token authenticates as",
+      "gh": {
+        "login": "bot-user",
+        "id": 1,
+        "type": "User",
+        "site_admin": false
+      },
+      "mcp": {
+        "login": "bot-user",
+        "host": "workflow-mcp.example.test",
+        "version": "2022-11-28"
+      },
+      "expected": "bot-user"
+    },
+    {
+      "name": "the login keeps its case",
+      "gh": {
+        "login": "Steward-Bot",
+        "id": 2,
+        "type": "User",
+        "site_admin": false
+      },
+      "mcp": {
+        "login": "Steward-Bot",
+        "host": "",
+        "version": "2022-11-28"
+      },
+      "expected": "Steward-Bot"
+    },
+    {
+      "name": "an empty login is printed empty, for resolve_gh_me to refuse",
+      "gh": {
+        "login": "",
+        "id": 3,
+        "type": "User",
+        "site_admin": false
+      },
+      "mcp": {
+        "login": "",
+        "host": "",
+        "version": ""
+      },
+      "expected": ""
+    },
+    {
+      "name": "the login cannot be read",
+      "gh": null,
+      "mcpError": "the GitHub token was refused",
+      "expected": null
+    }
+  ],
+  "openPullRequestsWithClosingIssues": [
+    {
+      "name": "no open pull request in the repository",
+      "repo": "org/repo",
+      "gh": [],
+      "mcp": {
+        "repository": "org/repo",
+        "pullRequests": []
+      },
+      "expected": "[]"
+    },
+    {
+      "name": "each pull request's author, closing issues and head branch, newest first",
+      "repo": "org/repo",
+      "gh": [
+        {
+          "author": {
+            "id": "X",
+            "is_bot": true,
+            "login": "app/dependabot",
+            "name": ""
+          },
+          "closingIssuesReferences": [],
+          "headRefName": "depends/update-x",
+          "number": 40
+        },
+        {
+          "author": {
+            "id": "X",
+            "is_bot": false,
+            "login": "bot-user",
+            "name": ""
+          },
+          "closingIssuesReferences": [
+            {
+              "id": "I",
+              "number": 12,
+              "repository": {
+                "id": "R",
+                "name": "repo",
+                "owner": {
+                  "id": "O",
+                  "login": "org"
+                }
+              },
+              "url": "https://github.com/org/repo/issues/12"
+            }
+          ],
+          "headRefName": "feat/12-thing",
+          "number": 31
+        },
+        {
+          "author": {
+            "id": "X",
+            "is_bot": true,
+            "login": "app/prpixie",
+            "name": ""
+          },
+          "closingIssuesReferences": [
+            {
+              "id": "I",
+              "number": 7,
+              "repository": {
+                "id": "R",
+                "name": "repo",
+                "owner": {
+                  "id": "O",
+                  "login": "org"
+                }
+              },
+              "url": "https://github.com/org/repo/issues/7"
+            },
+            {
+              "id": "I",
+              "number": 8,
+              "repository": {
+                "id": "R",
+                "name": "repo",
+                "owner": {
+                  "id": "O",
+                  "login": "org"
+                }
+              },
+              "url": "https://github.com/org/repo/issues/8"
+            }
+          ],
+          "headRefName": "fix/7-typo",
+          "number": 20
+        },
+        {
+          "author": {
+            "id": "X",
+            "is_bot": false,
+            "login": "Someone",
+            "name": ""
+          },
+          "closingIssuesReferences": [],
+          "headRefName": "someones-branch",
+          "number": 5
+        }
+      ],
+      "mcp": {
+        "repository": "org/repo",
+        "pullRequests": [
+          {
+            "number": 5,
+            "head": "someones-branch",
+            "base": "main",
+            "author": "Someone",
+            "state": "ready",
+            "flags": [],
+            "url": "https://github.com/org/repo/pull/5",
+            "title": "A change",
+            "labels": [],
+            "closingIssues": []
+          },
+          {
+            "number": 20,
+            "head": "fix/7-typo",
+            "base": "main",
+            "author": "app/prpixie",
+            "state": "ready",
+            "flags": [],
+            "url": "https://github.com/org/repo/pull/20",
+            "title": "A change",
+            "labels": [],
+            "closingIssues": [
+              {
+                "repository": "org/repo",
+                "number": 7
+              },
+              {
+                "repository": "org/repo",
+                "number": 8
+              }
+            ]
+          },
+          {
+            "number": 31,
+            "head": "feat/12-thing",
+            "base": "main",
+            "author": "bot-user",
+            "state": "ready",
+            "flags": [],
+            "url": "https://github.com/org/repo/pull/31",
+            "title": "A change",
+            "labels": [],
+            "closingIssues": [
+              {
+                "repository": "org/repo",
+                "number": 12
+              }
+            ]
+          },
+          {
+            "number": 40,
+            "head": "depends/update-x",
+            "base": "main",
+            "author": "app/dependabot",
+            "state": "ready",
+            "flags": [],
+            "url": "https://github.com/org/repo/pull/40",
+            "title": "A change",
+            "labels": [],
+            "closingIssues": []
+          }
+        ]
+      },
+      "expected": "[{\"number\":40,\"author\":{\"login\":\"app/dependabot\"},\"closingIssuesReferences\":[],\"headRefName\":\"depends/update-x\"},{\"number\":31,\"author\":{\"login\":\"bot-user\"},\"closingIssuesReferences\":[{\"number\":12}],\"headRefName\":\"feat/12-thing\"},{\"number\":20,\"author\":{\"login\":\"app/prpixie\"},\"closingIssuesReferences\":[{\"number\":7},{\"number\":8}],\"headRefName\":\"fix/7-typo\"},{\"number\":5,\"author\":{\"login\":\"Someone\"},\"closingIssuesReferences\":[],\"headRefName\":\"someones-branch\"}]"
+    },
+    {
+      "name": "an issue closed in another repository keeps its number",
+      "repo": "org/repo",
+      "gh": [
+        {
+          "author": {
+            "id": "X",
+            "is_bot": false,
+            "login": "bot-user",
+            "name": ""
+          },
+          "closingIssuesReferences": [
+            {
+              "id": "I",
+              "number": 3,
+              "repository": {
+                "id": "R",
+                "name": "other",
+                "owner": {
+                  "id": "O",
+                  "login": "org"
+                }
+              },
+              "url": "https://github.com/org/other/issues/3"
+            }
+          ],
+          "headRefName": "feat/3-shared",
+          "number": 9
+        }
+      ],
+      "mcp": {
+        "repository": "org/repo",
+        "pullRequests": [
+          {
+            "number": 9,
+            "head": "feat/3-shared",
+            "base": "main",
+            "author": "bot-user",
+            "state": "ready",
+            "flags": [],
+            "url": "https://github.com/org/repo/pull/9",
+            "title": "A change",
+            "labels": [],
+            "closingIssues": [
+              {
+                "repository": "org/other",
+                "number": 3
+              }
+            ]
+          }
+        ]
+      },
+      "expected": "[{\"number\":9,\"author\":{\"login\":\"bot-user\"},\"closingIssuesReferences\":[{\"number\":3}],\"headRefName\":\"feat/3-shared\"}]"
+    },
+    {
+      "name": "a pull request GitHub gives no author has an empty login",
+      "repo": "org/repo",
+      "gh": [
+        {
+          "author": null,
+          "closingIssuesReferences": [
+            {
+              "id": "I",
+              "number": 2,
+              "repository": {
+                "id": "R",
+                "name": "repo",
+                "owner": {
+                  "id": "O",
+                  "login": "org"
+                }
+              },
+              "url": "https://github.com/org/repo/issues/2"
+            }
+          ],
+          "headRefName": "fix/2-ghost",
+          "number": 14
+        }
+      ],
+      "mcp": {
+        "repository": "org/repo",
+        "pullRequests": [
+          {
+            "number": 14,
+            "head": "fix/2-ghost",
+            "base": "main",
+            "author": "-",
+            "state": "ready",
+            "flags": [],
+            "url": "https://github.com/org/repo/pull/14",
+            "title": "A change",
+            "labels": [],
+            "closingIssues": [
+              {
+                "repository": "org/repo",
+                "number": 2
+              }
+            ]
+          }
+        ]
+      },
+      "expected": "[{\"number\":14,\"author\":{\"login\":\"\"},\"closingIssuesReferences\":[{\"number\":2}],\"headRefName\":\"fix/2-ghost\"}]"
+    },
+    {
+      "name": "the list cannot be read",
+      "repo": "org/missing",
+      "gh": null,
+      "mcpError": "the repository org/missing was not found, or the caller cannot see it",
+      "expected": null
+    }
+  ],
+  "pullRequestCommitAuthors": [
+    {
+      "name": "no commit on the pull request",
+      "repo": "org/repo",
+      "pr": "7",
+      "gh": {
+        "commits": []
+      },
+      "mcp": {
+        "pr": "org/repo#7",
+        "commits": []
+      },
+      "expected": "{\"commits\":[]}"
+    },
+    {
+      "name": "each commit's author and co-authors",
+      "repo": "org/repo",
+      "pr": "7",
+      "gh": {
+        "commits": [
+          {
+            "authoredDate": "2026-11-20T10:00:00Z",
+            "authors": [
+              {
+                "email": "bot@example.test",
+                "id": "U",
+                "login": "bot-user",
+                "name": "N"
+              }
+            ],
+            "committedDate": "2026-11-20T10:00:00Z",
+            "messageBody": "",
+            "messageHeadline": "A change",
+            "oid": "a1"
+          },
+          {
+            "authoredDate": "2026-11-20T10:00:00Z",
+            "authors": [
+              {
+                "email": "someone@example.test",
+                "id": "U",
+                "login": "someone",
+                "name": "N"
+              },
+              {
+                "email": "Bot@Example.test",
+                "id": "U",
+                "login": "bot-user",
+                "name": "N"
+              }
+            ],
+            "committedDate": "2026-11-20T10:00:00Z",
+            "messageBody": "",
+            "messageHeadline": "A change",
+            "oid": "b2"
+          }
+        ]
+      },
+      "mcp": {
+        "pr": "org/repo#7",
+        "commits": [
+          {
+            "oid": "a1",
+            "authors": [
+              {
+                "login": "bot-user",
+                "email": "bot@example.test",
+                "name": "N"
+              }
+            ]
+          },
+          {
+            "oid": "b2",
+            "authors": [
+              {
+                "login": "someone",
+                "email": "someone@example.test",
+                "name": "N"
+              },
+              {
+                "login": "bot-user",
+                "email": "Bot@Example.test",
+                "name": "N"
+              }
+            ]
+          }
+        ]
+      },
+      "expected": "{\"commits\":[{\"authors\":[{\"login\":\"bot-user\",\"email\":\"bot@example.test\"}]},{\"authors\":[{\"login\":\"someone\",\"email\":\"someone@example.test\"},{\"login\":\"bot-user\",\"email\":\"Bot@Example.test\"}]}]}"
+    },
+    {
+      "name": "an author GitHub has not linked to an account has an empty login",
+      "repo": "org/repo",
+      "pr": "12",
+      "gh": {
+        "commits": [
+          {
+            "authoredDate": "2026-11-20T10:00:00Z",
+            "authors": [
+              {
+                "email": "bot@example.test",
+                "id": "U",
+                "login": "",
+                "name": "N"
+              }
+            ],
+            "committedDate": "2026-11-20T10:00:00Z",
+            "messageBody": "",
+            "messageHeadline": "A change",
+            "oid": "c3"
+          },
+          {
+            "authoredDate": "2026-11-20T10:00:00Z",
+            "authors": [
+              {
+                "email": "",
+                "id": "U",
+                "login": "someone",
+                "name": "N"
+              }
+            ],
+            "committedDate": "2026-11-20T10:00:00Z",
+            "messageBody": "",
+            "messageHeadline": "A change",
+            "oid": "d4"
+          }
+        ]
+      },
+      "mcp": {
+        "pr": "org/repo#12",
+        "commits": [
+          {
+            "oid": "c3",
+            "authors": [
+              {
+                "login": "",
+                "email": "bot@example.test",
+                "name": "N"
+              }
+            ]
+          },
+          {
+            "oid": "d4",
+            "authors": [
+              {
+                "login": "someone",
+                "email": "",
+                "name": "N"
+              }
+            ]
+          }
+        ]
+      },
+      "expected": "{\"commits\":[{\"authors\":[{\"login\":\"\",\"email\":\"bot@example.test\"}]},{\"authors\":[{\"login\":\"someone\",\"email\":\"\"}]}]}"
+    },
+    {
+      "name": "the commits cannot be read",
+      "repo": "org/repo",
+      "pr": "99",
+      "gh": null,
+      "mcpError": "pull request 99 was not found in org/repo",
+      "expected": null
+    }
+  ],
+  "branchBehindBy": [
+    {
+      "name": "the head is behind its base",
+      "repo": "org/repo",
+      "base": "main",
+      "head": "fix/7-typo",
+      "gh": {
+        "url": "https://api.github.com/repos/org/repo/compare/x",
+        "status": "behind",
+        "ahead_by": 0,
+        "behind_by": 3,
+        "total_commits": 0,
+        "commits": [],
+        "files": []
+      },
+      "mcp": {
+        "repo": "org/repo",
+        "base": "main",
+        "head": "fix/7-typo",
+        "status": "behind",
+        "aheadBy": 0,
+        "behindBy": 3
+      },
+      "expected": "3"
+    },
+    {
+      "name": "the head is only ahead",
+      "repo": "org/repo",
+      "base": "main",
+      "head": "feat/9-thing",
+      "gh": {
+        "url": "https://api.github.com/repos/org/repo/compare/x",
+        "status": "ahead",
+        "ahead_by": 2,
+        "behind_by": 0,
+        "total_commits": 2,
+        "commits": [],
+        "files": []
+      },
+      "mcp": {
+        "repo": "org/repo",
+        "base": "main",
+        "head": "feat/9-thing",
+        "status": "ahead",
+        "aheadBy": 2,
+        "behindBy": 0
+      },
+      "expected": "0"
+    },
+    {
+      "name": "the branches have diverged",
+      "repo": "org/repo",
+      "base": "release/1.0",
+      "head": "fix/5-patch",
+      "gh": {
+        "url": "https://api.github.com/repos/org/repo/compare/x",
+        "status": "diverged",
+        "ahead_by": 4,
+        "behind_by": 17,
+        "total_commits": 4,
+        "commits": [],
+        "files": []
+      },
+      "mcp": {
+        "repo": "org/repo",
+        "base": "release/1.0",
+        "head": "fix/5-patch",
+        "status": "diverged",
+        "aheadBy": 4,
+        "behindBy": 17
+      },
+      "expected": "17"
+    },
+    {
+      "name": "the branches are identical",
+      "repo": "org/repo",
+      "base": "main",
+      "head": "chore/1-noop",
+      "gh": {
+        "url": "https://api.github.com/repos/org/repo/compare/x",
+        "status": "identical",
+        "ahead_by": 0,
+        "behind_by": 0,
+        "total_commits": 0,
+        "commits": [],
+        "files": []
+      },
+      "mcp": {
+        "repo": "org/repo",
+        "base": "main",
+        "head": "chore/1-noop",
+        "status": "identical",
+        "aheadBy": 0,
+        "behindBy": 0
+      },
+      "expected": "0"
+    },
+    {
+      "name": "a branch cannot be found",
+      "repo": "org/repo",
+      "base": "main",
+      "head": "fix/8-gone",
+      "gh": null,
+      "mcpError": "the branch fix/8-gone was not found in org/repo",
+      "expected": null
+    }
   ]
 }

@@ -1,11 +1,15 @@
+using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Credfeto.Orchestrator.GitHub;
 
 namespace Credfeto.Orchestrator.Commands.Tests;
 
-// Answers every tool call with a fixed result, or fails it with a fixed message, and records the last call
+// Answers every tool call with a fixed result, or fails it with a fixed message, and records the last call, with each
+// string argument as its text and any other as its JSON
 internal sealed class FakeMcpToolCaller : IMcpToolCaller
 {
     private readonly string? _error;
@@ -23,12 +27,19 @@ internal sealed class FakeMcpToolCaller : IMcpToolCaller
 
     public ValueTask<string> CallAsync(
         string tool,
-        IReadOnlyDictionary<string, string> arguments,
+        IReadOnlyDictionary<string, JsonElement> arguments,
         CancellationToken cancellationToken
     )
     {
         this.Tool = tool;
-        this.Arguments = arguments;
+        this.Arguments = arguments.ToDictionary(
+            keySelector: argument => argument.Key,
+            elementSelector: argument =>
+                argument.Value.ValueKind == JsonValueKind.String
+                    ? argument.Value.GetString() ?? string.Empty
+                    : argument.Value.GetRawText(),
+            comparer: StringComparer.Ordinal
+        );
 
         if (cancellationToken.IsCancellationRequested)
         {

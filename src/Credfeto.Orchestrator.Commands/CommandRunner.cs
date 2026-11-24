@@ -21,6 +21,10 @@ public sealed class CommandRunner
                credfeto-orchestrator github open-prs|open-pr-count --repo <owner/repo> --head <branch>
                credfeto-orchestrator github branch-requires-status-checks --repo <owner/repo> --branch <branch>
                credfeto-orchestrator github own-open-prs --repo <owner/repo> --me <login> --creator <login> [--include-blocked true|false]
+               credfeto-orchestrator github whoami
+               credfeto-orchestrator github open-prs-closing-issues --repo <owner/repo>
+               credfeto-orchestrator github pr-commit-authors --repo <owner/repo> --pr <number>
+               credfeto-orchestrator github branch-behind-by --repo <owner/repo> --base <branch> --head <branch>
 
         fingerprint reads the pull request or issue JSON on stdin and prints its fingerprint, exactly
         as fingerprint_pr_json / fingerprint_issue_json in lib/fingerprints do.
@@ -30,7 +34,11 @@ public sealed class CommandRunner
         open-prs the numbers of the open pull requests on the head branch, newest first, one a line;
         open-pr-count how many there are; branch-requires-status-checks true or false; own-open-prs
         the numbers of the open pull requests authored by --me or --creator, newest first, one a line,
-        leaving out those labelled Blocked unless --include-blocked is true.
+        leaving out those labelled Blocked unless --include-blocked is true; whoami the login the token
+        authenticates as; open-prs-closing-issues every open pull request's number, author login, closing
+        issue numbers and head branch, newest first, as one line of JSON; pr-commit-authors the login and
+        email of each commit author, as one line of JSON; branch-behind-by how many commits --head is
+        behind --base.
 
         Exit codes: 0 printed; 1 the fingerprint could not be computed or the read failed; 2 a usage
         error.
@@ -159,6 +167,19 @@ public sealed class CommandRunner
                 command: command,
                 cancellationToken: cancellationToken
             ),
+            GitHubRead.CURRENT_LOGIN => this.CurrentLoginAsync(cancellationToken),
+            GitHubRead.OPEN_PULL_REQUESTS_WITH_CLOSING_ISSUES => this.OpenPullRequestsWithClosingIssuesAsync(
+                command: command,
+                cancellationToken: cancellationToken
+            ),
+            GitHubRead.PULL_REQUEST_COMMIT_AUTHORS => this.PullRequestCommitAuthorsAsync(
+                command: command,
+                cancellationToken: cancellationToken
+            ),
+            GitHubRead.BRANCH_BEHIND_BY => this.BranchBehindByAsync(
+                command: command,
+                cancellationToken: cancellationToken
+            ),
             _ => this.OpenPullRequestsOnHeadAsync(command: command, cancellationToken: cancellationToken),
         };
     }
@@ -204,6 +225,53 @@ public sealed class CommandRunner
         return command.Read == GitHubRead.OPEN_PULL_REQUEST_COUNT
             ? Line(numbers.Count)
             : string.Concat(numbers.Select(Line));
+    }
+
+    private async ValueTask<string> CurrentLoginAsync(CancellationToken cancellationToken)
+    {
+        string login = await this._github.CurrentLoginAsync(cancellationToken);
+
+        return login + "\n";
+    }
+
+    private async ValueTask<string> OpenPullRequestsWithClosingIssuesAsync(
+        GitHubCommand command,
+        CancellationToken cancellationToken
+    )
+    {
+        IReadOnlyList<OpenPullRequestReferences> pullRequests =
+            await this._github.OpenPullRequestsWithClosingIssuesAsync(
+                repository: command.Repository,
+                cancellationToken: cancellationToken
+            );
+
+        return GitHubJsonOutput.OpenPullRequests(pullRequests);
+    }
+
+    private async ValueTask<string> PullRequestCommitAuthorsAsync(
+        GitHubCommand command,
+        CancellationToken cancellationToken
+    )
+    {
+        IReadOnlyList<PullRequestCommit> commits = await this._github.PullRequestCommitsAsync(
+            repository: command.Repository,
+            pullRequest: command.PullRequest,
+            cancellationToken: cancellationToken
+        );
+
+        return GitHubJsonOutput.Commits(commits);
+    }
+
+    private async ValueTask<string> BranchBehindByAsync(GitHubCommand command, CancellationToken cancellationToken)
+    {
+        int behindBy = await this._github.BranchBehindByAsync(
+            repository: command.Repository,
+            baseBranch: command.Base ?? string.Empty,
+            headBranch: command.Name,
+            cancellationToken: cancellationToken
+        );
+
+        return Line(behindBy);
     }
 
     private static string Line(int value)
