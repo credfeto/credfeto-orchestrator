@@ -101,6 +101,7 @@ jobs:
             Credfeto.Build.Dotnet.Server
             Credfeto.Build.Node.Server
             Credfeto.ChangeLog.Mcp
+            Credfeto.Git.Mcp
 
       - name: "Build and push"
         if: ${{ steps.relevance.outputs.relevant == 'true' }}

@@ -22,6 +22,10 @@
       "type": "stdio",
       "command": "/etc/claude-code/mcp/changelog-mcp"
     },
+    "git": {
+      "type": "stdio",
+      "command": "/etc/claude-code/mcp/git-mcp"
+    },
     "codegraph": {
       "type": "stdio",
       "command": "codegraph",
