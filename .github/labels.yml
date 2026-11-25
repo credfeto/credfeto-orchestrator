@@ -104,6 +104,14 @@
   color: "0e8a16"
   description: "Changes in Credfeto.Orchestrator.Jq.Tests project"
 
+- name: "credfeto-orchestrator-predicates"
+  color: "96f7d2"
+  description: "Changes in Credfeto.Orchestrator.Predicates project"
+
+- name: "credfeto-orchestrator-predicates-tests"
+  color: "0e8a16"
+  description: "Changes in Credfeto.Orchestrator.Predicates.Tests project"
+
 - name: "credfeto-orchestrator-prompts"
   color: "96f7d2"
   description: "Changes in Credfeto.Orchestrator.Prompts project"

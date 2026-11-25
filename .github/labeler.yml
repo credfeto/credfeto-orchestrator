@@ -42,6 +42,10 @@
   - any: ['src/Credfeto.Orchestrator.Jq/**/*']
 "credfeto-orchestrator-jq-tests":
   - any: ['src/Credfeto.Orchestrator.Jq.Tests/**/*']
+"credfeto-orchestrator-predicates":
+  - any: ['src/Credfeto.Orchestrator.Predicates/**/*']
+"credfeto-orchestrator-predicates-tests":
+  - any: ['src/Credfeto.Orchestrator.Predicates.Tests/**/*']
 "credfeto-orchestrator-prompts":
   - any: ['src/Credfeto.Orchestrator.Prompts/**/*']
 "credfeto-orchestrator-prompts-tests":
