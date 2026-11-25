@@ -23,6 +23,66 @@ public static class JqFormatter
         return builder.ToString();
     }
 
+    // jq's default output: each level indented by two more spaces, a space after the colon of each key, and an
+    // empty array or object kept on one line
+    public static string ToIndentedJson(JqValue value)
+    {
+        StringBuilder builder = new();
+        AppendIndented(builder: builder, value: value, depth: 0);
+
+        return builder.ToString();
+    }
+
+    private static void AppendIndented(StringBuilder builder, JqValue value, int depth)
+    {
+        if (value.Kind == JqKind.ARRAY && value.Items.Count != 0)
+        {
+            builder.Append('[');
+
+            for (int index = 0; index < value.Items.Count; index++)
+            {
+                StartLine(builder: builder, index: index, depth: depth + 1);
+                AppendIndented(builder: builder, value: value.Items[index], depth: depth + 1);
+            }
+
+            NewLine(builder: builder, depth: depth).Append(']');
+        }
+        else if (value.Kind == JqKind.DICTIONARY && value.Properties.Count != 0)
+        {
+            builder.Append('{');
+
+            for (int index = 0; index < value.Properties.Count; index++)
+            {
+                StartLine(builder: builder, index: index, depth: depth + 1);
+                JqProperty property = value.Properties[index];
+                AppendString(builder: builder, value: property.Name);
+                builder.Append(": ");
+                AppendIndented(builder: builder, value: property.Value, depth: depth + 1);
+            }
+
+            NewLine(builder: builder, depth: depth).Append('}');
+        }
+        else
+        {
+            Append(builder: builder, value: value);
+        }
+    }
+
+    private static void StartLine(StringBuilder builder, int index, int depth)
+    {
+        if (index != 0)
+        {
+            builder.Append(',');
+        }
+
+        NewLine(builder: builder, depth: depth);
+    }
+
+    private static StringBuilder NewLine(StringBuilder builder, int depth)
+    {
+        return builder.Append('\n').Append(value: ' ', repeatCount: depth * 2);
+    }
+
     private static void Append(StringBuilder builder, JqValue value)
     {
         switch (value.Kind)
