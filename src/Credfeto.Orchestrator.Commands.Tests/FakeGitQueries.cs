@@ -65,6 +65,31 @@ internal sealed class FakeGitQueries : IGitQueries
         return this.AnswerAsync($"stale-issue-branch {repository} {issue}");
     }
 
+    public ValueTask<GitResult> PorcelainStatusAsync(string repository, CancellationToken cancellationToken)
+    {
+        return this.AnswerAsync($"porcelain-status {repository}");
+    }
+
+    public ValueTask<GitResult> ChangedFileCountAsync(string repository, CancellationToken cancellationToken)
+    {
+        return this.AnswerAsync($"changed-file-count {repository}");
+    }
+
+    public ValueTask<GitResult> StashHeadAsync(string repository, CancellationToken cancellationToken)
+    {
+        return this.AnswerAsync($"stash-head {repository}");
+    }
+
+    public ValueTask<GitResult> AutostashesBeyondKeepAsync(
+        string repository,
+        string prefix,
+        string keep,
+        CancellationToken cancellationToken
+    )
+    {
+        return this.AnswerAsync($"autostashes-beyond-keep {repository} {prefix} {keep}");
+    }
+
     private ValueTask<GitResult> AnswerAsync(string asked)
     {
         this._asked.Add(asked);
