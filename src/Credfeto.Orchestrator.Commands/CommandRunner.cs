@@ -21,6 +21,8 @@ public sealed class CommandRunner
                credfeto-orchestrator github open-prs|open-pr-count --repo <owner/repo> --head <branch>
                credfeto-orchestrator github branch-requires-status-checks --repo <owner/repo> --branch <branch>
                credfeto-orchestrator github own-open-prs --repo <owner/repo> --me <login> --creator <login> [--include-blocked true|false]
+               credfeto-orchestrator prompt issue-claude-md|pr-claude-md|issue-launch|pr-launch|precheck-section
+               credfeto-orchestrator prompt check-length --max <n>
 
         fingerprint reads the pull request or issue JSON on stdin and prints its fingerprint, exactly
         as fingerprint_pr_json / fingerprint_issue_json in lib/fingerprints do.

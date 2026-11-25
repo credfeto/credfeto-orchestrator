@@ -1,0 +1,2 @@
+<!-- markdownlint-disable-file -->
+- Act on the unaddressed trusted maintainer comments first: comments and reviews from the trusted commenters above that no reply or status comment of yours has answered. The orchestrator found none newer than the last session (a dependency PR with one gets the full flow, which acts on it). If step 1 still shows one, reply to it on the PR, and unless all it asks is that this PR be merged as it is, do not finalise the PR in this session: say in the reply what change it needs, then STOP.
