@@ -47,4 +47,8 @@
     <Project Path="Credfeto.Orchestrator.Podman.Tests/Credfeto.Orchestrator.Podman.Tests.csproj" />
     <Project Path="Credfeto.Orchestrator.Podman/Credfeto.Orchestrator.Podman.csproj" />
   </Folder>
+  <Folder Name="/State/">
+    <Project Path="Credfeto.Orchestrator.State.Tests/Credfeto.Orchestrator.State.Tests.csproj" />
+    <Project Path="Credfeto.Orchestrator.State/Credfeto.Orchestrator.State.csproj" />
+  </Folder>
 </Solution>
