@@ -922,9 +922,7 @@ sync_pr_workflow_status_from_linked_issues() {
     [ -n "${_WF_PROJECT_ID}" ] || return 0
 
     local linked_issues
-    linked_issues=$(gh pr view "${pr_number}" --repo "${REPO_FULL}" \
-        --json closingIssuesReferences \
-        --jq '.closingIssuesReferences[].number' 2>/dev/null) || linked_issues=""
+    linked_issues=$(fetch_pr_closing_issue_numbers "${REPO_FULL}" "${pr_number}") || linked_issues=""
 
     if [ -z "${linked_issues}" ]; then
         [ "${is_first_touch}" = "true" ] && update_workflow_status "PullRequest" "${pr_number}" "Not Started"

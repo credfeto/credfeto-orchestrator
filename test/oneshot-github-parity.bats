@@ -35,13 +35,20 @@ _parity_field() {
 # A gh stand-in serving the case's responses: pr list applies its --jq filter to pulls.json, as gh
 # does, or prints pulls.json when it has none; the branch and rules endpoints print branch.json and
 # rules.json; api user and the compare endpoint apply their --jq filter to user.json and
-# compare.json; pr view prints pr.json. A missing file fails the call.
+# compare.json; pr view applies its --jq filter to pr.json, or prints it when it has none; issue view
+# applies its --jq filter to issue-<owner>-<repo>-<number>.json; the pull request review comment and
+# issue comment endpoints print review-comments.json and issue-comments.json. A missing file fails the
+# call.
 make_parity_gh_stub() {
     make_stub_multiline gh \
         'case "$*" in' \
         '    "pr list "*"--jq "*) [ -f "${TEST_TMP}/pulls.json" ] || exit 1; jq -r "${@: -1}" "${TEST_TMP}/pulls.json" ;;' \
         '    "pr list "*) [ -f "${TEST_TMP}/pulls.json" ] || exit 1; cat "${TEST_TMP}/pulls.json" ;;' \
+        '    "pr view "*"--jq "*) [ -f "${TEST_TMP}/pr.json" ] || exit 1; jq -r "${@: -1}" "${TEST_TMP}/pr.json" ;;' \
         '    "pr view "*) [ -f "${TEST_TMP}/pr.json" ] || exit 1; cat "${TEST_TMP}/pr.json" ;;' \
+        '    "issue view "*) f="${TEST_TMP}/issue-${5//\//-}-$3.json"; [ -f "${f}" ] || exit 1; jq -r "${@: -1}" "${f}" ;;' \
+        '    *"/pulls/"*"/comments "*) [ -f "${TEST_TMP}/review-comments.json" ] || exit 1; cat "${TEST_TMP}/review-comments.json" ;;' \
+        '    *"/issues/"*"/comments "*) [ -f "${TEST_TMP}/issue-comments.json" ] || exit 1; cat "${TEST_TMP}/issue-comments.json" ;;' \
         '    "api user --jq "*) [ -f "${TEST_TMP}/user.json" ] || exit 1; jq -r "${@: -1}" "${TEST_TMP}/user.json" ;;' \
         '    *"/compare/"*) [ -f "${TEST_TMP}/compare.json" ] || exit 1; jq -r "${@: -1}" "${TEST_TMP}/compare.json" ;;' \
         '    *"/rules/branches/"*) [ -f "${TEST_TMP}/rules.json" ] || exit 1; cat "${TEST_TMP}/rules.json" ;;' \
@@ -168,6 +175,40 @@ _read_branch_behind_by() {
         "$(_parity_field branchBehindBy "$1" head)" 2> /dev/null || printf 'null'
 }
 
+_read_pr_review_comments() {
+    _parity_gh_response pullRequestReviewComments "$1" gh "${TEST_TMP}/review-comments.json"
+    REPO_FULL=$(_parity_field pullRequestReviewComments "$1" repo)
+    fetch_pr_review_comments "$(_parity_field pullRequestReviewComments "$1" pr)" 2> /dev/null || printf 'null'
+}
+
+_read_pr_issue_comments() {
+    _parity_gh_response pullRequestIssueComments "$1" gh "${TEST_TMP}/issue-comments.json"
+    REPO_FULL=$(_parity_field pullRequestIssueComments "$1" repo)
+    fetch_pr_issue_comments "$(_parity_field pullRequestIssueComments "$1" pr)" 2> /dev/null || printf 'null'
+}
+
+_read_pr_closing_issues() {
+    _parity_gh_response pullRequestClosingIssues "$1" gh "${TEST_TMP}/pr.json"
+    fetch_pr_closing_issue_numbers "$(_parity_field pullRequestClosingIssues "$1" repo)" \
+        "$(_parity_field pullRequestClosingIssues "$1" pr)" 2> /dev/null || printf 'null'
+}
+
+# Also writes each of the case's ghIssues ("<owner>/<repo>#<number>": the gh issue view response, or
+# null when that read fails) where the gh stand-in serves it.
+_read_closing_issue_labels() {
+    local key file
+    _parity_gh_response closingIssueLabels "$1" gh "${TEST_TMP}/pr.json"
+    rm -f "${TEST_TMP}"/issue-*.json
+    while IFS= read -r key; do
+        file="${key%#*}"
+        file="${TEST_TMP}/issue-${file//\//-}-${key##*#}.json"
+        jq -c --argjson i "$1" --arg k "${key}" '.closingIssueLabels[$i].ghIssues[$k] // empty' "${PARITY_FIXTURE}" > "${file}"
+        [ -s "${file}" ] || rm -f "${file}"
+    done < <(jq -r --argjson i "$1" '.closingIssueLabels[$i].ghIssues | keys[]' "${PARITY_FIXTURE}")
+    fetch_closing_issue_labels "$(_parity_field closingIssueLabels "$1" repo)" \
+        "$(_parity_field closingIssueLabels "$1" pr)" 2> /dev/null || printf 'null'
+}
+
 @test "fetch_current_login prints the golden login for every current login parity case (#252)" {
     unset ORCHESTRATOR_DOTNET_GITHUB
     _check_read_cases currentLogin _read_current_login
@@ -188,6 +229,30 @@ _read_branch_behind_by() {
 @test "fetch_branch_behind_by prints the golden count for every behind-by parity case (#252)" {
     unset ORCHESTRATOR_DOTNET_GITHUB
     _check_read_cases branchBehindBy _read_branch_behind_by
+}
+
+@test "fetch_pr_review_comments prints the golden JSON for every review comment parity case (#252)" {
+    unset ORCHESTRATOR_DOTNET_GITHUB
+    GH_ITEM_FETCH_RETRY_ATTEMPTS=2
+    GH_ITEM_FETCH_RETRY_DELAY_SECS=0
+    _check_read_cases pullRequestReviewComments _read_pr_review_comments
+}
+
+@test "fetch_pr_issue_comments prints the golden JSON for every issue comment parity case (#252)" {
+    unset ORCHESTRATOR_DOTNET_GITHUB
+    GH_ITEM_FETCH_RETRY_ATTEMPTS=2
+    GH_ITEM_FETCH_RETRY_DELAY_SECS=0
+    _check_read_cases pullRequestIssueComments _read_pr_issue_comments
+}
+
+@test "fetch_pr_closing_issue_numbers prints the golden numbers for every closing issue parity case (#252)" {
+    unset ORCHESTRATOR_DOTNET_GITHUB
+    _check_read_cases pullRequestClosingIssues _read_pr_closing_issues
+}
+
+@test "fetch_closing_issue_labels prints the golden labels for every closing issue label parity case (#252)" {
+    unset ORCHESTRATOR_DOTNET_GITHUB
+    _check_read_cases closingIssueLabels _read_closing_issue_labels
 }
 
 @test "every parity case gives the tool either a cfwf MCP result or a failure, never both (#252)" {
