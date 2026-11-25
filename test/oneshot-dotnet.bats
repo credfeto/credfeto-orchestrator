@@ -424,3 +424,120 @@ make_orchestrator_github_reads_stub() {
     run pr_branch_behind_base org/repo '{"baseRefName":"main","headRefName":"feat/12-thing"}'
     [ "${status}" -eq 2 ]
 }
+
+@test "the comment and closing issue reads use gh, never ORCHESTRATOR_CMD, while ORCHESTRATOR_DOTNET_GITHUB is off (#252)" {
+    make_orchestrator_github_reads_stub
+    ORCHESTRATOR_DOTNET_GITHUB=0
+    REPO_FULL=org/repo
+    make_stub gh 'case "$*" in
+        "api repos/org/repo/pulls/7/comments --paginate --slurp") printf "%s" "[[{\"id\":5,\"user\":{\"login\":\"x\"},\"path\":\"a\",\"body\":\"b\",\"updated_at\":\"t\"}]]" ;;
+        "api repos/org/repo/issues/7/comments --paginate --slurp") printf "%s" "[[{\"id\":6,\"user\":{\"login\":\"x\"},\"body\":\"b\",\"created_at\":\"c\",\"updated_at\":\"t\"}]]" ;;
+        "pr view 7 --repo org/repo --json closingIssuesReferences --jq .closingIssuesReferences[].number") printf "3\n" ;;
+        "pr view 7 --repo org/repo --json closingIssuesReferences --jq "*) printf "org/repo 3\n" ;;
+        "issue view 3 --repo org/repo --json labels --jq .labels[].name") printf "Bug\n" ;;
+        *) exit 1 ;;
+    esac'
+    run fetch_pr_review_comments 7
+    [ "${status}" -eq 0 ]
+    [ "${output}" = '[{"user":{"login":"x"},"path":"a","body":"b","updated_at":"t"}]' ]
+    run fetch_pr_issue_comments 7
+    [ "${status}" -eq 0 ]
+    [ "${output}" = '[{"user":{"login":"x"},"body":"b","created_at":"c","updated_at":"t"}]' ]
+    run fetch_pr_closing_issue_numbers org/repo 7
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "3" ]
+    run fetch_closing_issue_labels org/repo 7
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Bug" ]
+    [ ! -f "${TEST_TMP}/cmd_calls" ]
+}
+
+@test "the comment and closing issue reads hand their arguments to ORCHESTRATOR_CMD github when switched on (#252)" {
+    make_orchestrator_github_reads_stub
+    make_stub gh 'exit 1'
+    ORCHESTRATOR_DOTNET_GITHUB=1
+    REPO_FULL=org/repo
+    printf '[]\n' > "${TEST_TMP}/github_pr-review-comments"
+    printf '[{"user":null,"body":"b","created_at":"c","updated_at":"t"}]\n' > "${TEST_TMP}/github_pr-issue-comments"
+    printf '3\n5\n' > "${TEST_TMP}/github_pr-closing-issues"
+    printf 'Bug\nEnhancement\n' > "${TEST_TMP}/github_closing-issue-labels"
+
+    run fetch_pr_review_comments 7
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "[]" ]
+    run fetch_pr_issue_comments 8
+    [ "${status}" -eq 0 ]
+    [ "${output}" = '[{"user":null,"body":"b","created_at":"c","updated_at":"t"}]' ]
+    run fetch_pr_closing_issue_numbers org/other 9
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(printf '3\n5')" ]
+    run fetch_closing_issue_labels org/other 10
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(printf 'Bug\nEnhancement')" ]
+    [ "$(cat "${TEST_TMP}/cmd_calls")" = "$(printf '%s\n' \
+        'github pr-review-comments --repo org/repo --pr 7' \
+        'github pr-issue-comments --repo org/repo --pr 8' \
+        'github pr-closing-issues --repo org/other --pr 9' \
+        'github closing-issue-labels --repo org/other --pr 10')" ]
+}
+
+@test "the comment reads retry the tool as they retry gh (#252)" {
+    make_orchestrator_github_reads_stub
+    make_stub gh 'exit 1'
+    ORCHESTRATOR_DOTNET_GITHUB=1
+    REPO_FULL=org/repo
+    GH_ITEM_FETCH_RETRY_ATTEMPTS=3
+    GH_ITEM_FETCH_RETRY_DELAY_SECS=0
+    run fetch_pr_review_comments 7
+    [ "${status}" -ne 0 ]
+    [ -z "${output}" ]
+    run fetch_pr_issue_comments 7
+    [ "${status}" -ne 0 ]
+    [ "$(wc -l < "${TEST_TMP}/cmd_calls")" -eq 6 ]
+}
+
+@test "the label and board-status sync use the tool's closing issue reads when switched on (#252)" {
+    make_orchestrator_github_reads_stub
+    ORCHESTRATOR_DOTNET_GITHUB=1
+    set_repo_context "org/repo"
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"pr edit"*) exit 0 ;; *) exit 1 ;; esac'
+    printf 'AI-Work\nBug\n' > "${TEST_TMP}/github_closing-issue-labels"
+    sync_pr_labels_from_linked_issues 42 '{"labels":[{"name":"AI-Work"}]}'
+    [ "$(cat "${call_log}")" = "pr edit 42 --repo org/repo --add-label Bug" ]
+
+    _WF_PROJECT_ID="PVT_test"
+    board_substatus_for_item() {
+        case "$1" in
+            383) printf 'AI Review' ;;
+            *) printf 'Development' ;;
+        esac
+    }
+    local status_log="${TEST_TMP}/status_calls"
+    update_workflow_status() { printf '%s %s %s\n' "$1" "$2" "$3" >> "${status_log}"; }
+    printf '383\n' > "${TEST_TMP}/github_pr-closing-issues"
+    sync_pr_workflow_status_from_linked_issues 412 "false"
+    [ "$(cat "${status_log}")" = "PullRequest 412 AI Review" ]
+    grep -q -- "github pr-closing-issues --repo org/repo --pr 412" "${TEST_TMP}/cmd_calls"
+}
+
+@test "the label and board-status sync change nothing when the tool's closing issue reads fail (#252)" {
+    make_orchestrator_github_reads_stub
+    ORCHESTRATOR_DOTNET_GITHUB=1
+    set_repo_context "org/repo"
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; exit 0'
+    run sync_pr_labels_from_linked_issues 42 '{"labels":[]}'
+    [ "${status}" -eq 0 ]
+    [ ! -f "${call_log}" ]
+
+    _WF_PROJECT_ID="PVT_test"
+    board_substatus_for_item() { printf 'Development'; }
+    local status_log="${TEST_TMP}/status_calls"
+    update_workflow_status() { printf '%s %s %s\n' "$1" "$2" "$3" >> "${status_log}"; }
+    run sync_pr_workflow_status_from_linked_issues 412 "false"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${status_log}" ]
+}

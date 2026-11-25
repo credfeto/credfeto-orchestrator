@@ -162,6 +162,25 @@ public sealed class GitHubCommandParserTests : TestBase
     }
 
     [Theory]
+    [InlineData("pr-review-comments", GitHubRead.PULL_REQUEST_REVIEW_COMMENTS)]
+    [InlineData("pr-issue-comments", GitHubRead.PULL_REQUEST_ISSUE_COMMENTS)]
+    [InlineData("pr-closing-issues", GitHubRead.PULL_REQUEST_CLOSING_ISSUES)]
+    [InlineData("closing-issue-labels", GitHubRead.CLOSING_ISSUE_LABELS)]
+    public static void ThePullRequestReadsTakeTheRepositoryAndPullRequest(string read, GitHubRead expected)
+    {
+        GitHubCommand? command = GitHubCommandParser.Parse(
+            args: ["github", read, "--pr", "42", "--repo", "org/repo"],
+            error: out string error
+        );
+
+        Assert.Equal(
+            expected: new GitHubCommand(Read: expected, Repository: "org/repo", Name: string.Empty, PullRequest: 42),
+            actual: command
+        );
+        Assert.Equal(expected: string.Empty, actual: error);
+    }
+
+    [Theory]
     [InlineData("expected: github <read> [options], where <read> is open-prs,", "github")]
     [InlineData("expected: github <read> [options], where <read> is open-prs,", "gh|open-prs")]
     [InlineData("unknown github read 'pr-list'", "github|pr-list")]
@@ -194,6 +213,10 @@ public sealed class GitHubCommandParserTests : TestBase
     [InlineData("--base is required", "github|branch-behind-by|--repo|org/repo|--head|fix/7-typo")]
     [InlineData("--head is required", "github|branch-behind-by|--repo|org/repo|--base|main")]
     [InlineData("unknown option '--branch'", "github|branch-behind-by|--repo|org/repo|--branch|main")]
+    [InlineData("--pr is required", "github|pr-review-comments|--repo|org/repo")]
+    [InlineData("--repo is required", "github|pr-issue-comments|--pr|7")]
+    [InlineData("--pr must be a pull request number", "github|pr-closing-issues|--repo|org/repo|--pr|7x")]
+    [InlineData("unknown option '--head'", "github|closing-issue-labels|--repo|org/repo|--pr|7|--head|main")]
     public static void AnInvalidCommandIsRefused(string expectedError, string args)
     {
         // The arguments are given joined with '|', so an empty one can be given too

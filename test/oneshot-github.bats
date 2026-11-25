@@ -27,10 +27,11 @@ declare -g pr_has_unaddressed_comment
     # --slurp wraps multi-page gh api --paginate output into one array of page-arrays
     # ([[...page1...],[...page2...]]); without flattening, a PR with enough inline comments
     # to span two pages would produce a nested structure that miscounts/breaks downstream jq.
-    make_stub gh 'printf "[[{\"id\":1},{\"id\":2}],[{\"id\":3}]]"'
+    # Only the fields the callers read are kept, in id order (#252).
+    make_stub gh 'printf "%s" "[[{\"id\":1,\"user\":{\"login\":\"a\",\"id\":9},\"path\":\"x\",\"body\":\"b\",\"updated_at\":\"t\",\"diff_hunk\":\"@@\"},{\"id\":3,\"user\":null}],[{\"id\":2,\"user\":{\"login\":\"c\"}}]]"'
     run fetch_pr_review_comments 42
     [ "${status}" -eq 0 ]
-    [ "${output}" = '[{"id":1},{"id":2},{"id":3}]' ]
+    [ "${output}" = '[{"user":{"login":"a"},"path":"x","body":"b","updated_at":"t"},{"user":{"login":"c"},"path":null,"body":null,"updated_at":null},{"user":null,"path":null,"body":null,"updated_at":null}]' ]
 }
 
 @test "fetch_pr_review_comments retries and succeeds after a transient gh failure (#1127)" {
@@ -63,10 +64,10 @@ declare -g pr_has_unaddressed_comment
 }
 
 @test "fetch_pr_issue_comments flattens multiple pages into a single flat array of comments (#1309)" {
-    make_stub gh 'printf "[[{\"id\":1},{\"id\":2}],[{\"id\":3}]]"'
+    make_stub gh 'printf "%s" "[[{\"id\":1,\"user\":{\"login\":\"a\"},\"body\":\"b\",\"created_at\":\"c\",\"updated_at\":\"u\",\"reactions\":{}},{\"id\":3,\"user\":null}],[{\"id\":2,\"user\":{\"login\":\"d\"}}]]"'
     run fetch_pr_issue_comments 42
     [ "${status}" -eq 0 ]
-    [ "${output}" = '[{"id":1},{"id":2},{"id":3}]' ]
+    [ "${output}" = '[{"user":{"login":"a"},"body":"b","created_at":"c","updated_at":"u"},{"user":{"login":"d"},"body":null,"created_at":null,"updated_at":null},{"user":null,"body":null,"created_at":null,"updated_at":null}]' ]
 }
 
 @test "fetch_pr_issue_comments retries and succeeds after a transient gh failure (#1309)" {

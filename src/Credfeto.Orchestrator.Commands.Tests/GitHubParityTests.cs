@@ -179,6 +179,112 @@ public sealed class GitHubParityTests : TestBase
         );
     }
 
+    public static Task<TheoryData<int, string>> ReviewCommentCasesAsync()
+    {
+        return GitHubParityFixture.CaseNamesAsync("pullRequestReviewComments");
+    }
+
+    [Theory]
+    [MemberData(nameof(ReviewCommentCasesAsync))]
+    public Task PullRequestReviewCommentsMatchTheShellVersionAsync(int index, string name)
+    {
+        return this.CheckPullRequestCaseAsync(
+            collection: "pullRequestReviewComments",
+            read: "pr-review-comments",
+            tool: "pr_comments",
+            index: index,
+            name: name
+        );
+    }
+
+    public static Task<TheoryData<int, string>> IssueCommentCasesAsync()
+    {
+        return GitHubParityFixture.CaseNamesAsync("pullRequestIssueComments");
+    }
+
+    [Theory]
+    [MemberData(nameof(IssueCommentCasesAsync))]
+    public Task PullRequestIssueCommentsMatchTheShellVersionAsync(int index, string name)
+    {
+        return this.CheckPullRequestCaseAsync(
+            collection: "pullRequestIssueComments",
+            read: "pr-issue-comments",
+            tool: "pr_comments",
+            index: index,
+            name: name
+        );
+    }
+
+    public static Task<TheoryData<int, string>> PullRequestClosingIssueCasesAsync()
+    {
+        return GitHubParityFixture.CaseNamesAsync("pullRequestClosingIssues");
+    }
+
+    [Theory]
+    [MemberData(nameof(PullRequestClosingIssueCasesAsync))]
+    public Task PullRequestClosingIssuesMatchTheShellVersionAsync(int index, string name)
+    {
+        return this.CheckPullRequestCaseAsync(
+            collection: "pullRequestClosingIssues",
+            read: "pr-closing-issues",
+            tool: "pr_view",
+            index: index,
+            name: name
+        );
+    }
+
+    public static Task<TheoryData<int, string>> ClosingIssueLabelCasesAsync()
+    {
+        return GitHubParityFixture.CaseNamesAsync("closingIssueLabels");
+    }
+
+    [Theory]
+    [MemberData(nameof(ClosingIssueLabelCasesAsync))]
+    public Task ClosingIssueLabelsMatchTheShellVersionAsync(int index, string name)
+    {
+        return this.CheckPullRequestCaseAsync(
+            collection: "closingIssueLabels",
+            read: "closing-issue-labels",
+            tool: "closing_issue_labels",
+            index: index,
+            name: name
+        );
+    }
+
+    // The reads of one pull request: "github <read> --repo <repo> --pr <pr>", asking the tool for that pull request
+    // with the read's own extra argument
+    private Task CheckPullRequestCaseAsync(string collection, string read, string tool, int index, string name)
+    {
+        return this.CheckCaseAsync(
+            collection: collection,
+            index: index,
+            name: name,
+            tool: tool,
+            args: item => [read, "--repo", Text(item: item, field: "repo"), "--pr", Text(item: item, field: "pr")],
+            arguments: item => PullRequestArguments(tool: tool, item: item)
+        );
+    }
+
+    private static Dictionary<string, string> PullRequestArguments(string tool, JsonElement item)
+    {
+        Dictionary<string, string> arguments = new(StringComparer.Ordinal)
+        {
+            ["repo"] = Text(item: item, field: "repo"),
+            ["pr"] = Text(item: item, field: "pr"),
+        };
+
+        if (StringComparer.Ordinal.Equals(x: tool, y: "pr_comments"))
+        {
+            arguments["exactBodies"] = "true";
+        }
+        else if (StringComparer.Ordinal.Equals(x: tool, y: "pr_view"))
+        {
+            arguments["fields"] = "[\"closing-issues\"]";
+        }
+
+        return arguments;
+    }
+
     // Runs "github <args>" against the case's MCP result or failure and checks what it prints against the case's
     // expected field (null: it must fail), and that it asked the tool with the given arguments
     private async Task CheckCaseAsync(
