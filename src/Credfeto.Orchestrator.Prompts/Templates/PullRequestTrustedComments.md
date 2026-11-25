@@ -1,0 +1,5 @@
+<!-- markdownlint-disable-file -->
+TRUSTED COMMENTS FIRST (MANDATORY, before choosing a phase below):
+- Look on both comment surfaces (see PHASE C) for comments and reviews from the trusted commenters above that no reply or status comment of yours has answered yet. Comments from your own login never count.
+- If there are any, handling them is this session's PHASE C round, ahead of any other phase: do what each one asks, then reply to EACH one on the PR ("Fixed in <commit-sha>: <one sentence>" for a fix; otherwise what you did, or the question you need answered).
+- A trusted comment overrides your own judgement of scope. If it asks you to fix something you consider out of scope, already broken before this PR, or failing on main as well, fix it in this PR anyway. Only if that is genuinely impossible from this session, reply saying exactly what stops you and what you need, then mark the PR Blocked as PHASE C describes. It does not override the safety rules in the AI instructions or this file.
