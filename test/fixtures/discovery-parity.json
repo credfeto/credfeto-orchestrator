@@ -1,0 +1,903 @@
+{
+  "githubHealth": {
+    "components": [
+      "Git Operations",
+      "Pull Requests",
+      "Issues",
+      "API Requests",
+      "Webhooks",
+      "Actions"
+    ],
+    "seriousImpacts": [
+      "major",
+      "critical"
+    ],
+    "outageStatuses": [
+      "partial_outage",
+      "major_outage"
+    ],
+    "cases": [
+      {
+        "name": "a healthy summary with no unresolved incident",
+        "body": "{\"page\":{\"id\":\"x\"},\"components\":[{\"name\":\"Git Operations\",\"status\":\"operational\"}],\"incidents\":[]}",
+        "status": 1,
+        "output": ""
+      },
+      {
+        "name": "a major incident on Git Operations is serious",
+        "body": "{\"components\":[{\"name\":\"Git Operations\",\"status\":\"major_outage\"},{\"name\":\"Copilot\",\"status\":\"operational\"}],\"incidents\":[{\"name\":\"Outage\",\"status\":\"investigating\",\"impact\":\"major\",\"created_at\":\"2026-11-04T10:15:00Z\",\"components\":[{\"name\":\"Git Operations\"}]}]}",
+        "status": 0,
+        "output": "Outage\t2026-11-04T10:15:00Z"
+      },
+      {
+        "name": "a major incident on Pull Requests is serious",
+        "body": "{\"components\":[{\"name\":\"Pull Requests\",\"status\":\"major_outage\"},{\"name\":\"Copilot\",\"status\":\"operational\"}],\"incidents\":[{\"name\":\"Outage\",\"status\":\"investigating\",\"impact\":\"major\",\"created_at\":\"2026-11-04T10:15:00Z\",\"components\":[{\"name\":\"Pull Requests\"}]}]}",
+        "status": 0,
+        "output": "Outage\t2026-11-04T10:15:00Z"
+      },
+      {
+        "name": "a major incident on Issues is serious",
+        "body": "{\"components\":[{\"name\":\"Issues\",\"status\":\"major_outage\"},{\"name\":\"Copilot\",\"status\":\"operational\"}],\"incidents\":[{\"name\":\"Outage\",\"status\":\"investigating\",\"impact\":\"major\",\"created_at\":\"2026-11-04T10:15:00Z\",\"components\":[{\"name\":\"Issues\"}]}]}",
+        "status": 0,
+        "output": "Outage\t2026-11-04T10:15:00Z"
+      },
+      {
+        "name": "a major incident on API Requests is serious",
+        "body": "{\"components\":[{\"name\":\"API Requests\",\"status\":\"major_outage\"},{\"name\":\"Copilot\",\"status\":\"operational\"}],\"incidents\":[{\"name\":\"Outage\",\"status\":\"investigating\",\"impact\":\"major\",\"created_at\":\"2026-11-04T10:15:00Z\",\"components\":[{\"name\":\"API Requests\"}]}]}",
+        "status": 0,
+        "output": "Outage\t2026-11-04T10:15:00Z"
+      },
+      {
+        "name": "a major incident on Webhooks is serious",
+        "body": "{\"components\":[{\"name\":\"Webhooks\",\"status\":\"major_outage\"},{\"name\":\"Copilot\",\"status\":\"operational\"}],\"incidents\":[{\"name\":\"Outage\",\"status\":\"investigating\",\"impact\":\"major\",\"created_at\":\"2026-11-04T10:15:00Z\",\"components\":[{\"name\":\"Webhooks\"}]}]}",
+        "status": 0,
+        "output": "Outage\t2026-11-04T10:15:00Z"
+      },
+      {
+        "name": "a major incident on Actions is serious",
+        "body": "{\"components\":[{\"name\":\"Actions\",\"status\":\"major_outage\"},{\"name\":\"Copilot\",\"status\":\"operational\"}],\"incidents\":[{\"name\":\"Outage\",\"status\":\"investigating\",\"impact\":\"major\",\"created_at\":\"2026-11-04T10:15:00Z\",\"components\":[{\"name\":\"Actions\"}]}]}",
+        "status": 0,
+        "output": "Outage\t2026-11-04T10:15:00Z"
+      },
+      {
+        "name": "an incident only on unrelated components is ignored",
+        "body": "{\"incidents\":[{\"name\":\"Copilot is slow\",\"status\":\"investigating\",\"created_at\":\"2026-11-04T10:15:00Z\",\"components\":[{\"name\":\"Copilot\"},{\"name\":\"Codespaces\"}]}]}",
+        "status": 1,
+        "output": ""
+      },
+      {
+        "name": "an incident without components is ignored",
+        "body": "{\"incidents\":[{\"name\":\"Investigating\",\"status\":\"investigating\",\"created_at\":\"2026-11-04T10:15:00Z\",\"components\":[]},{\"name\":\"Other\",\"created_at\":\"2026-11-04T10:16:00Z\",\"components\":null}]}",
+        "status": 1,
+        "output": ""
+      },
+      {
+        "name": "the relevant incident is reported when an unrelated one is listed first",
+        "body": "{\"incidents\":[{\"name\":\"Copilot is slow\",\"created_at\":\"2026-11-04T09:00:00Z\",\"components\":[{\"name\":\"Copilot\"}]},{\"name\":\"Git is down\",\"impact\":\"major\",\"created_at\":\"2026-11-04T10:00:00Z\",\"components\":[{\"name\":\"Codespaces\"},{\"name\":\"Git Operations\"}]}]}",
+        "status": 0,
+        "output": "Git is down\t2026-11-04T10:00:00Z"
+      },
+      {
+        "name": "tabs and newlines in the name are flattened",
+        "body": "{\"incidents\":[{\"name\":\"Git\\tis\\ndown\\r!\",\"impact\":\"critical\",\"created_at\":\"2026-11-04T10:00:00Z\",\"components\":[{\"name\":\"Git Operations\"}]}]}",
+        "status": 0,
+        "output": "Git is down !\t2026-11-04T10:00:00Z"
+      },
+      {
+        "name": "a minor degraded incident is minor",
+        "body": "{\"components\":[{\"name\":\"Pull Requests\",\"status\":\"degraded_performance\"},{\"name\":\"Copilot\",\"status\":\"operational\"}],\"incidents\":[{\"name\":\"Incident with Pull Requests\",\"status\":\"investigating\",\"impact\":\"minor\",\"created_at\":\"2026-11-16T11:59:40Z\",\"components\":[{\"name\":\"Pull Requests\"}]}]}",
+        "status": 3,
+        "output": "Incident with Pull Requests\t2026-11-16T11:59:40Z\tPull Requests: degraded_performance"
+      },
+      {
+        "name": "an incident with no impact on an operational component is minor",
+        "body": "{\"components\":[{\"name\":\"Issues\",\"status\":\"operational\"},{\"name\":\"Copilot\",\"status\":\"operational\"}],\"incidents\":[{\"name\":\"Investigating\",\"status\":\"investigating\",\"impact\":\"none\",\"created_at\":\"2026-11-16T11:00:00Z\",\"components\":[{\"name\":\"Issues\"}]}]}",
+        "status": 3,
+        "output": "Investigating\t2026-11-16T11:00:00Z\tIssues: operational"
+      },
+      {
+        "name": "a minor incident is serious while its component is in partial outage",
+        "body": "{\"components\":[{\"name\":\"Pull Requests\",\"status\":\"partial_outage\"},{\"name\":\"Copilot\",\"status\":\"operational\"}],\"incidents\":[{\"name\":\"PRs failing\",\"status\":\"investigating\",\"impact\":\"minor\",\"created_at\":\"2026-11-16T11:00:00Z\",\"components\":[{\"name\":\"Pull Requests\"}]}]}",
+        "status": 0,
+        "output": "PRs failing\t2026-11-16T11:00:00Z"
+      },
+      {
+        "name": "a minor incident is serious while its component is in major outage",
+        "body": "{\"components\":[{\"name\":\"Pull Requests\",\"status\":\"major_outage\"},{\"name\":\"Copilot\",\"status\":\"operational\"}],\"incidents\":[{\"name\":\"PRs failing\",\"status\":\"investigating\",\"impact\":\"minor\",\"created_at\":\"2026-11-16T11:00:00Z\",\"components\":[{\"name\":\"Pull Requests\"}]}]}",
+        "status": 0,
+        "output": "PRs failing\t2026-11-16T11:00:00Z"
+      },
+      {
+        "name": "a major incident is serious even when the component is only degraded",
+        "body": "{\"components\":[{\"name\":\"Webhooks\",\"status\":\"degraded_performance\"},{\"name\":\"Copilot\",\"status\":\"operational\"}],\"incidents\":[{\"name\":\"Webhooks delayed\",\"status\":\"investigating\",\"impact\":\"major\",\"created_at\":\"2026-11-16T11:00:00Z\",\"components\":[{\"name\":\"Webhooks\"}]}]}",
+        "status": 0,
+        "output": "Webhooks delayed\t2026-11-16T11:00:00Z"
+      },
+      {
+        "name": "a critical incident is serious on an operational component",
+        "body": "{\"components\":[{\"name\":\"API Requests\",\"status\":\"operational\"},{\"name\":\"Copilot\",\"status\":\"operational\"}],\"incidents\":[{\"name\":\"API down\",\"status\":\"investigating\",\"impact\":\"critical\",\"created_at\":\"2026-11-16T11:00:00Z\",\"components\":[{\"name\":\"API Requests\"}]}]}",
+        "status": 0,
+        "output": "API down\t2026-11-16T11:00:00Z"
+      },
+      {
+        "name": "the serious incident is reported when a minor one is listed first",
+        "body": "{\"components\":[{\"name\":\"Issues\",\"status\":\"degraded_performance\"},{\"name\":\"Git Operations\",\"status\":\"major_outage\"}],\"incidents\":[{\"name\":\"Issues slow\",\"impact\":\"minor\",\"created_at\":\"2026-11-16T10:00:00Z\",\"components\":[{\"name\":\"Issues\"}]},{\"name\":\"Git down\",\"impact\":\"minor\",\"created_at\":\"2026-11-16T11:00:00Z\",\"components\":[{\"name\":\"Git Operations\"}]}]}",
+        "status": 0,
+        "output": "Git down\t2026-11-16T11:00:00Z"
+      },
+      {
+        "name": "only a used component's outage makes an incident serious",
+        "body": "{\"components\":[{\"name\":\"Copilot\",\"status\":\"major_outage\"},{\"name\":\"Issues\",\"status\":\"degraded_performance\"}],\"incidents\":[{\"name\":\"Mixed\",\"impact\":\"minor\",\"created_at\":\"2026-11-16T10:00:00Z\",\"components\":[{\"name\":\"Copilot\"},{\"name\":\"Issues\"}]}]}",
+        "status": 3,
+        "output": "Mixed\t2026-11-16T10:00:00Z\tIssues: degraded_performance"
+      },
+      {
+        "name": "a major incident only on unrelated components is ignored",
+        "body": "{\"components\":[{\"name\":\"Codespaces\",\"status\":\"major_outage\"}],\"incidents\":[{\"name\":\"Codespaces down\",\"impact\":\"major\",\"created_at\":\"2026-11-16T10:00:00Z\",\"components\":[{\"name\":\"Codespaces\"}]}]}",
+        "status": 1,
+        "output": ""
+      },
+      {
+        "name": "a component the summary does not list has an unknown status",
+        "body": "{\"incidents\":[{\"name\":\"PRs slow\",\"impact\":\"minor\",\"created_at\":\"2026-11-16T11:00:00Z\",\"components\":[{\"name\":\"Pull Requests\"}]}]}",
+        "status": 3,
+        "output": "PRs slow\t2026-11-16T11:00:00Z\tPull Requests: unknown"
+      },
+      {
+        "name": "a components list that is not an array gives unknown statuses",
+        "body": "{\"components\":\"broken\",\"incidents\":[{\"name\":\"PRs slow\",\"impact\":\"minor\",\"created_at\":\"2026-11-16T11:00:00Z\",\"components\":[{\"name\":\"Pull Requests\"}]}]}",
+        "status": 3,
+        "output": "PRs slow\t2026-11-16T11:00:00Z\tPull Requests: unknown"
+      },
+      {
+        "name": "a listed component without a status is unknown",
+        "body": "{\"components\":[{\"name\":\"Pull Requests\"}],\"incidents\":[{\"name\":\"PRs slow\",\"impact\":\"minor\",\"created_at\":\"2026-11-16T11:00:00Z\",\"components\":[{\"name\":\"Pull Requests\"}]}]}",
+        "status": 3,
+        "output": "PRs slow\t2026-11-16T11:00:00Z\tPull Requests: unknown"
+      },
+      {
+        "name": "a minor incident reports the first used component it names",
+        "body": "{\"components\":[{\"name\":\"Issues\",\"status\":\"degraded_performance\"},{\"name\":\"Actions\",\"status\":\"operational\"}],\"incidents\":[{\"name\":\"Slow\",\"impact\":\"minor\",\"created_at\":\"2026-11-16T11:00:00Z\",\"components\":[{\"name\":\"Copilot\"},{\"name\":\"Actions\"},{\"name\":\"Issues\"}]}]}",
+        "status": 3,
+        "output": "Slow\t2026-11-16T11:00:00Z\tActions: operational"
+      },
+      {
+        "name": "the first of several minor incidents is reported",
+        "body": "{\"incidents\":[{\"name\":\"First\",\"impact\":\"minor\",\"created_at\":\"2026-11-16T10:00:00Z\",\"components\":[{\"name\":\"Issues\"}]},{\"name\":\"Second\",\"impact\":\"minor\",\"created_at\":\"2026-11-16T11:00:00Z\",\"components\":[{\"name\":\"Webhooks\"}]}]}",
+        "status": 3,
+        "output": "First\t2026-11-16T10:00:00Z\tIssues: unknown"
+      },
+      {
+        "name": "the first of several serious incidents is reported",
+        "body": "{\"incidents\":[{\"name\":\"First\",\"impact\":\"major\",\"created_at\":\"2026-11-16T10:00:00Z\",\"components\":[{\"name\":\"Issues\"}]},{\"name\":\"Second\",\"impact\":\"critical\",\"created_at\":\"2026-11-16T11:00:00Z\",\"components\":[{\"name\":\"Webhooks\"}]}]}",
+        "status": 0,
+        "output": "First\t2026-11-16T10:00:00Z"
+      },
+      {
+        "name": "a missing name and start time get their placeholders",
+        "body": "{\"incidents\":[{\"impact\":\"major\",\"components\":[{\"name\":\"Issues\"}]}]}",
+        "status": 0,
+        "output": "unnamed incident\tunknown time"
+      },
+      {
+        "name": "a null or false name and start time get their placeholders",
+        "body": "{\"incidents\":[{\"name\":null,\"created_at\":false,\"impact\":\"minor\",\"components\":[{\"name\":\"Issues\"}]}]}",
+        "status": 3,
+        "output": "unnamed incident\tunknown time\tIssues: unknown"
+      },
+      {
+        "name": "a number name and start time print as JSON text",
+        "body": "{\"incidents\":[{\"name\":42,\"created_at\":1.50,\"impact\":\"minor\",\"components\":[{\"name\":\"Issues\"}]}]}",
+        "status": 3,
+        "output": "42\t1.50\tIssues: unknown"
+      },
+      {
+        "name": "an object name prints as compact JSON",
+        "body": "{\"incidents\":[{\"name\":{\"b\":1,\"a\":[true,null]},\"created_at\":\"t\",\"impact\":\"major\",\"components\":[{\"name\":\"Issues\"}]}]}",
+        "status": 0,
+        "output": "{\"b\":1,\"a\":[true,null]}\tt"
+      },
+      {
+        "name": "an empty name is kept",
+        "body": "{\"incidents\":[{\"name\":\"\",\"created_at\":\"\",\"impact\":\"minor\",\"components\":[{\"name\":\"Issues\"}]}]}",
+        "status": 3,
+        "output": "\t\tIssues: unknown"
+      },
+      {
+        "name": "non-object incidents are skipped",
+        "body": "{\"incidents\":[null,1,\"x\",[],{\"name\":\"Real\",\"impact\":\"minor\",\"created_at\":\"t\",\"components\":[{\"name\":\"Issues\"}]}]}",
+        "status": 3,
+        "output": "Real\tt\tIssues: unknown"
+      },
+      {
+        "name": "non-object and unnamed component entries are skipped",
+        "body": "{\"incidents\":[{\"name\":\"Odd\",\"impact\":\"minor\",\"created_at\":\"t\",\"components\":[null,\"Issues\",{\"name\":7},{\"name\":null},{},{\"name\":\"Webhooks\"}]}]}",
+        "status": 3,
+        "output": "Odd\tt\tWebhooks: unknown"
+      },
+      {
+        "name": "components given as an object are read by value",
+        "body": "{\"incidents\":[{\"name\":\"Obj\",\"impact\":\"minor\",\"created_at\":\"t\",\"components\":{\"x\":{\"name\":\"Issues\"},\"y\":\"Webhooks\"}}]}",
+        "status": 3,
+        "output": "Obj\tt\tIssues: unknown"
+      },
+      {
+        "name": "components given as a string name nothing",
+        "body": "{\"incidents\":[{\"name\":\"Str\",\"impact\":\"major\",\"created_at\":\"t\",\"components\":\"Issues\"}]}",
+        "status": 1,
+        "output": ""
+      },
+      {
+        "name": "components given as false name nothing",
+        "body": "{\"incidents\":[{\"name\":\"False\",\"impact\":\"major\",\"created_at\":\"t\",\"components\":false}]}",
+        "status": 1,
+        "output": ""
+      },
+      {
+        "name": "a component name differing only in case is not used",
+        "body": "{\"incidents\":[{\"name\":\"Case\",\"impact\":\"major\",\"created_at\":\"t\",\"components\":[{\"name\":\"issues\"}]}]}",
+        "status": 1,
+        "output": ""
+      },
+      {
+        "name": "an impact differing in case is not serious",
+        "body": "{\"incidents\":[{\"name\":\"Case\",\"impact\":\"Major\",\"created_at\":\"t\",\"components\":[{\"name\":\"Issues\"}]}]}",
+        "status": 3,
+        "output": "Case\tt\tIssues: unknown"
+      },
+      {
+        "name": "a number impact is compared as text",
+        "body": "{\"incidents\":[{\"name\":\"Num\",\"impact\":3,\"created_at\":\"t\",\"components\":[{\"name\":\"Issues\"}]}]}",
+        "status": 3,
+        "output": "Num\tt\tIssues: unknown"
+      },
+      {
+        "name": "a later duplicate component status wins",
+        "body": "{\"components\":[{\"name\":\"Issues\",\"status\":\"major_outage\"},{\"name\":\"Issues\",\"status\":\"operational\"}],\"incidents\":[{\"name\":\"Dup\",\"impact\":\"minor\",\"created_at\":\"t\",\"components\":[{\"name\":\"Issues\"}]}]}",
+        "status": 3,
+        "output": "Dup\tt\tIssues: operational"
+      },
+      {
+        "name": "a non-string component status is compared as text",
+        "body": "{\"components\":[{\"name\":\"Issues\",\"status\":5},{\"name\":\"Webhooks\",\"status\":null}],\"incidents\":[{\"name\":\"Num\",\"impact\":\"minor\",\"created_at\":\"t\",\"components\":[{\"name\":\"Issues\"}]},{\"name\":\"Null\",\"impact\":\"minor\",\"created_at\":\"t\",\"components\":[{\"name\":\"Webhooks\"}]}]}",
+        "status": 3,
+        "output": "Num\tt\tIssues: 5"
+      },
+      {
+        "name": "non-object component statuses are skipped",
+        "body": "{\"components\":[null,\"Issues\",{\"name\":\"Issues\",\"status\":\"partial_outage\"}],\"incidents\":[{\"name\":\"Skip\",\"impact\":\"minor\",\"created_at\":\"t\",\"components\":[{\"name\":\"Issues\"}]}]}",
+        "status": 0,
+        "output": "Skip\tt"
+      },
+      {
+        "name": "JSON escapes in text are decoded",
+        "body": "{\"incidents\":[{\"name\":\"Esc \\u00e9 \\ud83d\\ude80 \\\"q\\\" \\\\ \\/\",\"impact\":\"minor\",\"created_at\":\"t\",\"components\":[{\"name\":\"Issues\"}]}]}",
+        "status": 3,
+        "output": "Esc é 🚀 \"q\" \\ /\tt\tIssues: unknown"
+      },
+      {
+        "name": "a tab in a component status is flattened",
+        "body": "{\"components\":[{\"name\":\"Issues\",\"status\":\"odd\\tstate\"}],\"incidents\":[{\"name\":\"Tab\",\"impact\":\"minor\",\"created_at\":\"t\",\"components\":[{\"name\":\"Issues\"}]}]}",
+        "status": 3,
+        "output": "Tab\tt\tIssues: odd state"
+      },
+      {
+        "name": "non-ASCII text is kept as it is",
+        "body": "{\"incidents\":[{\"name\":\"Panne été ☃ 🚀\",\"impact\":\"minor\",\"created_at\":\"t\",\"components\":[{\"name\":\"Issues\"}]}]}",
+        "status": 3,
+        "output": "Panne été ☃ 🚀\tt\tIssues: unknown"
+      },
+      {
+        "name": "the status cannot be reached",
+        "body": null,
+        "status": 2,
+        "output": ""
+      },
+      {
+        "name": "an HTML error page fails open",
+        "body": "<html>502 Bad Gateway</html>",
+        "status": 2,
+        "output": ""
+      },
+      {
+        "name": "an empty body fails open",
+        "body": "",
+        "status": 2,
+        "output": ""
+      },
+      {
+        "name": "an array fails open",
+        "body": "[]",
+        "status": 2,
+        "output": ""
+      },
+      {
+        "name": "null fails open",
+        "body": "null",
+        "status": 2,
+        "output": ""
+      },
+      {
+        "name": "incidents that are not an array fail open",
+        "body": "{\"incidents\":\"none\"}",
+        "status": 2,
+        "output": ""
+      },
+      {
+        "name": "a summary without incidents fails open",
+        "body": "{\"page\":{}}",
+        "status": 2,
+        "output": ""
+      },
+      {
+        "name": "a truncated body fails open",
+        "body": "{\"incidents\":[{\"name\":\"x\"",
+        "status": 2,
+        "output": ""
+      },
+      {
+        "name": "trailing whitespace is fine",
+        "body": "{\"incidents\":[]}\n\n  ",
+        "status": 1,
+        "output": ""
+      }
+    ]
+  },
+  "priorityFeedUrl": "https://priorities.example/priorities",
+  "priorities": [
+    {
+      "name": "open and draft items not on hold are kept in feed order",
+      "user": "testuser",
+      "attempts": 3,
+      "responses": [
+        "{\"priorities\":[{\"id\":3,\"itemType\":\"Issue\",\"repository\":\"org/repo\",\"status\":\"Open\",\"isOnHold\":false,\"priority\":3},{\"id\":1,\"itemType\":\"Issue\",\"repository\":\"org/repo\",\"status\":\"Open\",\"isOnHold\":false,\"priority\":1},{\"id\":2,\"itemType\":\"PullRequest\",\"repository\":\"org/repo\",\"status\":\"Draft\",\"isOnHold\":false,\"priority\":2},{\"id\":4,\"itemType\":\"Issue\",\"repository\":\"org/repo\",\"status\":\"Closed\",\"isOnHold\":false,\"priority\":4},{\"id\":5,\"itemType\":\"Issue\",\"repository\":\"org/repo\",\"status\":\"Open\",\"isOnHold\":true,\"priority\":0}]}\n"
+      ],
+      "status": 0,
+      "output": "[{\"id\":3,\"itemType\":\"Issue\",\"repository\":\"org/repo\",\"status\":\"Open\",\"isOnHold\":false,\"priority\":3},{\"id\":1,\"itemType\":\"Issue\",\"repository\":\"org/repo\",\"status\":\"Open\",\"isOnHold\":false,\"priority\":1},{\"id\":2,\"itemType\":\"PullRequest\",\"repository\":\"org/repo\",\"status\":\"Draft\",\"isOnHold\":false,\"priority\":2}]",
+      "url": "https://priorities.example/priorities?user=testuser",
+      "requests": 1
+    },
+    {
+      "name": "an empty feed is an empty array",
+      "user": "testuser",
+      "attempts": 3,
+      "responses": [
+        "{\"priorities\":[]}\n"
+      ],
+      "status": 0,
+      "output": "[]",
+      "url": "https://priorities.example/priorities?user=testuser",
+      "requests": 1
+    },
+    {
+      "name": "items from several repositories are kept",
+      "user": "testuser",
+      "attempts": 3,
+      "responses": [
+        "{\"priorities\":[{\"id\":10,\"repository\":\"org/repoA\",\"status\":\"Open\",\"isOnHold\":false},{\"id\":20,\"repository\":\"org/repoB\",\"status\":\"Open\",\"isOnHold\":false}]}"
+      ],
+      "status": 0,
+      "output": "[{\"id\":10,\"repository\":\"org/repoA\",\"status\":\"Open\",\"isOnHold\":false},{\"id\":20,\"repository\":\"org/repoB\",\"status\":\"Open\",\"isOnHold\":false}]",
+      "url": "https://priorities.example/priorities?user=testuser",
+      "requests": 1
+    },
+    {
+      "name": "every other field is kept as it is, numbers in their literal form",
+      "user": "testuser",
+      "attempts": 3,
+      "responses": [
+        "{\"priorities\":[{\"id\":1.50,\"big\":100000000000000000001,\"e\":1E2,\"s\":\"café ☃\",\"nested\":{\"z\":1,\"a\":[null,true]},\"status\":\"Open\",\"isOnHold\":false}],\"other\":1}"
+      ],
+      "status": 0,
+      "output": "[{\"id\":1.50,\"big\":100000000000000000001,\"e\":1E+2,\"s\":\"café ☃\",\"nested\":{\"z\":1,\"a\":[null,true]},\"status\":\"Open\",\"isOnHold\":false}]",
+      "url": "https://priorities.example/priorities?user=testuser",
+      "requests": 1
+    },
+    {
+      "name": "a duplicate key keeps its first position and last value",
+      "user": "testuser",
+      "attempts": 3,
+      "responses": [
+        "{\"priorities\":[{\"status\":\"Closed\",\"id\":1,\"status\":\"Open\",\"isOnHold\":false}]}"
+      ],
+      "status": 0,
+      "output": "[{\"status\":\"Open\",\"id\":1,\"isOnHold\":false}]",
+      "url": "https://priorities.example/priorities?user=testuser",
+      "requests": 1
+    },
+    {
+      "name": "isOnHold must be false itself",
+      "user": "testuser",
+      "attempts": 3,
+      "responses": [
+        "{\"priorities\":[{\"id\":1,\"status\":\"Open\"},{\"id\":2,\"status\":\"Open\",\"isOnHold\":null},{\"id\":3,\"status\":\"Open\",\"isOnHold\":0},{\"id\":4,\"status\":\"Open\",\"isOnHold\":\"false\"},{\"id\":5,\"status\":\"Draft\",\"isOnHold\":false}]}"
+      ],
+      "status": 0,
+      "output": "[{\"id\":5,\"status\":\"Draft\",\"isOnHold\":false}]",
+      "url": "https://priorities.example/priorities?user=testuser",
+      "requests": 1
+    },
+    {
+      "name": "the status must match exactly",
+      "user": "testuser",
+      "attempts": 3,
+      "responses": [
+        "{\"priorities\":[{\"id\":1,\"status\":\"open\",\"isOnHold\":false},{\"id\":2,\"status\":\"OPEN\",\"isOnHold\":false},{\"id\":3,\"isOnHold\":false},{\"id\":4,\"status\":null,\"isOnHold\":false},{\"id\":5,\"status\":\"Open \",\"isOnHold\":false}]}"
+      ],
+      "status": 0,
+      "output": "[]",
+      "url": "https://priorities.example/priorities?user=testuser",
+      "requests": 1
+    },
+    {
+      "name": "null items are skipped",
+      "user": "testuser",
+      "attempts": 3,
+      "responses": [
+        "{\"priorities\":[null,{\"id\":1,\"status\":\"Open\",\"isOnHold\":false}]}"
+      ],
+      "status": 0,
+      "output": "[{\"id\":1,\"status\":\"Open\",\"isOnHold\":false}]",
+      "url": "https://priorities.example/priorities?user=testuser",
+      "requests": 1
+    },
+    {
+      "name": "priorities given as an object are read by value",
+      "user": "testuser",
+      "attempts": 3,
+      "responses": [
+        "{\"priorities\":{\"a\":{\"id\":1,\"status\":\"Open\",\"isOnHold\":false},\"b\":{\"id\":2,\"status\":\"Closed\",\"isOnHold\":false}}}"
+      ],
+      "status": 0,
+      "output": "[{\"id\":1,\"status\":\"Open\",\"isOnHold\":false}]",
+      "url": "https://priorities.example/priorities?user=testuser",
+      "requests": 1
+    },
+    {
+      "name": "the login is URL-encoded in the user parameter",
+      "user": "a b&c/d+e?f~g_h.i-jé",
+      "attempts": 3,
+      "responses": [
+        "{\"priorities\":[]}"
+      ],
+      "status": 0,
+      "output": "[]",
+      "url": "https://priorities.example/priorities?user=a%20b%26c%2Fd%2Be%3Ff~g_h.i-j%C3%A9",
+      "requests": 1
+    },
+    {
+      "name": "no login sends no user parameter",
+      "user": null,
+      "attempts": 3,
+      "responses": [
+        "{\"priorities\":[]}"
+      ],
+      "status": 0,
+      "output": "[]",
+      "url": "https://priorities.example/priorities",
+      "requests": 1
+    },
+    {
+      "name": "a transient failure is retried",
+      "user": "testuser",
+      "attempts": 3,
+      "responses": [
+        null,
+        "{\"priorities\":[]}"
+      ],
+      "status": 0,
+      "output": "[]",
+      "url": "https://priorities.example/priorities?user=testuser",
+      "requests": 2
+    },
+    {
+      "name": "two transient failures are retried within three attempts",
+      "user": "testuser",
+      "attempts": 3,
+      "responses": [
+        null,
+        null,
+        "{\"priorities\":[{\"id\":3,\"itemType\":\"Issue\",\"repository\":\"org/repo\",\"status\":\"Open\",\"isOnHold\":false,\"priority\":3},{\"id\":1,\"itemType\":\"Issue\",\"repository\":\"org/repo\",\"status\":\"Open\",\"isOnHold\":false,\"priority\":1},{\"id\":2,\"itemType\":\"PullRequest\",\"repository\":\"org/repo\",\"status\":\"Draft\",\"isOnHold\":false,\"priority\":2},{\"id\":4,\"itemType\":\"Issue\",\"repository\":\"org/repo\",\"status\":\"Closed\",\"isOnHold\":false,\"priority\":4},{\"id\":5,\"itemType\":\"Issue\",\"repository\":\"org/repo\",\"status\":\"Open\",\"isOnHold\":true,\"priority\":0}]}\n"
+      ],
+      "status": 0,
+      "output": "[{\"id\":3,\"itemType\":\"Issue\",\"repository\":\"org/repo\",\"status\":\"Open\",\"isOnHold\":false,\"priority\":3},{\"id\":1,\"itemType\":\"Issue\",\"repository\":\"org/repo\",\"status\":\"Open\",\"isOnHold\":false,\"priority\":1},{\"id\":2,\"itemType\":\"PullRequest\",\"repository\":\"org/repo\",\"status\":\"Draft\",\"isOnHold\":false,\"priority\":2}]",
+      "url": "https://priorities.example/priorities?user=testuser",
+      "requests": 3
+    },
+    {
+      "name": "a persistent failure fails after every attempt",
+      "user": "testuser",
+      "attempts": 3,
+      "responses": [
+        null,
+        null,
+        null
+      ],
+      "status": 1,
+      "output": "",
+      "url": "https://priorities.example/priorities?user=testuser",
+      "requests": 3
+    },
+    {
+      "name": "a single attempt is not retried",
+      "user": "testuser",
+      "attempts": 1,
+      "responses": [
+        null,
+        "{\"priorities\":[]}"
+      ],
+      "status": 1,
+      "output": "",
+      "url": "https://priorities.example/priorities?user=testuser",
+      "requests": 1
+    },
+    {
+      "name": "a persistent failure without the user parameter",
+      "user": null,
+      "attempts": 2,
+      "responses": [
+        null,
+        null
+      ],
+      "status": 1,
+      "output": "",
+      "url": "https://priorities.example/priorities",
+      "requests": 2
+    },
+    {
+      "name": "a body that is not JSON is a parse failure and is not retried",
+      "user": "testuser",
+      "attempts": 3,
+      "responses": [
+        "not json",
+        "{\"priorities\":[]}"
+      ],
+      "status": 2,
+      "output": "",
+      "url": "https://priorities.example/priorities?user=testuser",
+      "requests": 1
+    },
+    {
+      "name": "an HTML error page is a parse failure",
+      "user": "testuser",
+      "attempts": 3,
+      "responses": [
+        "<html>oops</html>"
+      ],
+      "status": 2,
+      "output": "",
+      "url": "https://priorities.example/priorities?user=testuser",
+      "requests": 1
+    },
+    {
+      "name": "a feed without priorities is a parse failure",
+      "user": "testuser",
+      "attempts": 3,
+      "responses": [
+        "{\"items\":[]}"
+      ],
+      "status": 2,
+      "output": "",
+      "url": "https://priorities.example/priorities?user=testuser",
+      "requests": 1
+    },
+    {
+      "name": "a priorities value that cannot be iterated is a parse failure",
+      "user": "testuser",
+      "attempts": 3,
+      "responses": [
+        "{\"priorities\":5}"
+      ],
+      "status": 2,
+      "output": "",
+      "url": "https://priorities.example/priorities?user=testuser",
+      "requests": 1
+    },
+    {
+      "name": "an array feed is a parse failure",
+      "user": "testuser",
+      "attempts": 3,
+      "responses": [
+        "[]"
+      ],
+      "status": 2,
+      "output": "",
+      "url": "https://priorities.example/priorities?user=testuser",
+      "requests": 1
+    },
+    {
+      "name": "an item that is a string is a parse failure",
+      "user": "testuser",
+      "attempts": 3,
+      "responses": [
+        "{\"priorities\":[\"x\",{\"id\":1,\"status\":\"Open\",\"isOnHold\":false}]}"
+      ],
+      "status": 2,
+      "output": "",
+      "url": "https://priorities.example/priorities?user=testuser",
+      "requests": 1
+    },
+    {
+      "name": "a truncated body is a parse failure",
+      "user": "testuser",
+      "attempts": 3,
+      "responses": [
+        "{\"priorities\":[{\"id\":1"
+      ],
+      "status": 2,
+      "output": "",
+      "url": "https://priorities.example/priorities?user=testuser",
+      "requests": 1
+    },
+    {
+      "name": "an empty body prints nothing and succeeds",
+      "user": "testuser",
+      "attempts": 3,
+      "responses": [
+        ""
+      ],
+      "status": 0,
+      "output": "",
+      "url": "https://priorities.example/priorities?user=testuser",
+      "requests": 1
+    },
+    {
+      "name": "a body of only whitespace prints nothing and succeeds",
+      "user": "testuser",
+      "attempts": 3,
+      "responses": [
+        " \n\t\r\n"
+      ],
+      "status": 0,
+      "output": "",
+      "url": "https://priorities.example/priorities?user=testuser",
+      "requests": 1
+    }
+  ],
+  "trustedLogins": [
+    {
+      "name": "the owner, the GitHub bots and no collaborators",
+      "repo": "myorg/myrepo",
+      "owner": "myorg",
+      "whitelist": "",
+      "creator": "prpixie",
+      "collaborators": [],
+      "failures": 0,
+      "attempts": 3,
+      "status": 0,
+      "output": "[\n  \"copilot-pull-request-reviewer\",\n  \"github-advanced-security[bot]\",\n  \"myorg\"\n]",
+      "requests": 1
+    },
+    {
+      "name": "collaborators are added and sorted",
+      "repo": "myorg/myrepo",
+      "owner": "myorg",
+      "whitelist": "",
+      "creator": "prpixie",
+      "collaborators": [
+        "zed",
+        "collab1",
+        "Alice",
+        "bob"
+      ],
+      "failures": 0,
+      "attempts": 3,
+      "status": 0,
+      "output": "[\n  \"Alice\",\n  \"bob\",\n  \"collab1\",\n  \"copilot-pull-request-reviewer\",\n  \"github-advanced-security[bot]\",\n  \"myorg\",\n  \"zed\"\n]",
+      "requests": 1
+    },
+    {
+      "name": "the owner is not repeated when a collaborator",
+      "repo": "myorg/myrepo",
+      "owner": "myorg",
+      "whitelist": "",
+      "creator": "prpixie",
+      "collaborators": [
+        "myorg",
+        "collab1"
+      ],
+      "failures": 0,
+      "attempts": 3,
+      "status": 0,
+      "output": "[\n  \"collab1\",\n  \"copilot-pull-request-reviewer\",\n  \"github-advanced-security[bot]\",\n  \"myorg\"\n]",
+      "requests": 1
+    },
+    {
+      "name": "the pull request bot is never trusted",
+      "repo": "myorg/myrepo",
+      "owner": "myorg",
+      "whitelist": "prpixie,friend",
+      "creator": "prpixie",
+      "collaborators": [
+        "collab1",
+        "prpixie"
+      ],
+      "failures": 0,
+      "attempts": 3,
+      "status": 0,
+      "output": "[\n  \"collab1\",\n  \"copilot-pull-request-reviewer\",\n  \"friend\",\n  \"github-advanced-security[bot]\",\n  \"myorg\"\n]",
+      "requests": 1
+    },
+    {
+      "name": "whitelisted users are added",
+      "repo": "myorg/myrepo",
+      "owner": "myorg",
+      "whitelist": "friend,other",
+      "creator": "prpixie",
+      "collaborators": [
+        "collab1"
+      ],
+      "failures": 0,
+      "attempts": 3,
+      "status": 0,
+      "output": "[\n  \"collab1\",\n  \"copilot-pull-request-reviewer\",\n  \"friend\",\n  \"github-advanced-security[bot]\",\n  \"myorg\",\n  \"other\"\n]",
+      "requests": 1
+    },
+    {
+      "name": "spaces around whitelisted users are trimmed",
+      "repo": "myorg/myrepo",
+      "owner": "myorg",
+      "whitelist": "  friend , other  ,  ",
+      "creator": "prpixie",
+      "collaborators": [
+        "collab1"
+      ],
+      "failures": 0,
+      "attempts": 3,
+      "status": 0,
+      "output": "[\n  \"collab1\",\n  \"copilot-pull-request-reviewer\",\n  \"friend\",\n  \"github-advanced-security[bot]\",\n  \"myorg\",\n  \"other\"\n]",
+      "requests": 1
+    },
+    {
+      "name": "empty whitelist entries are skipped",
+      "repo": "myorg/myrepo",
+      "owner": "myorg",
+      "whitelist": ",,a,,b,",
+      "creator": "prpixie",
+      "collaborators": [],
+      "failures": 0,
+      "attempts": 3,
+      "status": 0,
+      "output": "[\n  \"a\",\n  \"b\",\n  \"copilot-pull-request-reviewer\",\n  \"github-advanced-security[bot]\",\n  \"myorg\"\n]",
+      "requests": 1
+    },
+    {
+      "name": "a whitelisted user already trusted is not repeated",
+      "repo": "myorg/myrepo",
+      "owner": "myorg",
+      "whitelist": "friend,copilot-pull-request-reviewer",
+      "creator": "prpixie",
+      "collaborators": [
+        "friend"
+      ],
+      "failures": 0,
+      "attempts": 3,
+      "status": 0,
+      "output": "[\n  \"copilot-pull-request-reviewer\",\n  \"friend\",\n  \"github-advanced-security[bot]\",\n  \"myorg\"\n]",
+      "requests": 1
+    },
+    {
+      "name": "tabs in a whitelist entry are kept",
+      "repo": "myorg/myrepo",
+      "owner": "myorg",
+      "whitelist": "\tx\t",
+      "creator": "prpixie",
+      "collaborators": [],
+      "failures": 0,
+      "attempts": 3,
+      "status": 0,
+      "output": "[\n  \"\\tx\\t\",\n  \"copilot-pull-request-reviewer\",\n  \"github-advanced-security[bot]\",\n  \"myorg\"\n]",
+      "requests": 1
+    },
+    {
+      "name": "no owner",
+      "repo": "myorg/myrepo",
+      "owner": "",
+      "whitelist": "",
+      "creator": "prpixie",
+      "collaborators": [
+        "collab1"
+      ],
+      "failures": 0,
+      "attempts": 3,
+      "status": 0,
+      "output": "[\n  \"collab1\",\n  \"copilot-pull-request-reviewer\",\n  \"github-advanced-security[bot]\"\n]",
+      "requests": 1
+    },
+    {
+      "name": "no creator to leave out",
+      "repo": "myorg/myrepo",
+      "owner": "myorg",
+      "whitelist": "",
+      "creator": "",
+      "collaborators": [
+        "prpixie"
+      ],
+      "failures": 0,
+      "attempts": 3,
+      "status": 0,
+      "output": "[\n  \"copilot-pull-request-reviewer\",\n  \"github-advanced-security[bot]\",\n  \"myorg\",\n  \"prpixie\"\n]",
+      "requests": 1
+    },
+    {
+      "name": "logins sort by code point",
+      "repo": "myorg/myrepo",
+      "owner": "myorg",
+      "whitelist": "中",
+      "creator": "prpixie",
+      "collaborators": [
+        "émile",
+        "Zoe",
+        "zoe",
+        "_x",
+        "1st",
+        "[bot]"
+      ],
+      "failures": 0,
+      "attempts": 3,
+      "status": 0,
+      "output": "[\n  \"1st\",\n  \"Zoe\",\n  \"[bot]\",\n  \"_x\",\n  \"copilot-pull-request-reviewer\",\n  \"github-advanced-security[bot]\",\n  \"myorg\",\n  \"zoe\",\n  \"émile\",\n  \"中\"\n]",
+      "requests": 1
+    },
+    {
+      "name": "a transient collaborators failure is retried",
+      "repo": "myorg/myrepo",
+      "owner": "myorg",
+      "whitelist": "",
+      "creator": "prpixie",
+      "collaborators": [
+        "collab1"
+      ],
+      "failures": 1,
+      "attempts": 3,
+      "status": 0,
+      "output": "[\n  \"collab1\",\n  \"copilot-pull-request-reviewer\",\n  \"github-advanced-security[bot]\",\n  \"myorg\"\n]",
+      "requests": 2
+    },
+    {
+      "name": "two transient failures are retried within three attempts",
+      "repo": "myorg/myrepo",
+      "owner": "myorg",
+      "whitelist": "",
+      "creator": "prpixie",
+      "collaborators": [
+        "collab1"
+      ],
+      "failures": 2,
+      "attempts": 3,
+      "status": 0,
+      "output": "[\n  \"collab1\",\n  \"copilot-pull-request-reviewer\",\n  \"github-advanced-security[bot]\",\n  \"myorg\"\n]",
+      "requests": 3
+    },
+    {
+      "name": "a persistent collaborators failure fails closed",
+      "repo": "myorg/myrepo",
+      "owner": "myorg",
+      "whitelist": "",
+      "creator": "prpixie",
+      "collaborators": [
+        "collab1"
+      ],
+      "failures": 3,
+      "attempts": 3,
+      "status": 1,
+      "output": "",
+      "requests": 3
+    },
+    {
+      "name": "a single attempt is not retried",
+      "repo": "myorg/myrepo",
+      "owner": "myorg",
+      "whitelist": "",
+      "creator": "prpixie",
+      "collaborators": [
+        "collab1"
+      ],
+      "failures": 1,
+      "attempts": 1,
+      "status": 1,
+      "output": "",
+      "requests": 1
+    }
+  ]
+}

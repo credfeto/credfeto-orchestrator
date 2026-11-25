@@ -1,0 +1,45 @@
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+using Credfeto.Orchestrator.GitHub;
+
+namespace Credfeto.Orchestrator.Commands.Tests;
+
+// Fails the first failures tool calls, then answers every call with result; records the calls and the last one made
+internal sealed class ScriptedMcpToolCaller : IMcpToolCaller
+{
+    private readonly int _failures;
+    private readonly string _result;
+
+    public ScriptedMcpToolCaller(int failures, string result)
+    {
+        this._failures = failures;
+        this._result = result;
+    }
+
+    public int Calls { get; private set; }
+
+    public string? Tool { get; private set; }
+
+    public IReadOnlyDictionary<string, string>? Arguments { get; private set; }
+
+    public ValueTask<string> CallAsync(
+        string tool,
+        IReadOnlyDictionary<string, string> arguments,
+        CancellationToken cancellationToken
+    )
+    {
+        this.Calls++;
+        this.Tool = tool;
+        this.Arguments = arguments;
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return ValueTask.FromCanceled<string>(cancellationToken);
+        }
+
+        return this.Calls > this._failures
+            ? ValueTask.FromResult(this._result)
+            : ValueTask.FromException<string>(new GitHubReadException("the server is down"));
+    }
+}

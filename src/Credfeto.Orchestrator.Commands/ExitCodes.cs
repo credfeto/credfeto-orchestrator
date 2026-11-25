@@ -9,6 +9,15 @@ public static class ExitCodes
 
     public const int Usage = 2;
 
+    // discovery priorities: the feed answered, but not with the expected JSON (fetch_all_priorities returns 2)
+    public const int Unparseable = 3;
+
+    // discovery github-incident: only a minor incident is open on a used component (github_incident_open returns 3)
+    public const int MinorIncident = 3;
+
+    // discovery github-incident: no incident is open on a used component (github_incident_open returns 1)
+    public const int NoIncident = 4;
+
     // Stopped by SIGINT or SIGTERM
     public const int Cancelled = 130;
 }

@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Credfeto.Orchestrator.Commands;
+using Credfeto.Orchestrator.Discovery;
 using Credfeto.Orchestrator.Fingerprints;
 using Credfeto.Orchestrator.GitHub;
 
@@ -28,13 +29,21 @@ public static class Program
         using CancellationTokenSource shutdown = new();
         await using Stream input = Console.OpenStandardInput();
         using HttpClient httpClient = new();
+        GitHubReader github = new(
+            new McpToolCaller(httpClient: httpClient, settings: static () =>
+                CfwfMcpSettingsLoader.Load(Environment.GetEnvironmentVariable)
+            )
+        );
+        UrlReader urls = new();
+        RetryDelay delay = new();
         CommandRunner runner = new(
             fingerprints: new FingerprintCalculator(),
             files: new FileContentReader(),
-            github: new GitHubReader(
-                new McpToolCaller(httpClient: httpClient, settings: static () =>
-                    CfwfMcpSettingsLoader.Load(Environment.GetEnvironmentVariable)
-                )
+            github: github,
+            discovery: new(
+                priorities: new PriorityFeed(urls: urls, delay: delay),
+                trustedLogins: new TrustedLoginsReader(github: github, delay: delay),
+                health: new GitHubIncidentGate(urls)
             )
         );
 

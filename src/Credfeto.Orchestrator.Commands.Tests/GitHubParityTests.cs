@@ -82,7 +82,8 @@ public sealed class GitHubParityTests : TestBase
         return new(
             fingerprints: new FingerprintCalculator(),
             files: new FakeFileContentReader(),
-            github: new GitHubReader(tools)
+            github: new GitHubReader(tools),
+            discovery: DiscoveryFakes.NotExpected(new GitHubReader(tools))
         );
     }
 
