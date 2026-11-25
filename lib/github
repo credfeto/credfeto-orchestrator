@@ -31,6 +31,21 @@ _fetch_repo_collaborators() {
 get_trusted_logins() {
     [ -n "${_TRUSTED_LOGINS_JSON}" ] && { printf '%s' "${_TRUSTED_LOGINS_JSON}"; return 0; }
 
+    # With ORCHESTRATOR_DOTNET_DISCOVERY=1 the tool reads the collaborators (through the cfwf MCP
+    # server, with the same retries) and builds the same list (#252); a failure is not cached either.
+    if [ "${ORCHESTRATOR_DOTNET_DISCOVERY}" = 1 ]; then
+        local dotnet_logins
+        if dotnet_logins=$(_discovery_with_orchestrator_cmd trusted-logins --repo "${REPO_FULL}" \
+            --owner "${OWNER}" --whitelist "${WHITELISTED_USERS}" --creator "${PR_CREATOR_LOGIN}" \
+            --attempts "${GH_COLLABORATORS_RETRY_ATTEMPTS}" --delay-secs "${GH_COLLABORATORS_RETRY_DELAY_SECS}") \
+            && [ -n "${dotnet_logins}" ]; then
+            _TRUSTED_LOGINS_JSON="${dotnet_logins}"
+            printf '%s' "${_TRUSTED_LOGINS_JSON}"
+            return 0
+        fi
+        return 1
+    fi
+
     local -a logins=()
     [ -n "${OWNER}" ] && logins+=("${OWNER}")
 
@@ -88,11 +103,31 @@ require_trusted_logins() {
 # it cannot be resolved the feed is fetched without it, so an identity-lookup blip never fails
 # the fetch. This runs inside the caller's command substitution, so the caller should resolve
 # the login first to keep _GH_ME cached for the rest of the run.
+# With ORCHESTRATOR_DOTNET_DISCOVERY=1 the fetch, its retries and the filter are made by
+# `ORCHESTRATOR_CMD discovery priorities` (#252), which exits 0, 1 or 3 for the 0, 1 and 2 above.
 fetch_all_priorities() {
     local priorities_json attempt=1 url="${PRIORITIES_URL}" encoded_user
 
     if resolve_gh_me && encoded_user=$(jq -rn --arg u "${_GH_ME}" '$u|@uri') && [ -n "${encoded_user}" ]; then
         url="${PRIORITIES_URL}?user=${encoded_user}"
+    fi
+
+    if [ "${ORCHESTRATOR_DOTNET_DISCOVERY}" = 1 ]; then
+        local -a user_args=()
+        [ -n "${encoded_user}" ] && user_args=(--user "${_GH_ME}")
+        local cmd_rc=0
+        _discovery_with_orchestrator_cmd priorities --url "${PRIORITIES_URL}" ${user_args[@]+"${user_args[@]}"} \
+            --attempts "${PRIORITIES_FETCH_RETRY_ATTEMPTS}" --delay-secs "${PRIORITIES_FETCH_RETRY_DELAY_SECS}" \
+            || cmd_rc=$?
+        case "${cmd_rc}" in
+            0) return 0 ;;
+            3)
+                warn "Failed to parse priorities JSON from ${url}"
+                return 2
+                ;;
+        esac
+        warn "Failed to fetch priorities from ${url} after ${PRIORITIES_FETCH_RETRY_ATTEMPTS} attempt(s)"
+        return 1
     fi
 
     while [ "${attempt}" -le "${PRIORITIES_FETCH_RETRY_ATTEMPTS}" ]; do
@@ -110,6 +145,15 @@ fetch_all_priorities() {
     done
     warn "Failed to fetch priorities from ${url} after ${PRIORITIES_FETCH_RETRY_ATTEMPTS} attempt(s)"
     return 1
+}
+
+# Runs one work-discovery command of Credfeto.Orchestrator.Cmd (ORCHESTRATOR_DOTNET_DISCOVERY=1, #252):
+# the priorities feed, the trusted logins (whose collaborators read asks the cfwf MCP server at
+# ORCHESTRATOR_CFWF_MCP_URL, as _github_read_with_orchestrator_cmd does) or the GitHub health gate.
+# Arguments: the command's name and options. Its output and exit status are passed through;
+# test/fixtures/discovery-parity.json holds the cases the tool and the shell are both tested against.
+_discovery_with_orchestrator_cmd() {
+    ORCHESTRATOR_CFWF_MCP_URL="${ORCHESTRATOR_CFWF_MCP_URL}" "${ORCHESTRATOR_CMD}" discovery "$@" < /dev/null
 }
 
 # Resolves the current GitHub login into the cached _GH_ME, retrying a few times on failure.
