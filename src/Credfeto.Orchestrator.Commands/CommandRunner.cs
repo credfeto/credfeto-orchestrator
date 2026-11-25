@@ -30,6 +30,11 @@ public sealed class CommandRunner
                credfeto-orchestrator github pr-closing-issues|closing-issue-labels --repo <owner/repo> --pr <number>
                credfeto-orchestrator prompt issue-claude-md|pr-claude-md|issue-launch|pr-launch|precheck-section
                credfeto-orchestrator prompt check-length --max <n>
+               credfeto-orchestrator discovery priorities --url <url> [--user <login>] [--attempts <n>] [--delay-secs <n>]
+               credfeto-orchestrator discovery trusted-logins --repo <owner/repo> [--owner <login>] [--whitelist <logins>]
+                   [--creator <login>] [--attempts <n>] [--delay-secs <n>]
+               credfeto-orchestrator discovery github-incident --url <url> [--component <name>]...
+                   [--serious-impact <impact>]... [--outage-status <status>]...
 
         fingerprint reads the pull request or issue JSON on stdin and prints its fingerprint, exactly
         as fingerprint_pr_json / fingerprint_issue_json in lib/fingerprints do.
@@ -49,8 +54,19 @@ public sealed class CommandRunner
         closing-issue-labels the labels of those issues, leaving out Blocked, On Hold and On-Hold,
         sorted, one a line.
 
+        discovery prints what the lib/github and lib/github-health function it replaces prints:
+        priorities the priorities feed's open and draft items that are not on hold, as compact JSON,
+        sending --user as the user query parameter and trying the read up to --attempts times, --delay-secs
+        apart (exit 3 when the feed answers with something other than the expected JSON);
+        trusted-logins the JSON array of trusted logins: --owner, the repository's collaborators (asked
+        of the cfwf MCP server, retried the same way), GitHub's Copilot reviewer and Advanced Security
+        bots and the comma-separated --whitelist, less --creator; github-incident the githubstatus.com
+        incident a session would be stopped by (exit 0) or warned about (exit 3), judged by the
+        --component, --serious-impact and --outage-status lists (lib/globals' lists by default), exit 4
+        when there is none and 1 when the status cannot be read.
+
         Exit codes: 0 printed; 1 the fingerprint could not be computed or the read failed; 2 a usage
-        error.
+        error; 3 and 4 as discovery describes.
         """;
 
     private static readonly Encoding Utf8 = new UTF8Encoding(
@@ -58,15 +74,22 @@ public sealed class CommandRunner
         throwOnInvalidBytes: false
     );
 
+    private readonly DiscoveryCommandRunner _discovery;
     private readonly IFileContentReader _files;
     private readonly IFingerprintCalculator _fingerprints;
     private readonly IGitHubReader _github;
 
-    public CommandRunner(IFingerprintCalculator fingerprints, IFileContentReader files, IGitHubReader github)
+    public CommandRunner(
+        IFingerprintCalculator fingerprints,
+        IFileContentReader files,
+        IGitHubReader github,
+        DiscoveryCommandRunner discovery
+    )
     {
         this._fingerprints = fingerprints;
         this._files = files;
         this._github = github;
+        this._discovery = discovery;
     }
 
     public async ValueTask<int> RunAsync(
@@ -94,6 +117,33 @@ public sealed class CommandRunner
             );
         }
 
+        if (args.Count > 0 && StringComparer.Ordinal.Equals(x: args[0], y: DiscoveryCommandParser.Verb))
+        {
+            return await this.RunDiscoveryAsync(
+                args: args,
+                output: output,
+                error: error,
+                cancellationToken: cancellationToken
+            );
+        }
+
+        return await this.RunFingerprintAsync(
+            args: args,
+            input: input,
+            output: output,
+            error: error,
+            cancellationToken: cancellationToken
+        );
+    }
+
+    private async ValueTask<int> RunFingerprintAsync(
+        IReadOnlyList<string> args,
+        Stream input,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken cancellationToken
+    )
+    {
         FingerprintCommand? command = FingerprintCommandParser.Parse(args: args, error: out string problem);
 
         if (command is null)
@@ -156,6 +206,42 @@ public sealed class CommandRunner
         catch (GitHubReadException exception)
         {
             return await FailAsync(error: error, message: exception.Message, cancellationToken: cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return ExitCodes.Cancelled;
+        }
+    }
+
+    private async ValueTask<int> RunDiscoveryAsync(
+        IReadOnlyList<string> args,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken cancellationToken
+    )
+    {
+        DiscoveryCommand? command = DiscoveryCommandParser.Parse(args: args, error: out string problem);
+
+        if (command is null)
+        {
+            return await UsageAsync(error: error, problem: problem, cancellationToken: cancellationToken);
+        }
+
+        try
+        {
+            DiscoveryOutcome outcome = await this._discovery.RunAsync(
+                command: command,
+                cancellationToken: cancellationToken
+            );
+            await output.WriteAsync(outcome.Printed.AsMemory(), cancellationToken);
+            await output.FlushAsync(cancellationToken);
+
+            if (outcome.Problem is not null)
+            {
+                await error.WriteLineAsync($"{PROGRAM}: {outcome.Problem}".AsMemory(), cancellationToken);
+            }
+
+            return outcome.ExitCode;
         }
         catch (OperationCanceledException)
         {

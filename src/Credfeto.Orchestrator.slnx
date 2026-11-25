@@ -23,6 +23,10 @@
     <Project Path="Credfeto.Orchestrator.Fingerprints.Tests/Credfeto.Orchestrator.Fingerprints.Tests.csproj" />
     <Project Path="Credfeto.Orchestrator.Fingerprints/Credfeto.Orchestrator.Fingerprints.csproj" />
   </Folder>
+  <Folder Name="/Discovery/">
+    <Project Path="Credfeto.Orchestrator.Discovery.Tests/Credfeto.Orchestrator.Discovery.Tests.csproj" />
+    <Project Path="Credfeto.Orchestrator.Discovery/Credfeto.Orchestrator.Discovery.csproj" />
+  </Folder>
   <Folder Name="/Git/">
     <Project Path="Credfeto.Orchestrator.Git.Tests/Credfeto.Orchestrator.Git.Tests.csproj" />
     <Project Path="Credfeto.Orchestrator.Git/Credfeto.Orchestrator.Git.csproj" />
