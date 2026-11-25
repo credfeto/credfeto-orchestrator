@@ -1,0 +1,961 @@
+{
+  "description": "Golden cases for the read-only lib/git queries (#252), checked by test/oneshot-git-parity.bats (the shell) and Credfeto.Orchestrator.Git.Tests (the tool). Each scenario's setup runs in an empty directory of the scenario's name, after the prelude, in the environment below with the variables under unset removed; the prelude pins the identity and dates, so the commit ids are the same on every machine. Each case runs its function from that directory, in the same environment, with REPO_WORK_DIR set to <directory>/<repo> (empty when repo is empty) and @ROOT@ in an argument replaced by the directory, and records what the function prints (stdout) and returns (status). tool: answers (the tool must print and return the same), refuses (the tool must exit 3, so bash answers) or not-called (bash returns before it asks the tool). test/oneshot-git-parity.bats regenerates stdout and status when GIT_PARITY_REGENERATE is set",
+  "environment": {
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "LC_ALL": "C.UTF-8"
+  },
+  "unset": [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_NAMESPACE",
+    "GIT_PREFIX"
+  ],
+  "prelude": "export GIT_AUTHOR_NAME=Parity GIT_AUTHOR_EMAIL=parity@example.com GIT_COMMITTER_NAME=Parity GIT_COMMITTER_EMAIL=parity@example.com\nexport GIT_AUTHOR_DATE='1767225600 +0000' GIT_COMMITTER_DATE='1767225600 +0000'\ncommit() { git -C \"$1\" commit -q --allow-empty -m \"$2\"; }\ncommit_all() { git -C \"$1\" commit -q -a -m \"$2\"; }\nbranch_on() {\n    local seed=\"$1\" remote=\"$2\" branch=\"$3\" count=\"$4\" i\n    git -C \"${seed}\" checkout -q -b \"${branch}\" main\n    for ((i = 1; i <= count; i++)); do commit \"${seed}\" \"${branch} ${i}\"; done\n    git -C \"${seed}\" push -q \"${remote}\" \"${branch}\"\n    git -C \"${seed}\" checkout -q main\n}\n",
+  "scenarios": [
+    {
+      "name": "checkouts",
+      "setup": "git init -q --bare -b main origin.git\ngit clone -q origin.git seed 2> /dev/null\nprintf 'one\\n' > seed/file.txt\ngit -C seed add file.txt\ncommit seed initial\ngit -C seed push -q origin main\nfor spec in feat/12-thing:2 chore/12:0 fix/120-other:1 bug/1120-x:1 Feat/34_x:1 34-plain:1 feat2/56-x:1 \\\n    a/b/56-y:1 feat/78:1 feat/78-later:1 dependabot/nuget/90-x:1 docs/readme:1 feat/77-café:1 feat/91-behind:0; do\n    branch_on seed origin \"${spec%:*}\" \"${spec##*:}\"\ndone\ncommit seed \"main moves on\"\ngit -C seed push -q origin main\ngit init -q --bare -b main upstream.git\nbranch_on seed \"${PWD}/upstream.git\" 66-z 1\nbranch_on seed \"${PWD}/upstream.git\" feat/55-up 1\ngit init -q --bare -b main accents.git\ngit -C seed push -q \"${PWD}/accents.git\" main\nbranch_on seed \"${PWD}/accents.git\" fé/88-x 1\nbranch_on seed \"${PWD}/accents.git\" feat/89é 1\nbranch_on seed \"${PWD}/accents.git\" feat/12-also 1\ngit init -q --bare -b main empty.git\nfor name in clean behind unstaged staged untracked deleted detached feature accented conflicted remotes; do\n    git clone -q origin.git \"${name}\"\ndone\ngit clone -q accents.git accents\ngit clone -q empty.git emptyclone 2> /dev/null\ngit -C behind reset -q --hard HEAD~1\nprintf 'two\\n' > unstaged/file.txt\nprintf 'two\\n' > staged/file.txt\ngit -C staged add file.txt\nprintf 'new\\n' > untracked/new.txt\nrm deleted/file.txt\ngit -C detached checkout -q --detach HEAD~1\ngit -C feature checkout -q -b feat/12-thing --track origin/feat/12-thing\ngit -C accented checkout -q -b feat/77-café --track origin/feat/77-café\ngit -C conflicted checkout -q -b side\nprintf 'side\\n' > conflicted/file.txt\ncommit_all conflicted side\ngit -C conflicted checkout -q main\nprintf 'main\\n' > conflicted/file.txt\ncommit_all conflicted \"main side\"\ngit -C conflicted merge -q side > /dev/null 2>&1 || true\ngit -C remotes remote add upstream ../upstream.git\ngit -C remotes fetch -q upstream\ngit init -q -b main unborn\ngit init -q -b main unbornstaged\nprintf 'one\\n' > unbornstaged/file.txt\ngit -C unbornstaged add file.txt\nmkdir plain\n"
+    }
+  ],
+  "cases": [
+    {
+      "name": "head commit of a clean clone on main",
+      "scenario": "checkouts",
+      "function": "checkout_head_sha",
+      "repo": "clean",
+      "args": [],
+      "tool": "answers",
+      "stdout": "fdeb104688e593fe68ca8bfafa5d79c6b3e56783\n",
+      "status": 0
+    },
+    {
+      "name": "head commit of a detached HEAD",
+      "scenario": "checkouts",
+      "function": "checkout_head_sha",
+      "repo": "detached",
+      "args": [],
+      "tool": "answers",
+      "stdout": "ce8cc047f9641f8dc20d2d4c42155465fb19a38d\n",
+      "status": 0
+    },
+    {
+      "name": "head commit of a feature branch",
+      "scenario": "checkouts",
+      "function": "checkout_head_sha",
+      "repo": "feature",
+      "args": [],
+      "tool": "answers",
+      "stdout": "4abf539300e508d224d3822c8086ad97d13667fc\n",
+      "status": 0
+    },
+    {
+      "name": "head commit of a branch with a non-ASCII name",
+      "scenario": "checkouts",
+      "function": "checkout_head_sha",
+      "repo": "accented",
+      "args": [],
+      "tool": "answers",
+      "stdout": "bbfc61132dd94f9254543018a48905e2cdaab908\n",
+      "status": 0
+    },
+    {
+      "name": "head commit of an unborn branch (no commits)",
+      "scenario": "checkouts",
+      "function": "checkout_head_sha",
+      "repo": "unborn",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "head commit of an unborn branch with a staged file",
+      "scenario": "checkouts",
+      "function": "checkout_head_sha",
+      "repo": "unbornstaged",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "head commit of a clone of an empty repository",
+      "scenario": "checkouts",
+      "function": "checkout_head_sha",
+      "repo": "emptyclone",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "head commit of a directory that is not a repository",
+      "scenario": "checkouts",
+      "function": "checkout_head_sha",
+      "repo": "plain",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 128
+    },
+    {
+      "name": "head commit of a path that does not exist",
+      "scenario": "checkouts",
+      "function": "checkout_head_sha",
+      "repo": "missing",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 128
+    },
+    {
+      "name": "head commit of an empty REPO_WORK_DIR (git -C \"\", the current directory, not a repository)",
+      "scenario": "checkouts",
+      "function": "checkout_head_sha",
+      "repo": "",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 128
+    },
+    {
+      "name": "current branch of a clean clone on main",
+      "scenario": "checkouts",
+      "function": "checkout_current_branch",
+      "repo": "clean",
+      "args": [],
+      "tool": "answers",
+      "stdout": "main\n",
+      "status": 0
+    },
+    {
+      "name": "current branch of a detached HEAD",
+      "scenario": "checkouts",
+      "function": "checkout_current_branch",
+      "repo": "detached",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "current branch of a feature branch",
+      "scenario": "checkouts",
+      "function": "checkout_current_branch",
+      "repo": "feature",
+      "args": [],
+      "tool": "answers",
+      "stdout": "feat/12-thing\n",
+      "status": 0
+    },
+    {
+      "name": "current branch of a branch with a non-ASCII name",
+      "scenario": "checkouts",
+      "function": "checkout_current_branch",
+      "repo": "accented",
+      "args": [],
+      "tool": "answers",
+      "stdout": "feat/77-café\n",
+      "status": 0
+    },
+    {
+      "name": "current branch of an unborn branch",
+      "scenario": "checkouts",
+      "function": "checkout_current_branch",
+      "repo": "unborn",
+      "args": [],
+      "tool": "answers",
+      "stdout": "main\n",
+      "status": 0
+    },
+    {
+      "name": "current branch of a checkout in the middle of a conflicted merge",
+      "scenario": "checkouts",
+      "function": "checkout_current_branch",
+      "repo": "conflicted",
+      "args": [],
+      "tool": "answers",
+      "stdout": "main\n",
+      "status": 0
+    },
+    {
+      "name": "current branch of a directory that is not a repository",
+      "scenario": "checkouts",
+      "function": "checkout_current_branch",
+      "repo": "plain",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 128
+    },
+    {
+      "name": "current branch of a path that does not exist",
+      "scenario": "checkouts",
+      "function": "checkout_current_branch",
+      "repo": "missing",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 128
+    },
+    {
+      "name": "current branch of an empty REPO_WORK_DIR",
+      "scenario": "checkouts",
+      "function": "checkout_current_branch",
+      "repo": "",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 128
+    },
+    {
+      "name": "uncommitted changes in a clean clone",
+      "scenario": "checkouts",
+      "function": "checkout_has_uncommitted_changes",
+      "repo": "clean",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "uncommitted changes in an unstaged change",
+      "scenario": "checkouts",
+      "function": "checkout_has_uncommitted_changes",
+      "repo": "unstaged",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "uncommitted changes in a staged change",
+      "scenario": "checkouts",
+      "function": "checkout_has_uncommitted_changes",
+      "repo": "staged",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "uncommitted changes in only an untracked file",
+      "scenario": "checkouts",
+      "function": "checkout_has_uncommitted_changes",
+      "repo": "untracked",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "uncommitted changes in a deleted tracked file",
+      "scenario": "checkouts",
+      "function": "checkout_has_uncommitted_changes",
+      "repo": "deleted",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "uncommitted changes in a clean detached HEAD",
+      "scenario": "checkouts",
+      "function": "checkout_has_uncommitted_changes",
+      "repo": "detached",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "uncommitted changes in a conflicted merge",
+      "scenario": "checkouts",
+      "function": "checkout_has_uncommitted_changes",
+      "repo": "conflicted",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "uncommitted changes in an empty unborn branch",
+      "scenario": "checkouts",
+      "function": "checkout_has_uncommitted_changes",
+      "repo": "unborn",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "uncommitted changes in a file staged on an unborn branch",
+      "scenario": "checkouts",
+      "function": "checkout_has_uncommitted_changes",
+      "repo": "unbornstaged",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "uncommitted changes in a clone of an empty repository",
+      "scenario": "checkouts",
+      "function": "checkout_has_uncommitted_changes",
+      "repo": "emptyclone",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "uncommitted changes in a directory that is not a repository (an error counts as changes)",
+      "scenario": "checkouts",
+      "function": "checkout_has_uncommitted_changes",
+      "repo": "plain",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "uncommitted changes in a path that does not exist",
+      "scenario": "checkouts",
+      "function": "checkout_has_uncommitted_changes",
+      "repo": "missing",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "uncommitted changes in an empty REPO_WORK_DIR",
+      "scenario": "checkouts",
+      "function": "checkout_has_uncommitted_changes",
+      "repo": "",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "origin branch exists: main (clean)",
+      "scenario": "checkouts",
+      "function": "origin_branch_exists",
+      "repo": "clean",
+      "args": [
+        "main"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "origin branch exists: a pushed feature branch (clean)",
+      "scenario": "checkouts",
+      "function": "origin_branch_exists",
+      "repo": "clean",
+      "args": [
+        "feat/12-thing"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "origin branch exists: a non-ASCII branch name (clean)",
+      "scenario": "checkouts",
+      "function": "origin_branch_exists",
+      "repo": "clean",
+      "args": [
+        "feat/77-café"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "origin branch exists: a branch origin does not have (clean)",
+      "scenario": "checkouts",
+      "function": "origin_branch_exists",
+      "repo": "clean",
+      "args": [
+        "nope"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "origin branch exists: an empty branch name (clean)",
+      "scenario": "checkouts",
+      "function": "origin_branch_exists",
+      "repo": "clean",
+      "args": [
+        ""
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "origin branch exists: a prefix of a branch name (clean)",
+      "scenario": "checkouts",
+      "function": "origin_branch_exists",
+      "repo": "clean",
+      "args": [
+        "feat"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "origin branch exists: origin's HEAD (clean)",
+      "scenario": "checkouts",
+      "function": "origin_branch_exists",
+      "repo": "clean",
+      "args": [
+        "HEAD"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "origin branch exists: a name with the remote prefix (clean)",
+      "scenario": "checkouts",
+      "function": "origin_branch_exists",
+      "repo": "clean",
+      "args": [
+        "origin/main"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "origin branch exists: a revision expression (clean)",
+      "scenario": "checkouts",
+      "function": "origin_branch_exists",
+      "repo": "clean",
+      "args": [
+        "main~1"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "origin branch exists: a branch only another remote has (remotes)",
+      "scenario": "checkouts",
+      "function": "origin_branch_exists",
+      "repo": "remotes",
+      "args": [
+        "66-z"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "origin branch exists: a repository with no remote (unborn)",
+      "scenario": "checkouts",
+      "function": "origin_branch_exists",
+      "repo": "unborn",
+      "args": [
+        "main"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "origin branch exists: a directory that is not a repository (plain)",
+      "scenario": "checkouts",
+      "function": "origin_branch_exists",
+      "repo": "plain",
+      "args": [
+        "main"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 128
+    },
+    {
+      "name": "origin branch exists: a path that does not exist (missing)",
+      "scenario": "checkouts",
+      "function": "origin_branch_exists",
+      "repo": "missing",
+      "args": [
+        "main"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 128
+    },
+    {
+      "name": "commits behind: a checkout one commit behind",
+      "scenario": "checkouts",
+      "function": "git_commits_behind",
+      "repo": "",
+      "args": [
+        "@ROOT@/behind",
+        "HEAD",
+        "origin/main"
+      ],
+      "tool": "answers",
+      "stdout": "1",
+      "status": 0
+    },
+    {
+      "name": "commits behind: a checkout level with origin",
+      "scenario": "checkouts",
+      "function": "git_commits_behind",
+      "repo": "",
+      "args": [
+        "@ROOT@/clean",
+        "HEAD",
+        "origin/main"
+      ],
+      "tool": "answers",
+      "stdout": "0",
+      "status": 0
+    },
+    {
+      "name": "commits behind: the other way round",
+      "scenario": "checkouts",
+      "function": "git_commits_behind",
+      "repo": "",
+      "args": [
+        "@ROOT@/behind",
+        "origin/main",
+        "HEAD"
+      ],
+      "tool": "answers",
+      "stdout": "0",
+      "status": 0
+    },
+    {
+      "name": "commits behind: commits ahead",
+      "scenario": "checkouts",
+      "function": "git_commits_behind",
+      "repo": "",
+      "args": [
+        "@ROOT@/feature",
+        "origin/main",
+        "HEAD"
+      ],
+      "tool": "answers",
+      "stdout": "2",
+      "status": 0
+    },
+    {
+      "name": "commits behind: a missing upstream",
+      "scenario": "checkouts",
+      "function": "git_commits_behind",
+      "repo": "",
+      "args": [
+        "@ROOT@/clean",
+        "HEAD",
+        "origin/nope"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "commits behind: a missing ref",
+      "scenario": "checkouts",
+      "function": "git_commits_behind",
+      "repo": "",
+      "args": [
+        "@ROOT@/clean",
+        "nope",
+        "origin/main"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "commits behind: an empty ref (..upstream is HEAD..upstream)",
+      "scenario": "checkouts",
+      "function": "git_commits_behind",
+      "repo": "",
+      "args": [
+        "@ROOT@/clean",
+        "",
+        "origin/main"
+      ],
+      "tool": "answers",
+      "stdout": "0",
+      "status": 0
+    },
+    {
+      "name": "commits behind: an empty upstream",
+      "scenario": "checkouts",
+      "function": "git_commits_behind",
+      "repo": "",
+      "args": [
+        "@ROOT@/clean",
+        "HEAD",
+        ""
+      ],
+      "tool": "answers",
+      "stdout": "0",
+      "status": 0
+    },
+    {
+      "name": "commits behind: a revision expression",
+      "scenario": "checkouts",
+      "function": "git_commits_behind",
+      "repo": "",
+      "args": [
+        "@ROOT@/clean",
+        "HEAD~1",
+        "HEAD"
+      ],
+      "tool": "answers",
+      "stdout": "1",
+      "status": 0
+    },
+    {
+      "name": "commits behind: a clone of an empty repository",
+      "scenario": "checkouts",
+      "function": "git_commits_behind",
+      "repo": "",
+      "args": [
+        "@ROOT@/emptyclone",
+        "HEAD",
+        "origin/main"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "commits behind: a directory that is not a repository",
+      "scenario": "checkouts",
+      "function": "git_commits_behind",
+      "repo": "",
+      "args": [
+        "@ROOT@/plain",
+        "HEAD",
+        "origin/main"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "commits behind: a path that does not exist",
+      "scenario": "checkouts",
+      "function": "git_commits_behind",
+      "repo": "",
+      "args": [
+        "@ROOT@/missing",
+        "HEAD",
+        "origin/main"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "commits behind: an empty repository directory (the current directory)",
+      "scenario": "checkouts",
+      "function": "git_commits_behind",
+      "repo": "",
+      "args": [
+        "",
+        "HEAD",
+        "origin/main"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "stale issue branch: a branch two commits ahead (clean)",
+      "scenario": "checkouts",
+      "function": "find_stale_issue_branch",
+      "repo": "clean",
+      "args": [
+        "12"
+      ],
+      "tool": "answers",
+      "stdout": "feat/12-thing",
+      "status": 0
+    },
+    {
+      "name": "stale issue branch: no match inside a longer number (clean)",
+      "scenario": "checkouts",
+      "function": "find_stale_issue_branch",
+      "repo": "clean",
+      "args": [
+        "120"
+      ],
+      "tool": "answers",
+      "stdout": "fix/120-other",
+      "status": 0
+    },
+    {
+      "name": "stale issue branch: a longer number (clean)",
+      "scenario": "checkouts",
+      "function": "find_stale_issue_branch",
+      "repo": "clean",
+      "args": [
+        "1120"
+      ],
+      "tool": "answers",
+      "stdout": "bug/1120-x",
+      "status": 0
+    },
+    {
+      "name": "stale issue branch: an upper-case type and an underscore (clean)",
+      "scenario": "checkouts",
+      "function": "find_stale_issue_branch",
+      "repo": "clean",
+      "args": [
+        "34"
+      ],
+      "tool": "answers",
+      "stdout": "Feat/34_x",
+      "status": 0
+    },
+    {
+      "name": "stale issue branch: no letters-only type before the number (clean)",
+      "scenario": "checkouts",
+      "function": "find_stale_issue_branch",
+      "repo": "clean",
+      "args": [
+        "56"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "stale issue branch: the first of two matches in ref order (clean)",
+      "scenario": "checkouts",
+      "function": "find_stale_issue_branch",
+      "repo": "clean",
+      "args": [
+        "78"
+      ],
+      "tool": "answers",
+      "stdout": "feat/78",
+      "status": 0
+    },
+    {
+      "name": "stale issue branch: a three-part branch name (clean)",
+      "scenario": "checkouts",
+      "function": "find_stale_issue_branch",
+      "repo": "clean",
+      "args": [
+        "90"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "stale issue branch: a match with no commits ahead (clean)",
+      "scenario": "checkouts",
+      "function": "find_stale_issue_branch",
+      "repo": "clean",
+      "args": [
+        "91"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "stale issue branch: a non-ASCII name after the number (clean)",
+      "scenario": "checkouts",
+      "function": "find_stale_issue_branch",
+      "repo": "clean",
+      "args": [
+        "77"
+      ],
+      "tool": "answers",
+      "stdout": "feat/77-café",
+      "status": 0
+    },
+    {
+      "name": "stale issue branch: no branch for the issue (clean)",
+      "scenario": "checkouts",
+      "function": "find_stale_issue_branch",
+      "repo": "clean",
+      "args": [
+        "1"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "stale issue branch: a leading zero (clean)",
+      "scenario": "checkouts",
+      "function": "find_stale_issue_branch",
+      "repo": "clean",
+      "args": [
+        "012"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "stale issue branch: an empty issue id (refused: the regex is then not about a number) (clean)",
+      "scenario": "checkouts",
+      "function": "find_stale_issue_branch",
+      "repo": "clean",
+      "args": [
+        ""
+      ],
+      "tool": "refuses",
+      "stdout": "a/b/56-y",
+      "status": 0
+    },
+    {
+      "name": "stale issue branch: an issue id that is not all digits (clean)",
+      "scenario": "checkouts",
+      "function": "find_stale_issue_branch",
+      "repo": "clean",
+      "args": [
+        "12x"
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "stale issue branch: a branch on another remote, its name kept whole (remotes)",
+      "scenario": "checkouts",
+      "function": "find_stale_issue_branch",
+      "repo": "remotes",
+      "args": [
+        "66"
+      ],
+      "tool": "answers",
+      "stdout": "upstream/66-z",
+      "status": 0
+    },
+    {
+      "name": "stale issue branch: a typed branch on another remote (remotes)",
+      "scenario": "checkouts",
+      "function": "find_stale_issue_branch",
+      "repo": "remotes",
+      "args": [
+        "55"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "stale issue branch: a non-ASCII type, which bash matches by the locale (accents)",
+      "scenario": "checkouts",
+      "function": "find_stale_issue_branch",
+      "repo": "accents",
+      "args": [
+        "88"
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "stale issue branch: a non-ASCII character right after the number (accents)",
+      "scenario": "checkouts",
+      "function": "find_stale_issue_branch",
+      "repo": "accents",
+      "args": [
+        "89"
+      ],
+      "tool": "refuses",
+      "stdout": "feat/89é",
+      "status": 0
+    },
+    {
+      "name": "stale issue branch: a match found before any non-ASCII name (accents)",
+      "scenario": "checkouts",
+      "function": "find_stale_issue_branch",
+      "repo": "accents",
+      "args": [
+        "12"
+      ],
+      "tool": "answers",
+      "stdout": "feat/12-also",
+      "status": 0
+    },
+    {
+      "name": "stale issue branch: no match: the number rules out a non-ASCII type (accents)",
+      "scenario": "checkouts",
+      "function": "find_stale_issue_branch",
+      "repo": "accents",
+      "args": [
+        "13"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "stale issue branch: a clone of an empty repository (emptyclone)",
+      "scenario": "checkouts",
+      "function": "find_stale_issue_branch",
+      "repo": "emptyclone",
+      "args": [
+        "12"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "stale issue branch: a repository with no remote branches (unborn)",
+      "scenario": "checkouts",
+      "function": "find_stale_issue_branch",
+      "repo": "unborn",
+      "args": [
+        "12"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "stale issue branch: a directory with no .git (bash returns before the tool) (plain)",
+      "scenario": "checkouts",
+      "function": "find_stale_issue_branch",
+      "repo": "plain",
+      "args": [
+        "12"
+      ],
+      "tool": "not-called",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "stale issue branch: a path that does not exist (bash returns before the tool) (missing)",
+      "scenario": "checkouts",
+      "function": "find_stale_issue_branch",
+      "repo": "missing",
+      "args": [
+        "12"
+      ],
+      "tool": "not-called",
+      "stdout": "",
+      "status": 1
+    }
+  ]
+}
