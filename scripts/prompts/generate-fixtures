@@ -195,12 +195,32 @@ for locale in C.UTF-8 C POSIX; do
     done
 done
 
+# Writes JSON from stdin to file $1 with every character the JSON linter (eslint no-irregular-whitespace) refuses
+# written as its \u escape: the same JSON value, but a raw U+2028 in a string reads to the linter as a line break.
+# jq already escapes the control characters among them.
+_gen_write_json() {
+    local pair hex bytes script=""
+    # UTF-8 bytes in hex : code point
+    for pair in c285:0085 c2a0:00a0 e19a80:1680 e1a08e:180e e28080:2000 e28081:2001 e28082:2002 e28083:2003 \
+        e28084:2004 e28085:2005 e28086:2006 e28087:2007 e28088:2008 e28089:2009 e2808a:200a e2808b:200b \
+        e280a8:2028 e280a9:2029 e280af:202f e2819f:205f e38080:3000 efbbbf:feff; do
+        hex="${pair%%:*}"
+        bytes=""
+        while [ -n "${hex}" ]; do
+            bytes+="\\x${hex:0:2}"
+            hex="${hex:2}"
+        done
+        script+="s/${bytes}/\\\\u${pair#*:}/g;"
+    done
+    LC_ALL=C sed -e "${script}" > "$1"
+}
+
 for collection in issueClaudeMd pullRequestClaudeMd launchPrompts precheckSections checkLength; do
     [ -s "${_gen_tmp}/${collection}" ] || _gen_fail "no ${collection} cases"
 done
 jq -n --indent 2 --slurpfile issues "${_gen_tmp}/issueClaudeMd" --slurpfile launch "${_gen_tmp}/launchPrompts" \
     --slurpfile precheck "${_gen_tmp}/precheckSections" --slurpfile lengths "${_gen_tmp}/checkLength" \
     '{issueClaudeMd: $issues, launchPrompts: $launch, precheckSections: $precheck, checkLength: $lengths}' \
-    > "${_gen_out}/prompts-parity.json" || _gen_fail "cannot write prompts-parity.json"
+    | _gen_write_json "${_gen_out}/prompts-parity.json" || _gen_fail "cannot write prompts-parity.json"
 jq -n --indent 2 --slurpfile prs "${_gen_tmp}/pullRequestClaudeMd" '{pullRequestClaudeMd: $prs}' \
-    > "${_gen_out}/prompts-pr-parity.json" || _gen_fail "cannot write prompts-pr-parity.json"
+    | _gen_write_json "${_gen_out}/prompts-pr-parity.json" || _gen_fail "cannot write prompts-pr-parity.json"
