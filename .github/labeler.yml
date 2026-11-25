@@ -22,6 +22,10 @@
   - any: ['src/Credfeto.Orchestrator.Config/**/*']
 "credfeto-orchestrator-config-tests":
   - any: ['src/Credfeto.Orchestrator.Config.Tests/**/*']
+"credfeto-orchestrator-discord":
+  - any: ['src/Credfeto.Orchestrator.Discord/**/*']
+"credfeto-orchestrator-discord-tests":
+  - any: ['src/Credfeto.Orchestrator.Discord.Tests/**/*']
 "credfeto-orchestrator-discovery":
   - any: ['src/Credfeto.Orchestrator.Discovery/**/*']
 "credfeto-orchestrator-discovery-tests":

@@ -64,6 +64,14 @@
   color: "0e8a16"
   description: "Changes in Credfeto.Orchestrator.Config.Tests project"
 
+- name: "credfeto-orchestrator-discord"
+  color: "96f7d2"
+  description: "Changes in Credfeto.Orchestrator.Discord project"
+
+- name: "credfeto-orchestrator-discord-tests"
+  color: "0e8a16"
+  description: "Changes in Credfeto.Orchestrator.Discord.Tests project"
+
 - name: "credfeto-orchestrator-discovery"
   color: "96f7d2"
   description: "Changes in Credfeto.Orchestrator.Discovery project"
