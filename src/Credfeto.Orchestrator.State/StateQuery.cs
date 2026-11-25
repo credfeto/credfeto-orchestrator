@@ -1,0 +1,14 @@
+namespace Credfeto.Orchestrator.State;
+
+public enum StateQuery
+{
+    INFRA_FAILURES,
+    INVOCATIONS,
+    ENV_UNBLOCK_ATTEMPTS,
+    MARKER,
+    LAST_DIAGNOSTIC,
+    PRECHECK_RESULT,
+    PULL_DURATION_BASELINE,
+    RATE_LIMIT,
+    SESSION_DENIALS_SUMMARY,
+}

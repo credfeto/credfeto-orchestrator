@@ -9,6 +9,7 @@ using Credfeto.Orchestrator.Commands;
 using Credfeto.Orchestrator.Discovery;
 using Credfeto.Orchestrator.Fingerprints;
 using Credfeto.Orchestrator.GitHub;
+using Credfeto.Orchestrator.State;
 
 namespace Credfeto.Orchestrator.Cmd;
 
@@ -82,6 +83,11 @@ public static class Program
             return RunPromptAsync(args: args, cancellationToken: cancellationToken);
         }
 
+        if (StateCommandParser.IsVerb(args))
+        {
+            return RunStateAsync(args: args, cancellationToken: cancellationToken);
+        }
+
         return RunCommandAsync(args: args, cancellationToken: cancellationToken);
     }
 
@@ -107,6 +113,16 @@ public static class Program
             error: Console.Error,
             cancellationToken: cancellationToken
         );
+    }
+
+    // state has its own runner: it writes the bytes a state file holds to stdout untouched, not through Console.Out
+    private static async Task<int> RunStateAsync(string[] args, CancellationToken cancellationToken)
+    {
+        await using Stream output = Console.OpenStandardOutput();
+
+        return await StateCommandRunner
+            .CreateDefault()
+            .RunAsync(args: args, output: output, error: Console.Error, cancellationToken: cancellationToken);
     }
 
     private static async Task<int> RunCommandAsync(string[] args, CancellationToken cancellationToken)
