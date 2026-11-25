@@ -76,12 +76,16 @@ FINGERPRINT_SCHEMA_VERSION=2
 # opts in. ORCHESTRATOR_DOTNET_FINGERPRINTS: fingerprint_pr_json / fingerprint_issue_json.
 # ORCHESTRATOR_DOTNET_GITHUB: the lib/github reads the cfwf MCP server already offers, which the tool
 # makes through that server at ORCHESTRATOR_CFWF_MCP_URL (the agent's cfwf server).
+# ORCHESTRATOR_DOTNET_PREDICATES: the pure predicates and reads of lib/github-status over a pull
+# request's or Issue's JSON, including the plan-approval rule (label writes and auto-merge stay here).
 # shellcheck disable=SC2034  # read by lib/fingerprints after sourcing
 ORCHESTRATOR_CMD="${ORCHESTRATOR_CMD:-credfeto-orchestrator}"
 # shellcheck disable=SC2034  # read by lib/fingerprints after sourcing
 ORCHESTRATOR_DOTNET_FINGERPRINTS="${ORCHESTRATOR_DOTNET_FINGERPRINTS:-0}"
 # shellcheck disable=SC2034  # read by lib/github after sourcing
 ORCHESTRATOR_DOTNET_GITHUB="${ORCHESTRATOR_DOTNET_GITHUB:-0}"
+# shellcheck disable=SC2034  # read by lib/github-status after sourcing
+ORCHESTRATOR_DOTNET_PREDICATES="${ORCHESTRATOR_DOTNET_PREDICATES:-0}"
 # shellcheck disable=SC2034  # read by lib/github after sourcing
 ORCHESTRATOR_CFWF_MCP_URL="${ORCHESTRATOR_CFWF_MCP_URL:-https://workflow-mcp.markridgwell.com/mcp}"
 # ORCHESTRATOR_DOTNET_GIT: the read-only lib/git checkout queries, which the tool answers by running

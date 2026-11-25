@@ -9,6 +9,9 @@ public static class ExitCodes
 
     public const int Usage = 2;
 
+    // A predicate's answer is false, or the read found nothing
+    public const int No = 3;
+
     // Stopped by SIGINT or SIGTERM
     public const int Cancelled = 130;
 }

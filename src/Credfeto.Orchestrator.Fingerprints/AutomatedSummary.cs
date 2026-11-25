@@ -5,7 +5,7 @@ namespace Credfeto.Orchestrator.Fingerprints;
 
 // _JQ_DEF_AUTOMATED_SUMMARY (lib/globals): a comment that opens with a <!-- ...-summary --> or
 // <!-- ...-summary-comment --> marker is an automated CI summary, not human activity
-internal static partial class AutomatedSummary
+public static partial class AutomatedSummary
 {
     private const int MATCH_TIMEOUT_MILLISECONDS = 1000;
 

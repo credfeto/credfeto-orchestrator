@@ -25,6 +25,7 @@ public sealed class CommandRunner
                credfeto-orchestrator github open-prs-closing-issues --repo <owner/repo>
                credfeto-orchestrator github pr-commit-authors --repo <owner/repo> --pr <number>
                credfeto-orchestrator github branch-behind-by --repo <owner/repo> --base <branch> --head <branch>
+               credfeto-orchestrator predicate <name> [--<option> <value>]...
 
         fingerprint reads the pull request or issue JSON on stdin and prints its fingerprint, exactly
         as fingerprint_pr_json / fingerprint_issue_json in lib/fingerprints do.
@@ -40,8 +41,22 @@ public sealed class CommandRunner
         email of each commit author, as one line of JSON; branch-behind-by how many commits --head is
         behind --base.
 
-        Exit codes: 0 printed; 1 the fingerprint could not be computed or the read failed; 2 a usage
-        error.
+        predicate runs one of the lib/github-status predicates and reads over the pull request or Issue
+        JSON on stdin, exactly as the shell function of the same name does: pr-has-placeholder-file,
+        pr-has-only-passed-checks, pr-is-terminal [--review-pipeline-finished <json>],
+        pr-has-failed-required-check, pr-has-failed-check-of-unknown-requiredness,
+        pr-has-pending-ci-checks, pr-has-unaddressed-review-request, pr-needs-review-approval,
+        issue-has-plan-comment and issue-has-human-plan-approval [--me <login>] [--trusted-file <file>]
+        print true (exit 0) or false (exit 3); pr-latest-trusted-comment-timestamp and
+        pr-unaddressed-trusted-comments [--trusted-file <file>] [--review-comments-file <file>]
+        [--issue-comments-file <file>] [--exclude-login <login>] (the second also [--last-seen <time>]
+        --per-comment-max <n>) print the newest trusted activity time and the unaddressed trusted
+        comments; pr-annotate-required-checks [--required-file <file>] [--base-requires-checks <value>]
+        prints the JSON with each check's isRequired set; pr-env-block-image-sha and
+        pr-lowest-closing-issue --repo <owner/repo> print what they find, or exit 3 when there is none.
+
+        Exit codes: 0 printed; 1 the fingerprint could not be computed, the read failed or the predicate's
+        input is not what jq could read; 2 a usage error; 3 as predicate describes.
         """;
 
     private static readonly Encoding Utf8 = new UTF8Encoding(
@@ -85,6 +100,34 @@ public sealed class CommandRunner
             );
         }
 
+        if (args.Count > 0 && StringComparer.Ordinal.Equals(x: args[0], y: PredicateCommandParser.Verb))
+        {
+            return await this.RunPredicateAsync(
+                args: args,
+                input: input,
+                output: output,
+                error: error,
+                cancellationToken: cancellationToken
+            );
+        }
+
+        return await this.RunFingerprintAsync(
+            args: args,
+            input: input,
+            output: output,
+            error: error,
+            cancellationToken: cancellationToken
+        );
+    }
+
+    private async ValueTask<int> RunFingerprintAsync(
+        IReadOnlyList<string> args,
+        Stream input,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken cancellationToken
+    )
+    {
         FingerprintCommand? command = FingerprintCommandParser.Parse(args: args, error: out string problem);
 
         if (command is null)
@@ -145,6 +188,53 @@ public sealed class CommandRunner
             return ExitCodes.Success;
         }
         catch (GitHubReadException exception)
+        {
+            return await FailAsync(error: error, message: exception.Message, cancellationToken: cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return ExitCodes.Cancelled;
+        }
+    }
+
+    private async ValueTask<int> RunPredicateAsync(
+        IReadOnlyList<string> args,
+        Stream input,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken cancellationToken
+    )
+    {
+        PredicateCommand? command = PredicateCommandParser.Parse(args: args, error: out string problem);
+
+        if (command is null)
+        {
+            return await UsageAsync(error: error, problem: problem, cancellationToken: cancellationToken);
+        }
+
+        try
+        {
+            string json = await ReadAllAsync(input: input, cancellationToken: cancellationToken);
+            PredicateOutcome outcome = await new PredicateCommandRunner(this._files).RunAsync(
+                command: command,
+                input: json,
+                cancellationToken: cancellationToken
+            );
+            await output.WriteAsync(outcome.Printed.AsMemory(), cancellationToken);
+            await output.FlushAsync(cancellationToken);
+
+            if (outcome.Problem is not null)
+            {
+                await error.WriteLineAsync($"{PROGRAM}: {outcome.Problem}".AsMemory(), cancellationToken);
+            }
+
+            return outcome.ExitCode;
+        }
+        catch (IOException exception)
+        {
+            return await FailAsync(error: error, message: exception.Message, cancellationToken: cancellationToken);
+        }
+        catch (UnauthorizedAccessException exception)
         {
             return await FailAsync(error: error, message: exception.Message, cancellationToken: cancellationToken);
         }
