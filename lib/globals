@@ -94,6 +94,11 @@ ORCHESTRATOR_DOTNET_PROMPTS="${ORCHESTRATOR_DOTNET_PROMPTS:-0}"
 ORCHESTRATOR_DOTNET_DISCOVERY="${ORCHESTRATOR_DOTNET_DISCOVERY:-0}"
 # shellcheck disable=SC2034  # read by lib/github-status after sourcing
 ORCHESTRATOR_DOTNET_PREDICATES="${ORCHESTRATOR_DOTNET_PREDICATES:-0}"
+# ORCHESTRATOR_DOTNET_AGENTS: the read-only ssh-agent query (whether the agent at SSH_AUTH_SOCK holds a key,
+# ssh_agent_key_state in lib/podman), which the tool answers over the ssh-agent protocol; loading keys, the
+# gpg-agent checks and stopping the agent stay in bash.
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
+ORCHESTRATOR_DOTNET_AGENTS="${ORCHESTRATOR_DOTNET_AGENTS:-0}"
 # shellcheck disable=SC2034  # read by lib/github after sourcing
 ORCHESTRATOR_CFWF_MCP_URL="${ORCHESTRATOR_CFWF_MCP_URL:-https://workflow-mcp.markridgwell.com/mcp}"
 # ORCHESTRATOR_DOTNET_GIT: the read-only lib/git checkout queries (branch, changes, status, stash
