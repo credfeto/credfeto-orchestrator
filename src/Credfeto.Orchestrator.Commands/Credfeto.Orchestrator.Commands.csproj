@@ -42,6 +42,7 @@
     <ProjectReference Include="../Credfeto.Orchestrator.Git/Credfeto.Orchestrator.Git.csproj" />
     <ProjectReference Include="../Credfeto.Orchestrator.GitHub/Credfeto.Orchestrator.GitHub.csproj" />
     <ProjectReference Include="../Credfeto.Orchestrator.Jq/Credfeto.Orchestrator.Jq.csproj" />
+    <ProjectReference Include="../Credfeto.Orchestrator.Predicates/Credfeto.Orchestrator.Predicates.csproj" />
     <ProjectReference Include="../Credfeto.Orchestrator.Prompts/Credfeto.Orchestrator.Prompts.csproj" />
   </ItemGroup>
   <ItemGroup>

@@ -35,6 +35,10 @@
     <Project Path="Credfeto.Orchestrator.Prompts.Tests/Credfeto.Orchestrator.Prompts.Tests.csproj" />
     <Project Path="Credfeto.Orchestrator.Prompts/Credfeto.Orchestrator.Prompts.csproj" />
   </Folder>
+  <Folder Name="/Predicates/">
+    <Project Path="Credfeto.Orchestrator.Predicates.Tests/Credfeto.Orchestrator.Predicates.Tests.csproj" />
+    <Project Path="Credfeto.Orchestrator.Predicates/Credfeto.Orchestrator.Predicates.csproj" />
+  </Folder>
   <Folder Name="/GitHub/">
     <Project Path="Credfeto.Orchestrator.GitHub.Tests/Credfeto.Orchestrator.GitHub.Tests.csproj" />
     <Project Path="Credfeto.Orchestrator.GitHub/Credfeto.Orchestrator.GitHub.csproj" />
