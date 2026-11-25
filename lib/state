@@ -4,6 +4,31 @@
 # rate limiting, blocked/closed-issue notification markers, and the per-day session-denials
 # record with its daily digest rollover.
 
+# Asks ORCHESTRATOR_CMD state <query> for a read-only lib/state answer (ORCHESTRATOR_DOTNET_STATE=1, #252), passing
+# the remaining arguments. When the tool gives one (exit 0 or 1, or 4 from rate-limit), sets state_tool_output to what it
+# printed, byte for byte and trailing newlines kept, and state_tool_status to its status, both locals of the caller, and
+# returns 0. Otherwise (the tool refused, failed or is missing) warns and returns 1, and the caller answers in bash:
+# every query only reads, so answering again in bash is always safe.
+_state_tool_answers() {
+    local query="$1" text status
+    shift
+    # The tool's exit status after a dot keeps the output's own trailing newlines, which $(...) would drop
+    text=$(
+        "${ORCHESTRATOR_CMD}" state "${query}" "$@" < /dev/null
+        printf '.%s' "$?"
+    )
+    status=${text##*.}
+    case "${status}" in
+        0 | 1 | 4)
+            state_tool_output=${text%.*}
+            state_tool_status=${status}
+            return 0
+            ;;
+    esac
+    warn "${ORCHESTRATOR_CMD} state ${query} failed (exit ${status}); answering in bash instead"
+    return 1
+}
+
 # Shared invocation-guard file path for the runaway backstop, keyed by item type + id. The PR
 # and Issue guards below store different shapes (PRs also track an idle counter — see
 # load/save_pr_invocation_counts vs. the Issue-only total) so their load/save logic stays
@@ -25,10 +50,16 @@ infra_failure_guard_file_path() {
 }
 
 # Reads the saved consecutive-infra-failure count, defaulting a missing/corrupt value to 0.
-# Sets global INFRA_FAILURE_COUNT (declared in lib/globals).
+# Sets global INFRA_FAILURE_COUNT (declared in lib/globals). With ORCHESTRATOR_DOTNET_STATE=1 the tool
+# reads it (_state_tool_answers).
 load_infra_failure_count() {
-    local item_type="$1" item_id="$2" guard_file value
+    local item_type="$1" item_id="$2" guard_file value state_tool_output state_tool_status
     INFRA_FAILURE_COUNT=0
+    if [ "${ORCHESTRATOR_DOTNET_STATE}" = 1 ] && _state_tool_answers infra-failures \
+        --session-dir "${SESSION_BASE_DIR}" --type "${item_type}" --id "${item_id}"; then
+        INFRA_FAILURE_COUNT="${state_tool_output}"
+        return 0
+    fi
     guard_file=$(infra_failure_guard_file_path "${item_type}" "${item_id}")
     [ -f "${guard_file}" ] || return 0
     value=$(cat "${guard_file}" 2>/dev/null)
@@ -159,11 +190,18 @@ parse_two_token_counters() {
 }
 
 # Reads the saved "<total> <idle>" counters for a PR, defaulting missing/corrupt values to 0.
-# Sets globals PR_INVOCATION_TOTAL and PR_INVOCATION_IDLE (declared in lib/globals).
+# Sets globals PR_INVOCATION_TOTAL and PR_INVOCATION_IDLE (declared in lib/globals). With
+# ORCHESTRATOR_DOTNET_STATE=1 the tool reads them (_state_tool_answers), as "<total> <idle>".
 load_pr_invocation_counts() {
-    local item_id="$1" guard_file line
+    local item_id="$1" guard_file line state_tool_output state_tool_status
     PR_INVOCATION_TOTAL=0
     PR_INVOCATION_IDLE=0
+    if [ "${ORCHESTRATOR_DOTNET_STATE}" = 1 ] && _state_tool_answers invocations \
+        --session-dir "${SESSION_BASE_DIR}" --type PullRequest --id "${item_id}"; then
+        PR_INVOCATION_TOTAL="${state_tool_output% *}"
+        PR_INVOCATION_IDLE="${state_tool_output#* }"
+        return 0
+    fi
     guard_file=$(pr_invocation_guard_file_path "${item_id}")
     [ -f "${guard_file}" ] || return 0
     line=$(cat "${guard_file}" 2>/dev/null)
@@ -300,10 +338,15 @@ env_unblock_cap_notice_marker_file_path() {
 
 # Reads how many times oneshot has already auto-cleared Blocked on this PR for an environment
 # diagnosis. Sets global ENV_UNBLOCK_ATTEMPTS (declared in lib/globals), defaulting to 0 for a
-# missing/corrupt guard file.
+# missing/corrupt guard file. With ORCHESTRATOR_DOTNET_STATE=1 the tool reads it (_state_tool_answers).
 load_env_unblock_attempts() {
-    local item_id="$1" guard_file total
+    local item_id="$1" guard_file total state_tool_output state_tool_status
     ENV_UNBLOCK_ATTEMPTS=0
+    if [ "${ORCHESTRATOR_DOTNET_STATE}" = 1 ] && _state_tool_answers env-unblock-attempts \
+        --session-dir "${SESSION_BASE_DIR}" --id "${item_id}"; then
+        ENV_UNBLOCK_ATTEMPTS="${state_tool_output}"
+        return 0
+    fi
     guard_file=$(env_unblock_attempts_file_path "${item_id}")
     [ -f "${guard_file}" ] || return 0
     total=$(cat "${guard_file}" 2>/dev/null)
@@ -396,11 +439,18 @@ issue_invocation_guard_file_path() {
 }
 
 # Reads the saved "<total> <idle>" counters for an Issue, defaulting missing/corrupt values to 0.
-# Sets globals ISSUE_INVOCATION_TOTAL and ISSUE_INVOCATION_IDLE (declared in lib/globals).
+# Sets globals ISSUE_INVOCATION_TOTAL and ISSUE_INVOCATION_IDLE (declared in lib/globals). With
+# ORCHESTRATOR_DOTNET_STATE=1 the tool reads them (_state_tool_answers), as "<total> <idle>".
 load_issue_invocation_counts() {
-    local item_id="$1" guard_file line
+    local item_id="$1" guard_file line state_tool_output state_tool_status
     ISSUE_INVOCATION_TOTAL=0
     ISSUE_INVOCATION_IDLE=0
+    if [ "${ORCHESTRATOR_DOTNET_STATE}" = 1 ] && _state_tool_answers invocations \
+        --session-dir "${SESSION_BASE_DIR}" --type Issue --id "${item_id}"; then
+        ISSUE_INVOCATION_TOTAL="${state_tool_output% *}"
+        ISSUE_INVOCATION_IDLE="${state_tool_output#* }"
+        return 0
+    fi
     guard_file=$(issue_invocation_guard_file_path "${item_id}")
     [ -f "${guard_file}" ] || return 0
     line=$(cat "${guard_file}" 2>/dev/null)
@@ -481,9 +531,15 @@ record_pull_duration() {
 # Returns the median of the current owner's recorded pull durations on stdout, or nothing (and
 # a non-zero exit) when fewer than PULL_DURATION_MIN_SAMPLES samples are recorded yet - the
 # caller must skip the slow-pull check entirely in that case rather than compare against a
-# baseline built from too little history to be meaningful.
+# baseline built from too little history to be meaningful. With ORCHESTRATOR_DOTNET_STATE=1 the tool
+# works it out (_state_tool_answers).
 pull_duration_baseline() {
-    local samples count
+    local samples count state_tool_output state_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_STATE}" = 1 ] && _state_tool_answers pull-duration-baseline \
+        --state-dir "${ORCHESTRATOR_STATE_DIR}" --owner "${OWNER}" --min-samples "${PULL_DURATION_MIN_SAMPLES}"; then
+        printf '%s' "${state_tool_output}"
+        return "${state_tool_status}"
+    fi
     samples=$(_pull_duration_samples)
     [ -n "${samples}" ] || return 1
     count=$(printf '%s\n' "${samples}" | wc -l)
@@ -520,10 +576,17 @@ save_rate_limit() {
 }
 
 # Returns 0 (true) if the current owner is still rate-limited.
-# Clears the rate-limit file when the reset time has passed.
+# Clears the rate-limit file when the reset time has passed. With ORCHESTRATOR_DOTNET_STATE=1 the tool
+# reads it (_state_tool_answers), and its status 4 (not rate-limited, the file stale) has it removed here.
 is_owner_rate_limited() {
-    local rate_limit_file reset_unix now_unix
+    local rate_limit_file reset_unix now_unix state_tool_output state_tool_status
     rate_limit_file=$(owner_rate_limit_file)
+    if [ "${ORCHESTRATOR_DOTNET_STATE}" = 1 ] && _state_tool_answers rate-limit \
+        --state-dir "${ORCHESTRATOR_STATE_DIR}" --owner "${OWNER}"; then
+        [ "${state_tool_status}" = 4 ] || return "${state_tool_status}"
+        rm -f "${rate_limit_file}"
+        return 1
+    fi
     [ -f "${rate_limit_file}" ] || return 1
     reset_unix=$(cat "${rate_limit_file}" 2>/dev/null) || return 1
     [[ "${reset_unix}" =~ ^[0-9]+$ ]] || { rm -f "${rate_limit_file}"; return 1; }
@@ -658,8 +721,14 @@ issue_plan_block_marker_file_path() {
     printf '%s/Issue_%s.plan-block' "${SESSION_BASE_DIR}" "${item_id}"
 }
 
-# Returns 0 (true) if the self-heal marker above is present for this Issue.
+# Returns 0 (true) if the self-heal marker above is present for this Issue. With ORCHESTRATOR_DOTNET_STATE=1
+# the tool looks (_state_tool_answers), as for the other markers below.
 issue_plan_block_marked() {
+    local state_tool_output state_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_STATE}" = 1 ] && _state_tool_answers marker \
+        --session-dir "${SESSION_BASE_DIR}" --type Issue --id "$1" --kind plan-block; then
+        return "${state_tool_status}"
+    fi
     [ -f "$(issue_plan_block_marker_file_path "$1")" ]
 }
 
@@ -690,6 +759,11 @@ issue_blocked_replan_marker_file_path() {
 
 # Returns 0 (true) if the recovery marker above is present for this Issue.
 issue_blocked_replan_marked() {
+    local state_tool_output state_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_STATE}" = 1 ] && _state_tool_answers marker \
+        --session-dir "${SESSION_BASE_DIR}" --type Issue --id "$1" --kind blocked-replan; then
+        return "${state_tool_status}"
+    fi
     [ -f "$(issue_blocked_replan_marker_file_path "$1")" ]
 }
 
@@ -727,6 +801,11 @@ background_stall_marker_file_path() {
 # Returns 0 (true) if the immediately preceding session on this item ended with the
 # background-stall pattern described above.
 background_stall_marked() {
+    local state_tool_output state_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_STATE}" = 1 ] && _state_tool_answers marker \
+        --session-dir "${SESSION_BASE_DIR}" --type "$1" --id "$2" --kind background-stall; then
+        return "${state_tool_status}"
+    fi
     [ -f "$(background_stall_marker_file_path "$1" "$2")" ]
 }
 
@@ -766,9 +845,15 @@ save_last_diagnostic() {
         || warn "Failed to write last-diagnostic marker for ${item_type} #${item_id} — a later Blocked comment will not include it"
 }
 
-# Echoes the stored diagnostic text for this item, or empty if no marker file exists.
+# Echoes the stored diagnostic text for this item, or empty if no marker file exists. With
+# ORCHESTRATOR_DOTNET_STATE=1 the tool reads it (_state_tool_answers).
 load_last_diagnostic() {
-    local item_type="$1" item_id="$2"
+    local item_type="$1" item_id="$2" state_tool_output state_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_STATE}" = 1 ] && _state_tool_answers last-diagnostic \
+        --session-dir "${SESSION_BASE_DIR}" --type "${item_type}" --id "${item_id}"; then
+        printf '%s' "${state_tool_output}"
+        return 0
+    fi
     cat "$(last_diagnostic_marker_file_path "${item_type}" "${item_id}")" 2>/dev/null || true
 }
 
@@ -792,9 +877,15 @@ precheck_cache_file_path() {
 }
 
 # Prints the cached status for key when it was recorded for exactly this sha; returns 1 (nothing
-# printed) when there is no record, the record is for another SHA, or it is unreadable.
+# printed) when there is no record, the record is for another SHA, or it is unreadable. With
+# ORCHESTRATOR_DOTNET_STATE=1 the tool reads it (_state_tool_answers).
 load_precheck_result() {
-    local key="$1" sha="$2" file cached_sha cached_status
+    local key="$1" sha="$2" file cached_sha cached_status state_tool_output state_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_STATE}" = 1 ] && _state_tool_answers precheck-result \
+        --session-dir "${SESSION_BASE_DIR}" --key "${key}" --sha "${sha}"; then
+        printf '%s' "${state_tool_output}"
+        return "${state_tool_status}"
+    fi
     file=$(precheck_cache_file_path "${key}")
     [ -f "${file}" ] || return 1
     { IFS= read -r cached_sha && IFS= read -r cached_status; } < "${file}" 2> /dev/null || return 1
@@ -1089,9 +1180,14 @@ prune_session_denials_files() {
 # Prints a compact JSON summary of one per-day session-denials file: session, denial, stalled and
 # quit totals, per-repository totals, and the five most often denied command names (counted once
 # per session). Prints null when the file does not exist, so the digest can tell "no record" apart
-# from a recorded day with nothing in it. Malformed lines are skipped.
+# from a recorded day with nothing in it. Malformed lines are skipped. With ORCHESTRATOR_DOTNET_STATE=1 the
+# tool summarises it (_state_tool_answers).
 summarise_session_denials_day() {
-    local file="$1"
+    local file="$1" state_tool_output state_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_STATE}" = 1 ] && _state_tool_answers session-denials-summary --file "${file}"; then
+        printf '%s' "${state_tool_output}"
+        return "${state_tool_status}"
+    fi
     if [ ! -f "${file}" ]; then
         printf 'null'
         return 0
