@@ -1566,5 +1566,974 @@
       "mcpError": "the branch fix/8-gone was not found in org/repo",
       "expected": null
     }
+  ],
+  "pullRequestReviewComments": [
+    {
+      "name": "no inline review comment",
+      "repo": "org/repo",
+      "pr": "7",
+      "gh": [
+        []
+      ],
+      "mcp": {
+        "pr": "org/repo#7",
+        "reviewDecision": "REVIEW_REQUIRED",
+        "comments": [],
+        "reviews": [],
+        "threads": [],
+        "summary": {
+          "comments": 0,
+          "reviews": 0,
+          "reviewsEmpty": 0,
+          "threads": 0,
+          "unresolved": 0,
+          "inline": 0
+        }
+      },
+      "expected": "[]"
+    },
+    {
+      "name": "comments over two pages and two threads come out in id order",
+      "repo": "org/repo",
+      "pr": "7",
+      "gh": [
+        [
+          {
+            "url": "https://api.github.com/repos/org/repo/pulls/comments/101",
+            "pull_request_review_id": 900,
+            "id": 101,
+            "node_id": "PRRC_101",
+            "diff_hunk": "@@ -1 +1 @@",
+            "path": "src/a.cs",
+            "commit_id": "abc",
+            "original_commit_id": "abc",
+            "user": {
+              "login": "owner",
+              "id": 1000,
+              "node_id": "U_x",
+              "type": "User",
+              "site_admin": false
+            },
+            "body": "First point",
+            "created_at": "2026-11-01T10:00:00Z",
+            "updated_at": "2026-11-01T10:00:00Z",
+            "html_url": "https://github.com/org/repo/pull/7#discussion_r101",
+            "author_association": "OWNER",
+            "line": 3,
+            "side": "RIGHT"
+          },
+          {
+            "url": "https://api.github.com/repos/org/repo/pulls/comments/102",
+            "pull_request_review_id": 900,
+            "id": 102,
+            "node_id": "PRRC_102",
+            "diff_hunk": "@@ -1 +1 @@",
+            "path": "lib/b",
+            "commit_id": "abc",
+            "original_commit_id": "abc",
+            "user": {
+              "login": "reviewer",
+              "id": 1000,
+              "node_id": "U_x",
+              "type": "User",
+              "site_admin": false
+            },
+            "body": "Second point\n",
+            "created_at": "2026-11-01T10:00:00Z",
+            "updated_at": "2026-11-01T11:00:00Z",
+            "html_url": "https://github.com/org/repo/pull/7#discussion_r102",
+            "author_association": "OWNER",
+            "line": 3,
+            "side": "RIGHT"
+          }
+        ],
+        [
+          {
+            "url": "https://api.github.com/repos/org/repo/pulls/comments/103",
+            "pull_request_review_id": 900,
+            "id": 103,
+            "node_id": "PRRC_103",
+            "diff_hunk": "@@ -1 +1 @@",
+            "path": "src/a.cs",
+            "commit_id": "abc",
+            "original_commit_id": "abc",
+            "user": {
+              "login": "owner",
+              "id": 1000,
+              "node_id": "U_x",
+              "type": "User",
+              "site_admin": false
+            },
+            "body": "Reply",
+            "created_at": "2026-11-01T11:00:00Z",
+            "updated_at": "2026-11-02T09:30:00Z",
+            "html_url": "https://github.com/org/repo/pull/7#discussion_r103",
+            "author_association": "OWNER",
+            "line": 3,
+            "side": "RIGHT",
+            "in_reply_to_id": 101
+          }
+        ]
+      ],
+      "mcp": {
+        "pr": "org/repo#7",
+        "reviewDecision": "REVIEW_REQUIRED",
+        "comments": [],
+        "reviews": [],
+        "threads": [
+          {
+            "id": "PRRT_1",
+            "resolved": false,
+            "outdated": false,
+            "path": "src/a.cs",
+            "line": "3",
+            "originalLine": "3",
+            "commentCount": 2,
+            "comments": [
+              {
+                "id": "101",
+                "inReplyTo": "",
+                "reviewId": "900",
+                "author": "owner",
+                "association": "OWNER",
+                "createdAt": "2026-11-01T10:00:00Z",
+                "minimized": false,
+                "url": "https://github.com/org/repo/pull/7#discussion_r101",
+                "body": "First point",
+                "updatedAt": "2026-11-01T10:00:00Z"
+              },
+              {
+                "id": "103",
+                "inReplyTo": "101",
+                "reviewId": "900",
+                "author": "owner",
+                "association": "OWNER",
+                "createdAt": "2026-11-01T11:00:00Z",
+                "minimized": false,
+                "url": "https://github.com/org/repo/pull/7#discussion_r103",
+                "body": "Reply",
+                "updatedAt": "2026-11-02T09:30:00Z"
+              }
+            ]
+          },
+          {
+            "id": "PRRT_2",
+            "resolved": false,
+            "outdated": false,
+            "path": "lib/b",
+            "line": "3",
+            "originalLine": "3",
+            "commentCount": 1,
+            "comments": [
+              {
+                "id": "102",
+                "inReplyTo": "",
+                "reviewId": "900",
+                "author": "reviewer",
+                "association": "OWNER",
+                "createdAt": "2026-11-01T10:00:00Z",
+                "minimized": false,
+                "url": "https://github.com/org/repo/pull/7#discussion_r102",
+                "body": "Second point\n",
+                "updatedAt": "2026-11-01T11:00:00Z"
+              }
+            ]
+          }
+        ],
+        "summary": {
+          "comments": 0,
+          "reviews": 0,
+          "reviewsEmpty": 0,
+          "threads": 2,
+          "unresolved": 0,
+          "inline": 3
+        }
+      },
+      "expected": "[{\"user\":{\"login\":\"owner\"},\"path\":\"src/a.cs\",\"body\":\"First point\",\"updated_at\":\"2026-11-01T10:00:00Z\"},{\"user\":{\"login\":\"reviewer\"},\"path\":\"lib/b\",\"body\":\"Second point\\n\",\"updated_at\":\"2026-11-01T11:00:00Z\"},{\"user\":{\"login\":\"owner\"},\"path\":\"src/a.cs\",\"body\":\"Reply\",\"updated_at\":\"2026-11-02T09:30:00Z\"}]"
+    },
+    {
+      "name": "a bot, a deleted account and another kind of account",
+      "repo": "org/repo",
+      "pr": "7",
+      "gh": [
+        [
+          {
+            "url": "https://api.github.com/repos/org/repo/pulls/comments/201",
+            "pull_request_review_id": 900,
+            "id": 201,
+            "node_id": "PRRC_201",
+            "diff_hunk": "@@ -1 +1 @@",
+            "path": "a.yml",
+            "commit_id": "abc",
+            "original_commit_id": "abc",
+            "user": {
+              "login": "github-actions[bot]",
+              "id": 1000,
+              "node_id": "U_x",
+              "type": "Bot",
+              "site_admin": false
+            },
+            "body": "Lint",
+            "created_at": "2026-11-01T10:00:00Z",
+            "updated_at": "2026-11-01T10:00:00Z",
+            "html_url": "https://github.com/org/repo/pull/7#discussion_r201",
+            "author_association": "OWNER",
+            "line": 3,
+            "side": "RIGHT"
+          },
+          {
+            "url": "https://api.github.com/repos/org/repo/pulls/comments/202",
+            "pull_request_review_id": 900,
+            "id": 202,
+            "node_id": "PRRC_202",
+            "diff_hunk": "@@ -1 +1 @@",
+            "path": "a.yml",
+            "commit_id": "abc",
+            "original_commit_id": "abc",
+            "user": null,
+            "body": "Gone",
+            "created_at": "2026-11-01T10:00:00Z",
+            "updated_at": "2026-11-01T10:00:00Z",
+            "html_url": "https://github.com/org/repo/pull/7#discussion_r202",
+            "author_association": "OWNER",
+            "line": 3,
+            "side": "RIGHT"
+          },
+          {
+            "url": "https://api.github.com/repos/org/repo/pulls/comments/203",
+            "pull_request_review_id": 900,
+            "id": 203,
+            "node_id": "PRRC_203",
+            "diff_hunk": "@@ -1 +1 @@",
+            "path": "a.yml",
+            "commit_id": "abc",
+            "original_commit_id": "abc",
+            "user": {
+              "login": "old-user",
+              "id": 1000,
+              "node_id": "U_x",
+              "type": "Mannequin",
+              "site_admin": false
+            },
+            "body": "Imported",
+            "created_at": "2026-11-01T10:00:00Z",
+            "updated_at": "2026-11-01T11:00:00Z",
+            "html_url": "https://github.com/org/repo/pull/7#discussion_r203",
+            "author_association": "OWNER",
+            "line": 3,
+            "side": "RIGHT"
+          }
+        ]
+      ],
+      "mcp": {
+        "pr": "org/repo#7",
+        "reviewDecision": "REVIEW_REQUIRED",
+        "comments": [],
+        "reviews": [],
+        "threads": [
+          {
+            "id": "PRRT_3",
+            "resolved": false,
+            "outdated": false,
+            "path": "a.yml",
+            "line": "3",
+            "originalLine": "3",
+            "commentCount": 3,
+            "comments": [
+              {
+                "id": "201",
+                "inReplyTo": "",
+                "reviewId": "900",
+                "author": "app/github-actions",
+                "association": "OWNER",
+                "createdAt": "2026-11-01T10:00:00Z",
+                "minimized": false,
+                "url": "https://github.com/org/repo/pull/7#discussion_r201",
+                "body": "Lint",
+                "updatedAt": "2026-11-01T10:00:00Z"
+              },
+              {
+                "id": "202",
+                "inReplyTo": "",
+                "reviewId": "900",
+                "author": "",
+                "association": "OWNER",
+                "createdAt": "2026-11-01T10:00:00Z",
+                "minimized": false,
+                "url": "https://github.com/org/repo/pull/7#discussion_r202",
+                "body": "Gone",
+                "updatedAt": "2026-11-01T10:00:00Z"
+              },
+              {
+                "id": "203",
+                "inReplyTo": "",
+                "reviewId": "900",
+                "author": "mannequin/old-user",
+                "association": "OWNER",
+                "createdAt": "2026-11-01T10:00:00Z",
+                "minimized": false,
+                "url": "https://github.com/org/repo/pull/7#discussion_r203",
+                "body": "Imported",
+                "updatedAt": "2026-11-01T11:00:00Z"
+              }
+            ]
+          }
+        ],
+        "summary": {
+          "comments": 0,
+          "reviews": 0,
+          "reviewsEmpty": 0,
+          "threads": 1,
+          "unresolved": 0,
+          "inline": 3
+        }
+      },
+      "expected": "[{\"user\":{\"login\":\"github-actions[bot]\"},\"path\":\"a.yml\",\"body\":\"Lint\",\"updated_at\":\"2026-11-01T10:00:00Z\"},{\"user\":null,\"path\":\"a.yml\",\"body\":\"Gone\",\"updated_at\":\"2026-11-01T10:00:00Z\"},{\"user\":{\"login\":\"old-user\"},\"path\":\"a.yml\",\"body\":\"Imported\",\"updated_at\":\"2026-11-01T11:00:00Z\"}]"
+    },
+    {
+      "name": "a body with control characters, line breaks and characters outside ASCII is kept whole",
+      "repo": "org/repo",
+      "pr": "7",
+      "gh": [
+        [
+          {
+            "url": "https://api.github.com/repos/org/repo/pulls/comments/301",
+            "pull_request_review_id": 900,
+            "id": 301,
+            "node_id": "PRRC_301",
+            "diff_hunk": "@@ -1 +1 @@",
+            "path": "docs/x y.md",
+            "commit_id": "abc",
+            "original_commit_id": "abc",
+            "user": {
+              "login": "owner",
+              "id": 1000,
+              "node_id": "U_x",
+              "type": "User",
+              "site_admin": false
+            },
+            "body": "Why this change?\r\nSee `x` \"quoted\" \\ path é 🤖 \u2028 tab\there \u001b[0m\n",
+            "created_at": "2026-11-01T10:00:00Z",
+            "updated_at": "2026-11-01T11:00:00Z",
+            "html_url": "https://github.com/org/repo/pull/7#discussion_r301",
+            "author_association": "OWNER",
+            "line": 3,
+            "side": "RIGHT"
+          }
+        ]
+      ],
+      "mcp": {
+        "pr": "org/repo#7",
+        "reviewDecision": "REVIEW_REQUIRED",
+        "comments": [],
+        "reviews": [],
+        "threads": [
+          {
+            "id": "PRRT_4",
+            "resolved": false,
+            "outdated": false,
+            "path": "docs/x y.md",
+            "line": "3",
+            "originalLine": "3",
+            "commentCount": 1,
+            "comments": [
+              {
+                "id": "301",
+                "inReplyTo": "",
+                "reviewId": "900",
+                "author": "owner",
+                "association": "OWNER",
+                "createdAt": "2026-11-01T10:00:00Z",
+                "minimized": false,
+                "url": "https://github.com/org/repo/pull/7#discussion_r301",
+                "body": "Why this change?\r\nSee `x` \"quoted\" \\ path é 🤖 \u2028 tab\there \u001b[0m\n",
+                "updatedAt": "2026-11-01T11:00:00Z"
+              }
+            ]
+          }
+        ],
+        "summary": {
+          "comments": 0,
+          "reviews": 0,
+          "reviewsEmpty": 0,
+          "threads": 1,
+          "unresolved": 0,
+          "inline": 1
+        }
+      },
+      "expected": "[{\"user\":{\"login\":\"owner\"},\"path\":\"docs/x y.md\",\"body\":\"Why this change?\\r\\nSee `x` \\\"quoted\\\" \\\\ path é 🤖 \u2028 tab\\there \\u001b[0m\\n\",\"updated_at\":\"2026-11-01T11:00:00Z\"}]"
+    },
+    {
+      "name": "the comments cannot be read",
+      "repo": "org/repo",
+      "pr": "7",
+      "gh": null,
+      "mcpError": "could not read every comment on org/repo#7",
+      "expected": null
+    }
+  ],
+  "pullRequestIssueComments": [
+    {
+      "name": "no top-level comment",
+      "repo": "org/repo",
+      "pr": "7",
+      "gh": [
+        []
+      ],
+      "mcp": {
+        "pr": "org/repo#7",
+        "reviewDecision": "REVIEW_REQUIRED",
+        "comments": [],
+        "reviews": [],
+        "threads": [],
+        "summary": {
+          "comments": 0,
+          "reviews": 0,
+          "reviewsEmpty": 0,
+          "threads": 0,
+          "unresolved": 0,
+          "inline": 0
+        }
+      },
+      "expected": "[]"
+    },
+    {
+      "name": "comments over two pages, one edited, in id order",
+      "repo": "org/repo",
+      "pr": "7",
+      "gh": [
+        [
+          {
+            "url": "https://api.github.com/repos/org/repo/issues/comments/11",
+            "html_url": "https://github.com/org/repo/pull/7#issuecomment-11",
+            "issue_url": "https://api.github.com/repos/org/repo/issues/7",
+            "id": 11,
+            "node_id": "IC_11",
+            "user": {
+              "login": "owner",
+              "id": 1000,
+              "node_id": "U_x",
+              "type": "User",
+              "site_admin": false
+            },
+            "created_at": "2026-11-01T10:00:00Z",
+            "updated_at": "2026-11-01T10:00:00Z",
+            "author_association": "OWNER",
+            "body": "Please rebase",
+            "reactions": {
+              "total_count": 0
+            }
+          },
+          {
+            "url": "https://api.github.com/repos/org/repo/issues/comments/12",
+            "html_url": "https://github.com/org/repo/pull/7#issuecomment-12",
+            "issue_url": "https://api.github.com/repos/org/repo/issues/7",
+            "id": 12,
+            "node_id": "IC_12",
+            "user": {
+              "login": "steward",
+              "id": 1000,
+              "node_id": "U_x",
+              "type": "User",
+              "site_admin": false
+            },
+            "created_at": "2026-11-01T10:00:00Z",
+            "updated_at": "2026-11-01T10:00:00Z",
+            "author_association": "OWNER",
+            "body": "Done\n",
+            "reactions": {
+              "total_count": 0
+            }
+          }
+        ],
+        [
+          {
+            "url": "https://api.github.com/repos/org/repo/issues/comments/13",
+            "html_url": "https://github.com/org/repo/pull/7#issuecomment-13",
+            "issue_url": "https://api.github.com/repos/org/repo/issues/7",
+            "id": 13,
+            "node_id": "IC_13",
+            "user": {
+              "login": "owner",
+              "id": 1000,
+              "node_id": "U_x",
+              "type": "User",
+              "site_admin": false
+            },
+            "created_at": "2026-11-01T11:00:00Z",
+            "updated_at": "2026-11-02T09:30:00Z",
+            "author_association": "OWNER",
+            "body": "Thanks (edited)",
+            "reactions": {
+              "total_count": 0
+            }
+          }
+        ]
+      ],
+      "mcp": {
+        "pr": "org/repo#7",
+        "reviewDecision": "REVIEW_REQUIRED",
+        "comments": [
+          {
+            "id": "11",
+            "author": "owner",
+            "association": "OWNER",
+            "createdAt": "2026-11-01T10:00:00Z",
+            "minimized": false,
+            "url": "https://github.com/org/repo/pull/7#issuecomment-11",
+            "body": "Please rebase",
+            "updatedAt": "2026-11-01T10:00:00Z"
+          },
+          {
+            "id": "12",
+            "author": "steward",
+            "association": "OWNER",
+            "createdAt": "2026-11-01T10:00:00Z",
+            "minimized": false,
+            "url": "https://github.com/org/repo/pull/7#issuecomment-12",
+            "body": "Done\n",
+            "updatedAt": "2026-11-01T10:00:00Z"
+          },
+          {
+            "id": "13",
+            "author": "owner",
+            "association": "OWNER",
+            "createdAt": "2026-11-01T11:00:00Z",
+            "minimized": false,
+            "url": "https://github.com/org/repo/pull/7#issuecomment-13",
+            "body": "Thanks (edited)",
+            "updatedAt": "2026-11-02T09:30:00Z"
+          }
+        ],
+        "reviews": [],
+        "threads": [],
+        "summary": {
+          "comments": 3,
+          "reviews": 0,
+          "reviewsEmpty": 0,
+          "threads": 0,
+          "unresolved": 0,
+          "inline": 0
+        }
+      },
+      "expected": "[{\"user\":{\"login\":\"owner\"},\"body\":\"Please rebase\",\"created_at\":\"2026-11-01T10:00:00Z\",\"updated_at\":\"2026-11-01T10:00:00Z\"},{\"user\":{\"login\":\"steward\"},\"body\":\"Done\\n\",\"created_at\":\"2026-11-01T10:00:00Z\",\"updated_at\":\"2026-11-01T10:00:00Z\"},{\"user\":{\"login\":\"owner\"},\"body\":\"Thanks (edited)\",\"created_at\":\"2026-11-01T11:00:00Z\",\"updated_at\":\"2026-11-02T09:30:00Z\"}]"
+    },
+    {
+      "name": "a bot, a deleted account and a body outside ASCII",
+      "repo": "org/repo",
+      "pr": "7",
+      "gh": [
+        [
+          {
+            "url": "https://api.github.com/repos/org/repo/issues/comments/21",
+            "html_url": "https://github.com/org/repo/pull/7#issuecomment-21",
+            "issue_url": "https://api.github.com/repos/org/repo/issues/7",
+            "id": 21,
+            "node_id": "IC_21",
+            "user": {
+              "login": "prpixie[bot]",
+              "id": 1000,
+              "node_id": "U_x",
+              "type": "Bot",
+              "site_admin": false
+            },
+            "created_at": "2026-11-01T10:00:00Z",
+            "updated_at": "2026-11-01T10:00:00Z",
+            "author_association": "OWNER",
+            "body": "<!-- marker -->\nSummary",
+            "reactions": {
+              "total_count": 0
+            }
+          },
+          {
+            "url": "https://api.github.com/repos/org/repo/issues/comments/22",
+            "html_url": "https://github.com/org/repo/pull/7#issuecomment-22",
+            "issue_url": "https://api.github.com/repos/org/repo/issues/7",
+            "id": 22,
+            "node_id": "IC_22",
+            "user": null,
+            "created_at": "2026-11-01T10:00:00Z",
+            "updated_at": "2026-11-01T10:00:00Z",
+            "author_association": "OWNER",
+            "body": "Gone",
+            "reactions": {
+              "total_count": 0
+            }
+          },
+          {
+            "url": "https://api.github.com/repos/org/repo/issues/comments/23",
+            "html_url": "https://github.com/org/repo/pull/7#issuecomment-23",
+            "issue_url": "https://api.github.com/repos/org/repo/issues/7",
+            "id": 23,
+            "node_id": "IC_23",
+            "user": {
+              "login": "owner",
+              "id": 1000,
+              "node_id": "U_x",
+              "type": "User",
+              "site_admin": false
+            },
+            "created_at": "2026-11-01T11:00:00Z",
+            "updated_at": "2026-11-01T11:00:00Z",
+            "author_association": "OWNER",
+            "body": "Why this change?\r\nSee `x` \"quoted\" \\ path é 🤖 \u2028 tab\there \u001b[0m\n",
+            "reactions": {
+              "total_count": 0
+            }
+          }
+        ]
+      ],
+      "mcp": {
+        "pr": "org/repo#7",
+        "reviewDecision": "REVIEW_REQUIRED",
+        "comments": [
+          {
+            "id": "21",
+            "author": "app/prpixie",
+            "association": "OWNER",
+            "createdAt": "2026-11-01T10:00:00Z",
+            "minimized": false,
+            "url": "https://github.com/org/repo/pull/7#issuecomment-21",
+            "body": "<!-- marker -->\nSummary",
+            "updatedAt": "2026-11-01T10:00:00Z"
+          },
+          {
+            "id": "22",
+            "author": "",
+            "association": "OWNER",
+            "createdAt": "2026-11-01T10:00:00Z",
+            "minimized": false,
+            "url": "https://github.com/org/repo/pull/7#issuecomment-22",
+            "body": "Gone",
+            "updatedAt": "2026-11-01T10:00:00Z"
+          },
+          {
+            "id": "23",
+            "author": "owner",
+            "association": "OWNER",
+            "createdAt": "2026-11-01T11:00:00Z",
+            "minimized": false,
+            "url": "https://github.com/org/repo/pull/7#issuecomment-23",
+            "body": "Why this change?\r\nSee `x` \"quoted\" \\ path é 🤖 \u2028 tab\there \u001b[0m\n",
+            "updatedAt": "2026-11-01T11:00:00Z"
+          }
+        ],
+        "reviews": [],
+        "threads": [],
+        "summary": {
+          "comments": 3,
+          "reviews": 0,
+          "reviewsEmpty": 0,
+          "threads": 0,
+          "unresolved": 0,
+          "inline": 0
+        }
+      },
+      "expected": "[{\"user\":{\"login\":\"prpixie[bot]\"},\"body\":\"<!-- marker -->\\nSummary\",\"created_at\":\"2026-11-01T10:00:00Z\",\"updated_at\":\"2026-11-01T10:00:00Z\"},{\"user\":null,\"body\":\"Gone\",\"created_at\":\"2026-11-01T10:00:00Z\",\"updated_at\":\"2026-11-01T10:00:00Z\"},{\"user\":{\"login\":\"owner\"},\"body\":\"Why this change?\\r\\nSee `x` \\\"quoted\\\" \\\\ path é 🤖 \u2028 tab\\there \\u001b[0m\\n\",\"created_at\":\"2026-11-01T11:00:00Z\",\"updated_at\":\"2026-11-01T11:00:00Z\"}]"
+    },
+    {
+      "name": "the comments cannot be read",
+      "repo": "org/repo",
+      "pr": "7",
+      "gh": null,
+      "mcpError": "could not read every comment on org/repo#7",
+      "expected": null
+    }
+  ],
+  "pullRequestClosingIssues": [
+    {
+      "name": "the pull request closes no issue",
+      "repo": "org/repo",
+      "pr": "7",
+      "gh": {
+        "closingIssuesReferences": []
+      },
+      "mcp": {
+        "pr": "org/repo#7",
+        "closingIssues": []
+      },
+      "expected": ""
+    },
+    {
+      "name": "issues in this and another repository, in GitHub's order",
+      "repo": "org/repo",
+      "pr": "7",
+      "gh": {
+        "closingIssuesReferences": [
+          {
+            "id": "I_12",
+            "number": 12,
+            "repository": {
+              "id": "R_1",
+              "name": "repo",
+              "owner": {
+                "id": "O_1",
+                "login": "org"
+              }
+            },
+            "url": "https://github.com/org/repo/issues/12"
+          },
+          {
+            "id": "I_3",
+            "number": 3,
+            "repository": {
+              "id": "R_1",
+              "name": "other",
+              "owner": {
+                "id": "O_1",
+                "login": "org"
+              }
+            },
+            "url": "https://github.com/org/other/issues/3"
+          },
+          {
+            "id": "I_5",
+            "number": 5,
+            "repository": {
+              "id": "R_1",
+              "name": "repo",
+              "owner": {
+                "id": "O_1",
+                "login": "org"
+              }
+            },
+            "url": "https://github.com/org/repo/issues/5"
+          }
+        ]
+      },
+      "mcp": {
+        "pr": "org/repo#7",
+        "closingIssues": [
+          {
+            "repository": "org/repo",
+            "number": 12
+          },
+          {
+            "repository": "org/other",
+            "number": 3
+          },
+          {
+            "repository": "org/repo",
+            "number": 5
+          }
+        ]
+      },
+      "expected": "12\n3\n5"
+    },
+    {
+      "name": "the pull request cannot be read",
+      "repo": "org/repo",
+      "pr": "7",
+      "gh": null,
+      "mcpError": "pull request org/repo#7 not found",
+      "expected": null
+    }
+  ],
+  "closingIssueLabels": [
+    {
+      "name": "the pull request closes no issue",
+      "repo": "org/repo",
+      "pr": "7",
+      "gh": {
+        "closingIssuesReferences": []
+      },
+      "ghIssues": {},
+      "mcp": {
+        "labels": [],
+        "complete": true,
+        "failedReferences": []
+      },
+      "expected": ""
+    },
+    {
+      "name": "labels of issues in two repositories, sorted and unique, without the workflow-control labels in any case",
+      "repo": "org/repo",
+      "pr": "7",
+      "gh": {
+        "closingIssuesReferences": [
+          {
+            "id": "I_5",
+            "number": 5,
+            "repository": {
+              "id": "R_1",
+              "name": "repo",
+              "owner": {
+                "id": "O_1",
+                "login": "org"
+              }
+            },
+            "url": "https://github.com/org/repo/issues/5"
+          },
+          {
+            "id": "I_8",
+            "number": 8,
+            "repository": {
+              "id": "R_1",
+              "name": "other",
+              "owner": {
+                "id": "O_1",
+                "login": "org"
+              }
+            },
+            "url": "https://github.com/org/other/issues/8"
+          }
+        ]
+      },
+      "ghIssues": {
+        "org/repo#5": {
+          "labels": [
+            {
+              "id": "LA_0",
+              "name": "Bug",
+              "description": "",
+              "color": "ededed"
+            },
+            {
+              "id": "LA_1",
+              "name": "Blocked",
+              "description": "",
+              "color": "ededed"
+            },
+            {
+              "id": "LA_2",
+              "name": "enhancement",
+              "description": "",
+              "color": "ededed"
+            },
+            {
+              "id": "LA_3",
+              "name": "On Hold",
+              "description": "",
+              "color": "ededed"
+            },
+            {
+              "id": "LA_4",
+              "name": "été",
+              "description": "",
+              "color": "ededed"
+            }
+          ]
+        },
+        "org/other#8": {
+          "labels": [
+            {
+              "id": "LA_0",
+              "name": "Bug",
+              "description": "",
+              "color": "ededed"
+            },
+            {
+              "id": "LA_1",
+              "name": "ON-HOLD",
+              "description": "",
+              "color": "ededed"
+            },
+            {
+              "id": "LA_2",
+              "name": "blocked",
+              "description": "",
+              "color": "ededed"
+            },
+            {
+              "id": "LA_3",
+              "name": "AI-Work",
+              "description": "",
+              "color": "ededed"
+            },
+            {
+              "id": "LA_4",
+              "name": "Zeta",
+              "description": "",
+              "color": "ededed"
+            },
+            {
+              "id": "LA_5",
+              "name": "on hold",
+              "description": "",
+              "color": "ededed"
+            }
+          ]
+        }
+      },
+      "mcp": {
+        "labels": [
+          "AI-Work",
+          "Bug",
+          "Zeta",
+          "enhancement",
+          "été"
+        ],
+        "complete": true,
+        "failedReferences": []
+      },
+      "expected": "AI-Work\nBug\nZeta\nenhancement\nété"
+    },
+    {
+      "name": "an issue whose labels cannot be read is left out",
+      "repo": "org/repo",
+      "pr": "7",
+      "gh": {
+        "closingIssuesReferences": [
+          {
+            "id": "I_5",
+            "number": 5,
+            "repository": {
+              "id": "R_1",
+              "name": "repo",
+              "owner": {
+                "id": "O_1",
+                "login": "org"
+              }
+            },
+            "url": "https://github.com/org/repo/issues/5"
+          },
+          {
+            "id": "I_6",
+            "number": 6,
+            "repository": {
+              "id": "R_1",
+              "name": "repo",
+              "owner": {
+                "id": "O_1",
+                "login": "org"
+              }
+            },
+            "url": "https://github.com/org/repo/issues/6"
+          }
+        ]
+      },
+      "ghIssues": {
+        "org/repo#5": {
+          "labels": [
+            {
+              "id": "LA_0",
+              "name": "Bug",
+              "description": "",
+              "color": "ededed"
+            }
+          ]
+        },
+        "org/repo#6": null
+      },
+      "mcp": {
+        "labels": [
+          "Bug"
+        ],
+        "complete": false,
+        "failedReferences": [
+          "org/repo#6"
+        ]
+      },
+      "expected": "Bug"
+    },
+    {
+      "name": "the closing issues cannot be read",
+      "repo": "org/repo",
+      "pr": "7",
+      "gh": null,
+      "ghIssues": {},
+      "mcpError": "could not read the closing issues of org/repo#7",
+      "expected": null
+    }
   ]
 }

@@ -28,19 +28,13 @@ fetch_pr_json() {
 # instead, so a separate `flatten(1)` un-wraps that one level of page-nesting into a single flat
 # array of comment objects — done as its own command substitution (not piped) so a `gh` failure
 # is detected via its own exit code rather than being masked by jq's (no `pipefail` in this file).
+# Prints one line of JSON holding, in id order, only the REST fields the callers read:
+# [{"user":{"login":L},"path":P,"body":B,"updated_at":T}], with "user" null for a deleted account.
+# With ORCHESTRATOR_DOTNET_GITHUB=1 the tool reads them through the cfwf MCP server's pr_comments and
+# prints the same JSON (#252).
 fetch_pr_review_comments() {
-    local item_id="$1" attempt=1 result flattened
-    while [ "${attempt}" -le "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ]; do
-        if result=$(gh api "repos/${REPO_FULL}/pulls/${item_id}/comments" --paginate --slurp 2>/dev/null); then
-            flattened=$(printf '%s' "${result}" | jq -c 'flatten(1)') || return 1
-            printf '%s' "${flattened}"
-            return 0
-        fi
-        [ "${attempt}" -lt "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ] && [ "${GH_ITEM_FETCH_RETRY_DELAY_SECS}" -gt 0 ] \
-            && sleep "${GH_ITEM_FETCH_RETRY_DELAY_SECS}"
-        attempt=$((attempt + 1))
-    done
-    return 1
+    _fetch_pr_comment_list "$1" pulls pr-review-comments \
+        'map({user: (if .user == null then null else {login: .user.login} end), path, body, updated_at})'
 }
 
 # Fetches top-level PR comments via the REST issues-comments endpoint (PRs are issues under
@@ -50,12 +44,27 @@ fetch_pr_review_comments() {
 # never actually set), this REST endpoint returns a real `updated_at` per comment, letting a
 # human's edit to an already-seen top-level comment be detected rather than silently ignored
 # (#1309). Mirrors fetch_pr_review_comments's shape/retry/pagination-flatten behaviour exactly
-# (REST shape: author under `.user.login`, timestamp under `.updated_at`).
+# (REST shape: author under `.user.login`, timestamp under `.updated_at`), printing
+# [{"user":{"login":L},"body":B,"created_at":C,"updated_at":T}] in id order.
 fetch_pr_issue_comments() {
-    local item_id="$1" attempt=1 result flattened
+    _fetch_pr_comment_list "$1" issues pr-issue-comments \
+        'map({user: (if .user == null then null else {login: .user.login} end), body, created_at, updated_at})'
+}
+
+# Shared by fetch_pr_review_comments and fetch_pr_issue_comments: reads every page of REST endpoint
+# repos/<REPO_FULL>/<kind>/<item_id>/comments, retried as fetch_pr_json is (#1090), and prints the
+# comments in id order through the jq projection given, as one line. With ORCHESTRATOR_DOTNET_GITHUB=1
+# it asks the tool's read <read> instead, with the same retries. Returns 1 once retries are exhausted.
+_fetch_pr_comment_list() {
+    local item_id="$1" kind="$2" read="$3" projection="$4" attempt=1 result flattened
     while [ "${attempt}" -le "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ]; do
-        if result=$(gh api "repos/${REPO_FULL}/issues/${item_id}/comments" --paginate --slurp 2>/dev/null); then
-            flattened=$(printf '%s' "${result}" | jq -c 'flatten(1)') || return 1
+        if [ "${ORCHESTRATOR_DOTNET_GITHUB}" = 1 ]; then
+            if result=$(_github_read_with_orchestrator_cmd "${read}" --repo "${REPO_FULL}" --pr "${item_id}"); then
+                printf '%s' "${result}"
+                return 0
+            fi
+        elif result=$(gh api "repos/${REPO_FULL}/${kind}/${item_id}/comments" --paginate --slurp 2>/dev/null); then
+            flattened=$(printf '%s' "${result}" | jq -c "flatten(1) | sort_by(.id) | ${projection}") || return 1
             printf '%s' "${flattened}"
             return 0
         fi
