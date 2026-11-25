@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Credfeto.Orchestrator.Commands;
+using Credfeto.Orchestrator.Discovery;
 using Credfeto.Orchestrator.Fingerprints;
 using Credfeto.Orchestrator.GitHub;
 
@@ -39,6 +40,28 @@ public static class Program
         }
 
         return await run;
+    }
+
+    private static CommandRunner CreateRunner(HttpClient httpClient)
+    {
+        GitHubReader github = new(
+            new McpToolCaller(httpClient: httpClient, settings: static () =>
+                CfwfMcpSettingsLoader.Load(Environment.GetEnvironmentVariable)
+            )
+        );
+        UrlReader urls = new();
+        RetryDelay delay = new();
+
+        return new(
+            fingerprints: new FingerprintCalculator(),
+            files: new FileContentReader(),
+            github: github,
+            discovery: new(
+                priorities: new PriorityFeed(urls: urls, delay: delay),
+                trustedLogins: new TrustedLoginsReader(github: github, delay: delay),
+                health: new GitHubIncidentGate(urls)
+            )
+        );
     }
 
     private static void Signal(PosixSignalContext context, TaskCompletionSource signalled)
@@ -90,15 +113,7 @@ public static class Program
     {
         await using Stream input = Console.OpenStandardInput();
         using HttpClient httpClient = new();
-        CommandRunner runner = new(
-            fingerprints: new FingerprintCalculator(),
-            files: new FileContentReader(),
-            github: new GitHubReader(
-                new McpToolCaller(httpClient: httpClient, settings: static () =>
-                    CfwfMcpSettingsLoader.Load(Environment.GetEnvironmentVariable)
-                )
-            )
-        );
+        CommandRunner runner = CreateRunner(httpClient);
 
         return await runner.RunAsync(
             args: args,

@@ -78,4 +78,11 @@ public interface IGitHubReader
         int pullRequest,
         CancellationToken cancellationToken
     );
+
+    // The logins of the repository's collaborators, in the server's order (by login), as gh api
+    // repos/<repo>/collaborators --paginate --jq '.[].login' lists them for get_trusted_logins
+    ValueTask<IReadOnlyList<string>> RepositoryCollaboratorsAsync(
+        string repository,
+        CancellationToken cancellationToken
+    );
 }

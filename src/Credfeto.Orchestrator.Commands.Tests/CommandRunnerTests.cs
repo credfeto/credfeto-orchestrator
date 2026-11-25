@@ -26,7 +26,10 @@ public sealed class CommandRunnerTests : TestBase
         this._runner = new(
             fingerprints: new FingerprintCalculator(),
             files: this._files,
-            github: new GitHubReader(new FakeMcpToolCaller(result: null, error: "not expected"))
+            github: new GitHubReader(new FakeMcpToolCaller(result: null, error: "not expected")),
+            discovery: DiscoveryFakes.NotExpected(
+                new GitHubReader(new FakeMcpToolCaller(result: null, error: "not expected"))
+            )
         );
     }
 
