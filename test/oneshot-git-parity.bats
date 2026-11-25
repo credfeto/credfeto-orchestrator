@@ -3,8 +3,8 @@
 # shellcheck disable=SC2034  # variables set in test bodies are read by the sourced oneshot functions, where shellcheck cannot trace them
 
 # Golden parity cases for the read-only lib/git queries in the .NET rewrite (#252). test/fixtures/git-parity.json holds
-# a scenario script that builds throwaway repositories (origin, clones in every state the queries tell apart, a
-# directory that is not a repository), and for each case the lib/git function, its REPO_WORK_DIR and arguments, and
+# scenario scripts that build throwaway repositories (origin, clones in every state the queries tell apart: dirty,
+# staged, untracked, renamed, conflicted, detached, with stashes; a directory that is not a repository), and for each case the lib/git function, its REPO_WORK_DIR and arguments, and
 # what the function prints and returns there. The prelude pins the identity, dates and config, so the commit ids are
 # the same on every machine. This file checks the shell functions against the fixture, and
 # Credfeto.Orchestrator.Git.Tests (src/) runs the tool's git queries over the same repositories and checks them
@@ -12,7 +12,7 @@
 # bash answers before it would ask the tool.
 #
 # To regenerate the fixture after a change to its scenario or cases, run the last test with GIT_PARITY_REGENERATE
-# set to the file to write; it keeps the fixture's prelude, scenario and cases and records what the shell prints.
+# set to the file to write; it keeps the fixture's prelude, scenarios and cases and records what the shell prints.
 
 bats_require_minimum_version 1.5.0
 
@@ -63,6 +63,7 @@ _git_parity_call() {
     done < <(jq -j --argjson i "${index}" '.cases[$i].args[] | "\(.)\u0000"' "${GIT_FIXTURE}")
     case "${function}" in
         checkout_head_sha | checkout_current_branch | checkout_has_uncommitted_changes | origin_branch_exists | git_commits_behind | find_stale_issue_branch) ;;
+        checkout_porcelain_status | checkout_changed_file_count | checkout_stash_head | autostashes_beyond_keep) ;;
         *) return 1 ;;
     esac
     REPO_WORK_DIR=""
@@ -148,7 +149,8 @@ _check_git_parity_cases() {
 @test "the git parity fixture covers every lib/git query the tool answers, each answered and refused where it can be (#252)" {
     local function
     for function in checkout_head_sha checkout_current_branch checkout_has_uncommitted_changes origin_branch_exists \
-        git_commits_behind find_stale_issue_branch; do
+        git_commits_behind find_stale_issue_branch checkout_porcelain_status checkout_changed_file_count checkout_stash_head \
+        autostashes_beyond_keep; do
         [ "$(jq --arg f "${function}" '[.cases[] | select(.function == $f and .tool == "answers")] | length' "${GIT_FIXTURE}")" -gt 0 ]
     done
     [ "$(jq '[.cases[] | select(.tool == "refuses")] | length' "${GIT_FIXTURE}")" -gt 0 ]

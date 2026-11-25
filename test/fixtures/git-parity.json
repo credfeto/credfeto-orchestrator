@@ -20,6 +20,10 @@
     {
       "name": "checkouts",
       "setup": "git init -q --bare -b main origin.git\ngit clone -q origin.git seed 2> /dev/null\nprintf 'one\\n' > seed/file.txt\ngit -C seed add file.txt\ncommit seed initial\ngit -C seed push -q origin main\nfor spec in feat/12-thing:2 chore/12:0 fix/120-other:1 bug/1120-x:1 Feat/34_x:1 34-plain:1 feat2/56-x:1 \\\n    a/b/56-y:1 feat/78:1 feat/78-later:1 dependabot/nuget/90-x:1 docs/readme:1 feat/77-café:1 feat/91-behind:0; do\n    branch_on seed origin \"${spec%:*}\" \"${spec##*:}\"\ndone\ncommit seed \"main moves on\"\ngit -C seed push -q origin main\ngit init -q --bare -b main upstream.git\nbranch_on seed \"${PWD}/upstream.git\" 66-z 1\nbranch_on seed \"${PWD}/upstream.git\" feat/55-up 1\ngit init -q --bare -b main accents.git\ngit -C seed push -q \"${PWD}/accents.git\" main\nbranch_on seed \"${PWD}/accents.git\" fé/88-x 1\nbranch_on seed \"${PWD}/accents.git\" feat/89é 1\nbranch_on seed \"${PWD}/accents.git\" feat/12-also 1\ngit init -q --bare -b main empty.git\nfor name in clean behind unstaged staged untracked deleted detached feature accented conflicted remotes; do\n    git clone -q origin.git \"${name}\"\ndone\ngit clone -q accents.git accents\ngit clone -q empty.git emptyclone 2> /dev/null\ngit -C behind reset -q --hard HEAD~1\nprintf 'two\\n' > unstaged/file.txt\nprintf 'two\\n' > staged/file.txt\ngit -C staged add file.txt\nprintf 'new\\n' > untracked/new.txt\nrm deleted/file.txt\ngit -C detached checkout -q --detach HEAD~1\ngit -C feature checkout -q -b feat/12-thing --track origin/feat/12-thing\ngit -C accented checkout -q -b feat/77-café --track origin/feat/77-café\ngit -C conflicted checkout -q -b side\nprintf 'side\\n' > conflicted/file.txt\ncommit_all conflicted side\ngit -C conflicted checkout -q main\nprintf 'main\\n' > conflicted/file.txt\ncommit_all conflicted \"main side\"\ngit -C conflicted merge -q side > /dev/null 2>&1 || true\ngit -C remotes remote add upstream ../upstream.git\ngit -C remotes fetch -q upstream\ngit init -q -b main unborn\ngit init -q -b main unbornstaged\nprintf 'one\\n' > unbornstaged/file.txt\ngit -C unbornstaged add file.txt\nmkdir plain\n"
+    },
+    {
+      "name": "worktrees",
+      "setup": "git init -q --bare -b main origin.git\ngit clone -q origin.git seed 2> /dev/null\nprintf 'one\\n' > seed/file.txt\nprintf 'two\\n' > seed/other.txt\nprintf '*.log\\n' > seed/.gitignore\ngit -C seed add file.txt other.txt .gitignore\ncommit seed initial\ngit -C seed push -q origin main\ngit -C seed push -q origin main:feat/1-x\nfor name in clean modified staged both untracked newdir deleted renamed spaced accented ignored conflicted detached \\\n    stashes badstash; do\n    git clone -q origin.git \"${name}\"\ndone\ngit init -q -b main unborn\ngit init -q -b main unbornstaged\nprintf 'one\\n' > unbornstaged/file.txt\ngit -C unbornstaged add file.txt\nmkdir plain\nprintf 'changed\\n' > modified/file.txt\nprintf 'changed\\n' > staged/file.txt\ngit -C staged add file.txt\nprintf 'changed\\n' > both/file.txt\ngit -C both add file.txt\nprintf 'again\\n' > both/file.txt\nprintf 'new\\n' > untracked/new.txt\nmkdir -p newdir/dir/sub\nprintf 'a\\n' > newdir/dir/a.txt\nprintf 'b\\n' > newdir/dir/b.txt\nprintf 'c\\n' > newdir/dir/sub/c.txt\nprintf 'd\\n' > newdir/top.txt\nrm deleted/file.txt\ngit -C deleted rm -q other.txt\ngit -C renamed mv file.txt moved.txt\nprintf 'changed\\n' > renamed/other.txt\nprintf 's\\n' > 'spaced/a b.txt'\nprintf 't\\n' > \"spaced/tab$(printf '\\t')here.txt\"\nprintf 'q\\n' > 'spaced/quote\"d.txt'\nprintf 'n\\n' > spaced/new\nprintf 'x\\n' > accented/café.txt\nprintf 'changed\\n' > accented/other.txt\nprintf 'x\\n' > ignored/build.log\ngit -C conflicted checkout -q -b side\nprintf 'side\\n' > conflicted/file.txt\ncommit_all conflicted side\ngit -C conflicted checkout -q main\nprintf 'main\\n' > conflicted/file.txt\ncommit_all conflicted \"main side\"\ngit -C conflicted merge -q side > /dev/null 2>&1 || true\nprintf 'new\\n' > conflicted/extra.txt\ngit -C detached checkout -q --detach HEAD\nprintf 'changed\\n' > detached/file.txt\nstash_with() {\n    local repo=\"$1\" message=\"$2\"\n    printf '%s\\n' \"${message}\" >> \"${repo}/file.txt\"\n    if [ -n \"${message}\" ]; then\n        git -C \"${repo}\" stash push -q -m \"${message}\"\n    else\n        git -C \"${repo}\" stash push -q\n    fi\n}\nauto=\"orchestrator-autostash\"\nstash_with stashes \"${auto} main 2026-01-01T00:00:01Z: dirty tree on unowned branch\"\nstash_with stashes \"\"\nstash_with stashes \"keep me\"\ngit -C stashes checkout -q -b feat/1-x --track origin/feat/1-x\nstash_with stashes \"${auto} feat/1-x 2026-01-01T00:00:02Z: dirty tree on unowned branch\"\ngit -C stashes checkout -q --detach\nstash_with stashes \"${auto} detached 2026-01-01T00:00:03Z: dirty tree on unowned branch\"\ngit -C stashes checkout -q main\nstash_with stashes \"${auto}x not one\"\nstash_with stashes \"${auto}\"\nstash_with stashes \"note: ${auto} not one either\"\nstash_with stashes \"${AUTO_UPPER:-ORCHESTRATOR-AUTOSTASH} other case\"\ngit -C stashes checkout -q -b feat/77-café\nstash_with stashes \"${auto} feat/77-café 2026-01-01T00:00:04Z: dirty tree on unowned branch\"\ngit -C stashes checkout -q main\nstash_with stashes \"${auto} main 2026-01-01T00:00:05Z: dirty tree on unowned branch\"\nstash_with badstash \"${auto} main 2026-01-01T00:00:06Z: dirty tree on unowned branch\"\ngit -C badstash checkout -q -b \"bad$(printf '\\377')name\"\nstash_with badstash \"${auto} bad 2026-01-01T00:00:07Z: dirty tree on unowned branch\"\ngit -C badstash checkout -q main\n# The branch is deleted again (its stash keeps the name): .NET cannot delete a file whose name is not UTF-8\ngit -C badstash branch -q -D \"bad$(printf '\\377')name\"\nstash_with badstash \"${auto} main 2026-01-01T00:00:08Z: dirty tree on unowned branch\"\ngit -C badstash stash list > /dev/null"
     }
   ],
   "cases": [
@@ -956,6 +960,781 @@
       "tool": "not-called",
       "stdout": "",
       "status": 1
+    },
+    {
+      "name": "porcelain status: a clean clone",
+      "scenario": "worktrees",
+      "function": "checkout_porcelain_status",
+      "repo": "clean",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "porcelain status: an unstaged change",
+      "scenario": "worktrees",
+      "function": "checkout_porcelain_status",
+      "repo": "modified",
+      "args": [],
+      "tool": "answers",
+      "stdout": " M file.txt\n",
+      "status": 0
+    },
+    {
+      "name": "porcelain status: a staged change",
+      "scenario": "worktrees",
+      "function": "checkout_porcelain_status",
+      "repo": "staged",
+      "args": [],
+      "tool": "answers",
+      "stdout": "M  file.txt\n",
+      "status": 0
+    },
+    {
+      "name": "porcelain status: a staged change changed again",
+      "scenario": "worktrees",
+      "function": "checkout_porcelain_status",
+      "repo": "both",
+      "args": [],
+      "tool": "answers",
+      "stdout": "MM file.txt\n",
+      "status": 0
+    },
+    {
+      "name": "porcelain status: an untracked file",
+      "scenario": "worktrees",
+      "function": "checkout_porcelain_status",
+      "repo": "untracked",
+      "args": [],
+      "tool": "answers",
+      "stdout": "?? new.txt\n",
+      "status": 0
+    },
+    {
+      "name": "porcelain status: a new directory of untracked files",
+      "scenario": "worktrees",
+      "function": "checkout_porcelain_status",
+      "repo": "newdir",
+      "args": [],
+      "tool": "answers",
+      "stdout": "?? dir/\n?? top.txt\n",
+      "status": 0
+    },
+    {
+      "name": "porcelain status: a deleted file and a staged removal",
+      "scenario": "worktrees",
+      "function": "checkout_porcelain_status",
+      "repo": "deleted",
+      "args": [],
+      "tool": "answers",
+      "stdout": " D file.txt\nD  other.txt\n",
+      "status": 0
+    },
+    {
+      "name": "porcelain status: a staged rename and a change",
+      "scenario": "worktrees",
+      "function": "checkout_porcelain_status",
+      "repo": "renamed",
+      "args": [],
+      "tool": "answers",
+      "stdout": "R  file.txt -> moved.txt\n M other.txt\n",
+      "status": 0
+    },
+    {
+      "name": "porcelain status: file names git quotes",
+      "scenario": "worktrees",
+      "function": "checkout_porcelain_status",
+      "repo": "spaced",
+      "args": [],
+      "tool": "answers",
+      "stdout": "?? \"a b.txt\"\n?? new\n?? \"quote\\\"d.txt\"\n?? \"tab\\there.txt\"\n",
+      "status": 0
+    },
+    {
+      "name": "porcelain status: a non-ASCII file name",
+      "scenario": "worktrees",
+      "function": "checkout_porcelain_status",
+      "repo": "accented",
+      "args": [],
+      "tool": "answers",
+      "stdout": " M other.txt\n?? \"caf\\303\\251.txt\"\n",
+      "status": 0
+    },
+    {
+      "name": "porcelain status: only an ignored file",
+      "scenario": "worktrees",
+      "function": "checkout_porcelain_status",
+      "repo": "ignored",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "porcelain status: a conflicted merge",
+      "scenario": "worktrees",
+      "function": "checkout_porcelain_status",
+      "repo": "conflicted",
+      "args": [],
+      "tool": "answers",
+      "stdout": "UU file.txt\n?? extra.txt\n",
+      "status": 0
+    },
+    {
+      "name": "porcelain status: a change on a detached HEAD",
+      "scenario": "worktrees",
+      "function": "checkout_porcelain_status",
+      "repo": "detached",
+      "args": [],
+      "tool": "answers",
+      "stdout": " M file.txt\n",
+      "status": 0
+    },
+    {
+      "name": "porcelain status: a clean clone with stashes",
+      "scenario": "worktrees",
+      "function": "checkout_porcelain_status",
+      "repo": "stashes",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "porcelain status: an unborn branch",
+      "scenario": "worktrees",
+      "function": "checkout_porcelain_status",
+      "repo": "unborn",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "porcelain status: a file staged on an unborn branch",
+      "scenario": "worktrees",
+      "function": "checkout_porcelain_status",
+      "repo": "unbornstaged",
+      "args": [],
+      "tool": "answers",
+      "stdout": "A  file.txt\n",
+      "status": 0
+    },
+    {
+      "name": "porcelain status: a directory that is not a repository",
+      "scenario": "worktrees",
+      "function": "checkout_porcelain_status",
+      "repo": "plain",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 128
+    },
+    {
+      "name": "porcelain status: a path that does not exist",
+      "scenario": "worktrees",
+      "function": "checkout_porcelain_status",
+      "repo": "missing",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 128
+    },
+    {
+      "name": "porcelain status: an empty REPO_WORK_DIR (the current directory)",
+      "scenario": "worktrees",
+      "function": "checkout_porcelain_status",
+      "repo": "",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 128
+    },
+    {
+      "name": "changed file count: a clean clone",
+      "scenario": "worktrees",
+      "function": "checkout_changed_file_count",
+      "repo": "clean",
+      "args": [],
+      "tool": "answers",
+      "stdout": "0\n",
+      "status": 0
+    },
+    {
+      "name": "changed file count: an unstaged change",
+      "scenario": "worktrees",
+      "function": "checkout_changed_file_count",
+      "repo": "modified",
+      "args": [],
+      "tool": "answers",
+      "stdout": "1\n",
+      "status": 0
+    },
+    {
+      "name": "changed file count: a staged change",
+      "scenario": "worktrees",
+      "function": "checkout_changed_file_count",
+      "repo": "staged",
+      "args": [],
+      "tool": "answers",
+      "stdout": "1\n",
+      "status": 0
+    },
+    {
+      "name": "changed file count: a staged change changed again",
+      "scenario": "worktrees",
+      "function": "checkout_changed_file_count",
+      "repo": "both",
+      "args": [],
+      "tool": "answers",
+      "stdout": "1\n",
+      "status": 0
+    },
+    {
+      "name": "changed file count: an untracked file",
+      "scenario": "worktrees",
+      "function": "checkout_changed_file_count",
+      "repo": "untracked",
+      "args": [],
+      "tool": "answers",
+      "stdout": "1\n",
+      "status": 0
+    },
+    {
+      "name": "changed file count: a new directory of untracked files",
+      "scenario": "worktrees",
+      "function": "checkout_changed_file_count",
+      "repo": "newdir",
+      "args": [],
+      "tool": "answers",
+      "stdout": "4\n",
+      "status": 0
+    },
+    {
+      "name": "changed file count: a deleted file and a staged removal",
+      "scenario": "worktrees",
+      "function": "checkout_changed_file_count",
+      "repo": "deleted",
+      "args": [],
+      "tool": "answers",
+      "stdout": "2\n",
+      "status": 0
+    },
+    {
+      "name": "changed file count: a staged rename and a change",
+      "scenario": "worktrees",
+      "function": "checkout_changed_file_count",
+      "repo": "renamed",
+      "args": [],
+      "tool": "answers",
+      "stdout": "2\n",
+      "status": 0
+    },
+    {
+      "name": "changed file count: file names git quotes",
+      "scenario": "worktrees",
+      "function": "checkout_changed_file_count",
+      "repo": "spaced",
+      "args": [],
+      "tool": "answers",
+      "stdout": "4\n",
+      "status": 0
+    },
+    {
+      "name": "changed file count: a non-ASCII file name",
+      "scenario": "worktrees",
+      "function": "checkout_changed_file_count",
+      "repo": "accented",
+      "args": [],
+      "tool": "answers",
+      "stdout": "2\n",
+      "status": 0
+    },
+    {
+      "name": "changed file count: only an ignored file",
+      "scenario": "worktrees",
+      "function": "checkout_changed_file_count",
+      "repo": "ignored",
+      "args": [],
+      "tool": "answers",
+      "stdout": "0\n",
+      "status": 0
+    },
+    {
+      "name": "changed file count: a conflicted merge",
+      "scenario": "worktrees",
+      "function": "checkout_changed_file_count",
+      "repo": "conflicted",
+      "args": [],
+      "tool": "answers",
+      "stdout": "2\n",
+      "status": 0
+    },
+    {
+      "name": "changed file count: a change on a detached HEAD",
+      "scenario": "worktrees",
+      "function": "checkout_changed_file_count",
+      "repo": "detached",
+      "args": [],
+      "tool": "answers",
+      "stdout": "1\n",
+      "status": 0
+    },
+    {
+      "name": "changed file count: a clean clone with stashes",
+      "scenario": "worktrees",
+      "function": "checkout_changed_file_count",
+      "repo": "stashes",
+      "args": [],
+      "tool": "answers",
+      "stdout": "0\n",
+      "status": 0
+    },
+    {
+      "name": "changed file count: an unborn branch",
+      "scenario": "worktrees",
+      "function": "checkout_changed_file_count",
+      "repo": "unborn",
+      "args": [],
+      "tool": "answers",
+      "stdout": "0\n",
+      "status": 0
+    },
+    {
+      "name": "changed file count: a file staged on an unborn branch",
+      "scenario": "worktrees",
+      "function": "checkout_changed_file_count",
+      "repo": "unbornstaged",
+      "args": [],
+      "tool": "answers",
+      "stdout": "1\n",
+      "status": 0
+    },
+    {
+      "name": "changed file count: a directory that is not a repository",
+      "scenario": "worktrees",
+      "function": "checkout_changed_file_count",
+      "repo": "plain",
+      "args": [],
+      "tool": "answers",
+      "stdout": "0\n",
+      "status": 0
+    },
+    {
+      "name": "changed file count: a path that does not exist",
+      "scenario": "worktrees",
+      "function": "checkout_changed_file_count",
+      "repo": "missing",
+      "args": [],
+      "tool": "answers",
+      "stdout": "0\n",
+      "status": 0
+    },
+    {
+      "name": "changed file count: an empty REPO_WORK_DIR (the current directory)",
+      "scenario": "worktrees",
+      "function": "checkout_changed_file_count",
+      "repo": "",
+      "args": [],
+      "tool": "answers",
+      "stdout": "0\n",
+      "status": 0
+    },
+    {
+      "name": "stash head: a checkout with stashes",
+      "scenario": "worktrees",
+      "function": "checkout_stash_head",
+      "repo": "stashes",
+      "args": [],
+      "tool": "answers",
+      "stdout": "c6853c5669aac6de5c127ea67f42c382f3c4e90c\n",
+      "status": 0
+    },
+    {
+      "name": "stash head: a stash made on a non-UTF-8 branch",
+      "scenario": "worktrees",
+      "function": "checkout_stash_head",
+      "repo": "badstash",
+      "args": [],
+      "tool": "answers",
+      "stdout": "614a01bb696f351714405321d48c8aae96a6c7f5\n",
+      "status": 0
+    },
+    {
+      "name": "stash head: a checkout with no stash",
+      "scenario": "worktrees",
+      "function": "checkout_stash_head",
+      "repo": "clean",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "stash head: an unborn branch",
+      "scenario": "worktrees",
+      "function": "checkout_stash_head",
+      "repo": "unborn",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1
+    },
+    {
+      "name": "stash head: a directory that is not a repository",
+      "scenario": "worktrees",
+      "function": "checkout_stash_head",
+      "repo": "plain",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 128
+    },
+    {
+      "name": "stash head: a path that does not exist",
+      "scenario": "worktrees",
+      "function": "checkout_stash_head",
+      "repo": "missing",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 128
+    },
+    {
+      "name": "stash head: an empty REPO_WORK_DIR",
+      "scenario": "worktrees",
+      "function": "checkout_stash_head",
+      "repo": "",
+      "args": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 128
+    },
+    {
+      "name": "autostashes beyond keep: every autostash (keep 0)",
+      "scenario": "worktrees",
+      "function": "autostashes_beyond_keep",
+      "repo": "stashes",
+      "args": [
+        "orchestrator-autostash",
+        "0"
+      ],
+      "tool": "answers",
+      "stdout": "stash@{10}\tOn main: orchestrator-autostash main 2026-01-01T00:00:01Z: dirty tree on unowned branch\nstash@{7}\tOn feat/1-x: orchestrator-autostash feat/1-x 2026-01-01T00:00:02Z: dirty tree on unowned branch\nstash@{6}\tOn (no branch): orchestrator-autostash detached 2026-01-01T00:00:03Z: dirty tree on unowned branch\nstash@{1}\tOn feat/77-café: orchestrator-autostash feat/77-café 2026-01-01T00:00:04Z: dirty tree on unowned branch\nstash@{0}\tOn main: orchestrator-autostash main 2026-01-01T00:00:05Z: dirty tree on unowned branch\n",
+      "status": 0
+    },
+    {
+      "name": "autostashes beyond keep: all but the newest",
+      "scenario": "worktrees",
+      "function": "autostashes_beyond_keep",
+      "repo": "stashes",
+      "args": [
+        "orchestrator-autostash",
+        "1"
+      ],
+      "tool": "answers",
+      "stdout": "stash@{10}\tOn main: orchestrator-autostash main 2026-01-01T00:00:01Z: dirty tree on unowned branch\nstash@{7}\tOn feat/1-x: orchestrator-autostash feat/1-x 2026-01-01T00:00:02Z: dirty tree on unowned branch\nstash@{6}\tOn (no branch): orchestrator-autostash detached 2026-01-01T00:00:03Z: dirty tree on unowned branch\nstash@{1}\tOn feat/77-café: orchestrator-autostash feat/77-café 2026-01-01T00:00:04Z: dirty tree on unowned branch\n",
+      "status": 0
+    },
+    {
+      "name": "autostashes beyond keep: all but the newest two",
+      "scenario": "worktrees",
+      "function": "autostashes_beyond_keep",
+      "repo": "stashes",
+      "args": [
+        "orchestrator-autostash",
+        "2"
+      ],
+      "tool": "answers",
+      "stdout": "stash@{10}\tOn main: orchestrator-autostash main 2026-01-01T00:00:01Z: dirty tree on unowned branch\nstash@{7}\tOn feat/1-x: orchestrator-autostash feat/1-x 2026-01-01T00:00:02Z: dirty tree on unowned branch\nstash@{6}\tOn (no branch): orchestrator-autostash detached 2026-01-01T00:00:03Z: dirty tree on unowned branch\n",
+      "status": 0
+    },
+    {
+      "name": "autostashes beyond keep: only the oldest",
+      "scenario": "worktrees",
+      "function": "autostashes_beyond_keep",
+      "repo": "stashes",
+      "args": [
+        "orchestrator-autostash",
+        "4"
+      ],
+      "tool": "answers",
+      "stdout": "stash@{10}\tOn main: orchestrator-autostash main 2026-01-01T00:00:01Z: dirty tree on unowned branch\n",
+      "status": 0
+    },
+    {
+      "name": "autostashes beyond keep: exactly as many as kept",
+      "scenario": "worktrees",
+      "function": "autostashes_beyond_keep",
+      "repo": "stashes",
+      "args": [
+        "orchestrator-autostash",
+        "5"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "autostashes beyond keep: fewer than kept",
+      "scenario": "worktrees",
+      "function": "autostashes_beyond_keep",
+      "repo": "stashes",
+      "args": [
+        "orchestrator-autostash",
+        "20"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "autostashes beyond keep: a keep with leading zeros (decimal, as [ reads it)",
+      "scenario": "worktrees",
+      "function": "autostashes_beyond_keep",
+      "repo": "stashes",
+      "args": [
+        "orchestrator-autostash",
+        "002"
+      ],
+      "tool": "answers",
+      "stdout": "stash@{10}\tOn main: orchestrator-autostash main 2026-01-01T00:00:01Z: dirty tree on unowned branch\nstash@{7}\tOn feat/1-x: orchestrator-autostash feat/1-x 2026-01-01T00:00:02Z: dirty tree on unowned branch\nstash@{6}\tOn (no branch): orchestrator-autostash detached 2026-01-01T00:00:03Z: dirty tree on unowned branch\n",
+      "status": 0
+    },
+    {
+      "name": "autostashes beyond keep: another prefix",
+      "scenario": "worktrees",
+      "function": "autostashes_beyond_keep",
+      "repo": "stashes",
+      "args": [
+        "keep",
+        "0"
+      ],
+      "tool": "answers",
+      "stdout": "stash@{8}\tOn main: keep me\n",
+      "status": 0
+    },
+    {
+      "name": "autostashes beyond keep: a prefix only a default stash message has (no \"On\" subject)",
+      "scenario": "worktrees",
+      "function": "autostashes_beyond_keep",
+      "repo": "stashes",
+      "args": [
+        "WIP",
+        "0"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "autostashes beyond keep: a prefix no stash has",
+      "scenario": "worktrees",
+      "function": "autostashes_beyond_keep",
+      "repo": "stashes",
+      "args": [
+        "nothing",
+        "0"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "autostashes beyond keep: an empty prefix",
+      "scenario": "worktrees",
+      "function": "autostashes_beyond_keep",
+      "repo": "stashes",
+      "args": [
+        "",
+        "0"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "autostashes beyond keep: an underscore where the message has a hyphen",
+      "scenario": "worktrees",
+      "function": "autostashes_beyond_keep",
+      "repo": "stashes",
+      "args": [
+        "orchestrator_autostash",
+        "0"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "autostashes beyond keep: a prefix with a regex character (refused)",
+      "scenario": "worktrees",
+      "function": "autostashes_beyond_keep",
+      "repo": "stashes",
+      "args": [
+        "orchestrator.autostash",
+        "0"
+      ],
+      "tool": "refuses",
+      "stdout": "stash@{10}\tOn main: orchestrator-autostash main 2026-01-01T00:00:01Z: dirty tree on unowned branch\nstash@{7}\tOn feat/1-x: orchestrator-autostash feat/1-x 2026-01-01T00:00:02Z: dirty tree on unowned branch\nstash@{6}\tOn (no branch): orchestrator-autostash detached 2026-01-01T00:00:03Z: dirty tree on unowned branch\nstash@{1}\tOn feat/77-café: orchestrator-autostash feat/77-café 2026-01-01T00:00:04Z: dirty tree on unowned branch\nstash@{0}\tOn main: orchestrator-autostash main 2026-01-01T00:00:05Z: dirty tree on unowned branch\n",
+      "status": 0
+    },
+    {
+      "name": "autostashes beyond keep: a prefix with a space (refused)",
+      "scenario": "worktrees",
+      "function": "autostashes_beyond_keep",
+      "repo": "stashes",
+      "args": [
+        "orchestrator-autostash x",
+        "0"
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "autostashes beyond keep: an empty keep (refused: [ fails on it)",
+      "scenario": "worktrees",
+      "function": "autostashes_beyond_keep",
+      "repo": "stashes",
+      "args": [
+        "orchestrator-autostash",
+        ""
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "autostashes beyond keep: a keep that is not a number (refused)",
+      "scenario": "worktrees",
+      "function": "autostashes_beyond_keep",
+      "repo": "stashes",
+      "args": [
+        "orchestrator-autostash",
+        "two"
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "autostashes beyond keep: a negative keep (refused)",
+      "scenario": "worktrees",
+      "function": "autostashes_beyond_keep",
+      "repo": "stashes",
+      "args": [
+        "orchestrator-autostash",
+        "-1"
+      ],
+      "tool": "refuses",
+      "stdout": "stash@{10}\tOn main: orchestrator-autostash main 2026-01-01T00:00:01Z: dirty tree on unowned branch\nstash@{7}\tOn feat/1-x: orchestrator-autostash feat/1-x 2026-01-01T00:00:02Z: dirty tree on unowned branch\nstash@{6}\tOn (no branch): orchestrator-autostash detached 2026-01-01T00:00:03Z: dirty tree on unowned branch\nstash@{1}\tOn feat/77-café: orchestrator-autostash feat/77-café 2026-01-01T00:00:04Z: dirty tree on unowned branch\nstash@{0}\tOn main: orchestrator-autostash main 2026-01-01T00:00:05Z: dirty tree on unowned branch\n",
+      "status": 0
+    },
+    {
+      "name": "autostashes beyond keep: a keep too big for [ (refused)",
+      "scenario": "worktrees",
+      "function": "autostashes_beyond_keep",
+      "repo": "stashes",
+      "args": [
+        "orchestrator-autostash",
+        "99999999999999999999"
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "autostashes beyond keep: a stash list that is not UTF-8 (refused: bash matches it by the locale)",
+      "scenario": "worktrees",
+      "function": "autostashes_beyond_keep",
+      "repo": "badstash",
+      "args": [
+        "orchestrator-autostash",
+        "0"
+      ],
+      "tool": "refuses",
+      "stdout": "stash@{2}\tOn main: orchestrator-autostash main 2026-01-01T00:00:06Z: dirty tree on unowned branch\nstash@{0}\tOn main: orchestrator-autostash main 2026-01-01T00:00:08Z: dirty tree on unowned branch\n",
+      "status": 0
+    },
+    {
+      "name": "autostashes beyond keep: a stash list that is not UTF-8, nothing beyond the keep (refused)",
+      "scenario": "worktrees",
+      "function": "autostashes_beyond_keep",
+      "repo": "badstash",
+      "args": [
+        "orchestrator-autostash",
+        "20"
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "autostashes beyond keep: a checkout with no stash",
+      "scenario": "worktrees",
+      "function": "autostashes_beyond_keep",
+      "repo": "clean",
+      "args": [
+        "orchestrator-autostash",
+        "0"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "autostashes beyond keep: an unborn branch",
+      "scenario": "worktrees",
+      "function": "autostashes_beyond_keep",
+      "repo": "unborn",
+      "args": [
+        "orchestrator-autostash",
+        "0"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "autostashes beyond keep: a directory that is not a repository",
+      "scenario": "worktrees",
+      "function": "autostashes_beyond_keep",
+      "repo": "plain",
+      "args": [
+        "orchestrator-autostash",
+        "0"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "autostashes beyond keep: a path that does not exist",
+      "scenario": "worktrees",
+      "function": "autostashes_beyond_keep",
+      "repo": "missing",
+      "args": [
+        "orchestrator-autostash",
+        "0"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "autostashes beyond keep: an empty REPO_WORK_DIR",
+      "scenario": "worktrees",
+      "function": "autostashes_beyond_keep",
+      "repo": "",
+      "args": [
+        "orchestrator-autostash",
+        "0"
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
     }
   ]
 }
