@@ -4,6 +4,62 @@
 # every phase/step description. Heredoc bodies here are read directly by the agent - treat
 # any edit to their wording as a behaviour change, not a refactor.
 
+# Builds one prompt with Credfeto.Orchestrator.Cmd (ORCHESTRATOR_CMD) instead of the heredocs below, for the
+# build_* functions in this file when ORCHESTRATOR_DOTNET_PROMPTS=1 (#252). kind is the tool's prompt kind; the rest are
+# name=value records, the function's arguments after its defaults. The two CLAUDE.md kinds also get REPO_FULL, whether
+# the repository has a Workflow board (_WF_PROJECT_ID) and _WF_STATUS_ORDER. Each record goes on stdin ended by a NUL
+# byte, so a value can hold any text and no argument meets the per-argument size limit (#1254). The tool prints
+# exactly what the function prints (test/fixtures/prompts-parity.json holds the cases both sides are tested against),
+# and prints nothing and fails for input it cannot reproduce byte for byte, such as text that is not UTF-8. Prints the
+# text and returns 0 when the tool built it; returns 1, printing nothing, when it did not, so the caller builds it in
+# bash and a session never starts with an empty or partial CLAUDE.md.
+_prompt_with_orchestrator_cmd() {
+    local kind="$1" wf_status text status
+    local -a records=()
+    shift
+    if [ "${kind}" = issue-claude-md ] || [ "${kind}" = pr-claude-md ]; then
+        records=("repo-full=${REPO_FULL}" "board=false")
+        [ -n "${_WF_PROJECT_ID}" ] && records[1]="board=true"
+        for wf_status in "${_WF_STATUS_ORDER[@]}"; do
+            records+=("wf-status=${wf_status}")
+        done
+    fi
+    records+=("$@")
+    # The tool's exit status after a dot keeps the text's own trailing newlines, which $(...) would otherwise drop
+    text=$(
+        printf '%s\0' "${records[@]}" | "${ORCHESTRATOR_CMD}" prompt "${kind}"
+        printf '.%s' "$?"
+    )
+    status=${text##*.}
+    text=${text%.*}
+    if [ "${status}" = 0 ]; then
+        printf '%s' "${text}"
+        return 0
+    fi
+    warn "${ORCHESTRATOR_CMD} prompt ${kind} failed; building it in bash instead"
+    return 1
+}
+
+# Prints the prompt's length in characters, as ${#prompt} counts them, and returns 0 when it is longer than
+# MAX_PROMPT_CHARS (the invoke_claude guard, lib/podman), 1 when it is not. With ORCHESTRATOR_DOTNET_PROMPTS=1 the
+# tool counts it, in the locale this shell runs in; if the tool fails, bash counts it.
+prompt_exceeds_max_chars() {
+    local prompt="$1" length status
+    if [ "${ORCHESTRATOR_DOTNET_PROMPTS}" = 1 ]; then
+        length=$(printf '%s' "${prompt}" | "${ORCHESTRATOR_CMD}" prompt check-length --max "${MAX_PROMPT_CHARS}")
+        status=$?
+        if [ -n "${length}" ] && { [ "${status}" -eq 0 ] || [ "${status}" -eq 3 ]; }; then
+            printf '%s\n' "${length}"
+            [ "${status}" -eq 3 ]
+            return
+        fi
+        warn "${ORCHESTRATOR_CMD} prompt check-length failed; counting the prompt in bash instead"
+    fi
+    length=${#prompt}
+    printf '%s\n' "${length}"
+    [ "${length}" -gt "${MAX_PROMPT_CHARS}" ]
+}
+
 # Outputs the cfwf command that sets this item's Workflow board status to the given status, or
 # nothing when _WF_PROJECT_ID is empty (no board). item_kind is "issue" or "pr", the cfwf option
 # that names the item. The agent moves the board only through cfwf; raw project, field and option
@@ -257,6 +313,12 @@ _build_issue_branch_step() {
 build_precheck_section() {
     local kind="$1" sha="$2" status="$3" summary="$4" error="$5" container_log="$6"
     local log_line=""
+    if [ "${ORCHESTRATOR_DOTNET_PROMPTS}" = 1 ] && _prompt_with_orchestrator_cmd precheck-section \
+        "precheck-summary-lines=${PRECHECK_SUMMARY_LINES}" "precheck-timeout-minutes=${PRECHECK_TIMEOUT_MINUTES}" \
+        "kind=${kind}" "sha=${sha}" "status=${status}" "summary=${summary}" "error=${error}" \
+        "container-log=${container_log}"; then
+        return 0
+    fi
     [ -n "${container_log}" ] && log_line="- Full log: ${container_log} (read it with the Read tool)."
 
     if [ "${kind}" = "main" ]; then
@@ -307,6 +369,12 @@ build_precheck_section() {
 
 build_issue_claude_md() {
     local item_id="$1" ai_instructions="$2" repo_path="${3:-${REPO_WORK_DIR}}" plan_approved="${4:-false}" trusted_logins="${5:-}" dirty_branch="${6:-}" stale_branch="${7:-}" background_stall="${8:-false}" precheck_section="${9:-}"
+    if [ "${ORCHESTRATOR_DOTNET_PROMPTS}" = 1 ] && _prompt_with_orchestrator_cmd issue-claude-md \
+        "item=${item_id}" "ai-instructions=${ai_instructions}" "repo-path=${repo_path}" \
+        "plan-approved=${plan_approved}" "trusted-logins=${trusted_logins}" "dirty-branch=${dirty_branch}" \
+        "stale-branch=${stale_branch}" "background-stall=${background_stall}" "precheck-section=${precheck_section}"; then
+        return 0
+    fi
     # The pre-check baseline (#1785), with its own blank line after it only when there is one.
     local precheck_block=""
     [ -n "${precheck_section}" ] && precheck_block="${precheck_section}"$'\n\n'
@@ -540,6 +608,23 @@ DEPRULE
 
 build_pr_claude_md() {
     local item_id="$1" ai_instructions="$2" merge_state="${3:-UNKNOWN}" branch_name="${4:-}" repo_path="${5:-${REPO_WORK_DIR}}" dirty_branch="${6:-}" is_dependency_pr="${7:-false}" trusted_logins="${8:-}" background_stall="${9:-false}" unaddressed_comments="${10:-}" next_phase="${11:-}" precheck_section="${12:-}" dependency_branch="${13:-${7:-false}}"
+    if [ "${ORCHESTRATOR_DOTNET_PROMPTS}" = 1 ] && _prompt_with_orchestrator_cmd pr-claude-md \
+        "round-marker-simplify=${ROUND_MARKER_SIMPLIFY}" "round-marker-code-review=${ROUND_MARKER_CODE_REVIEW}" \
+        "round-marker-security-review=${ROUND_MARKER_SECURITY_REVIEW}" "round-marker-coverage=${ROUND_MARKER_COVERAGE}" \
+        "review-result-clean-marker=${REVIEW_RESULT_CLEAN_MARKER}" \
+        "review-result-findings-marker=${REVIEW_RESULT_FINDINGS_MARKER}" \
+        "max-simplify-iterations=${MAX_SIMPLIFY_ITERATIONS}" "simplify-thrash-limit=${SIMPLIFY_THRASH_LIMIT}" \
+        "max-code-review-iterations=${MAX_CODE_REVIEW_ITERATIONS}" \
+        "max-security-review-iterations=${MAX_SECURITY_REVIEW_ITERATIONS}" \
+        "max-coverage-iterations=${MAX_COVERAGE_ITERATIONS}" \
+        "min-review-convergence-rounds=${MIN_REVIEW_CONVERGENCE_ROUNDS}" \
+        "item=${item_id}" "ai-instructions=${ai_instructions}" "merge-state=${merge_state}" "branch=${branch_name}" \
+        "repo-path=${repo_path}" "dirty-branch=${dirty_branch}" "dependency-pr=${is_dependency_pr}" \
+        "trusted-logins=${trusted_logins}" "background-stall=${background_stall}" \
+        "unaddressed-comments=${unaddressed_comments}" "next-phase=${next_phase}" \
+        "precheck-section=${precheck_section}" "dependency-branch=${dependency_branch}"; then
+        return 0
+    fi
     local checkout_step
     # The pre-check results (#1785), with their own blank line after them only when there are any.
     local precheck_block=""
@@ -750,12 +835,20 @@ EOF
 
 build_issue_prompt() {
     local item_id="$1" repo_path="${3:-${REPO_WORK_DIR}}"
+    if [ "${ORCHESTRATOR_DOTNET_PROMPTS}" = 1 ] && _prompt_with_orchestrator_cmd issue-launch \
+        "repo-full=${REPO_FULL}" "item=${item_id}" "repo-path=${repo_path}"; then
+        return 0
+    fi
     printf 'Work on issue #%s in %s.\nThe repository is checked out at %s.\n' \
         "${item_id}" "${REPO_FULL}" "${repo_path}"
 }
 
 build_pr_prompt() {
     local item_id="$1" repo_path="${5:-${REPO_WORK_DIR}}"
+    if [ "${ORCHESTRATOR_DOTNET_PROMPTS}" = 1 ] && _prompt_with_orchestrator_cmd pr-launch \
+        "repo-full=${REPO_FULL}" "item=${item_id}" "repo-path=${repo_path}"; then
+        return 0
+    fi
     printf 'Work on pull request #%s in %s.\nThe repository is checked out at %s.\n' \
         "${item_id}" "${REPO_FULL}" "${repo_path}"
 }

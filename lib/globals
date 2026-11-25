@@ -82,6 +82,9 @@ ORCHESTRATOR_CMD="${ORCHESTRATOR_CMD:-credfeto-orchestrator}"
 ORCHESTRATOR_DOTNET_FINGERPRINTS="${ORCHESTRATOR_DOTNET_FINGERPRINTS:-0}"
 # shellcheck disable=SC2034  # read by lib/github after sourcing
 ORCHESTRATOR_DOTNET_GITHUB="${ORCHESTRATOR_DOTNET_GITHUB:-0}"
+# ORCHESTRATOR_DOTNET_PROMPTS: the lib/prompts builders and the MAX_PROMPT_CHARS count (lib/prompts).
+# shellcheck disable=SC2034  # read by lib/prompts after sourcing
+ORCHESTRATOR_DOTNET_PROMPTS="${ORCHESTRATOR_DOTNET_PROMPTS:-0}"
 # shellcheck disable=SC2034  # read by lib/github after sourcing
 ORCHESTRATOR_CFWF_MCP_URL="${ORCHESTRATOR_CFWF_MCP_URL:-https://workflow-mcp.markridgwell.com/mcp}"
 
