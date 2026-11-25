@@ -1363,12 +1363,12 @@ prepare_precheck_section() {
 ensure_agent_container_ready() {
     local container_name="$1" item_type="$2" item_id="$3"
 
-    if podman inspect "${container_name}" >/dev/null 2>&1; then
+    if agent_container_exists "${container_name}"; then
         # A container left behind by a hard host crash (despite --rm) previously made every
         # subsequent run die permanently until a human removed it manually (#1090). If it is not
         # actively running, it is safe to assume it is such a leftover and remove it ourselves;
         # only die if it is genuinely running, which means something else is actively using it.
-        if [ "$(podman inspect --format '{{.State.Running}}' "${container_name}" 2>/dev/null)" = "true" ]; then
+        if agent_container_running "${container_name}"; then
             notify_discord_claude_error "${item_type}" "${item_id}" \
                 "Container ${container_name} already exists and is running — remove it manually before running"
             die "Container ${container_name} already exists and is running — remove it manually before running"
@@ -1415,7 +1415,7 @@ pull_agent_image_once() {
                 notify_discord_slow_pull "${OWNER}" "${pull_duration_secs}" "${pull_baseline_secs}"
             fi
             record_pull_duration "${pull_duration_secs}"
-        elif podman image exists "${ORCHESTRATOR_IMAGE}"; then
+        elif agent_image_cached "${ORCHESTRATOR_IMAGE}"; then
             # A registry hiccup should not fail the run when a usable cached image already exists
             # locally — fall back to it instead of dying outright (#1090). Deliberately leaves the
             # flag at 0 so the next item in this run retries the pull rather than being stuck on
@@ -1612,14 +1612,92 @@ prepare_claude_container_args() {
 # pr_json_has_pending_ci_checks, block_pr_for_ci_timeout, pr_json_has_blocked_label, and
 # pr_json_env_block_image_sha are declared in lib/github-status.
 
+# Runs one read-only podman query through Credfeto.Orchestrator.Cmd (ORCHESTRATOR_DOTNET_PODMAN=1, #252) and returns 0
+# when the tool answered, leaving what it printed in podman_tool_output and the status the shell function returns in
+# podman_tool_status (the caller declares both local). The tool runs the same podman command and exits with the
+# function's own status, 0 or 1. Any other status (2 a usage error, 3 an answer it cannot give exactly as bash would,
+# 125 podman could not be run, 126 or 127 the tool is missing, 130 and above a signal) is no answer: this warns and
+# returns 1, and the caller runs its bash version. Every query only reads, so running it again in bash is safe, and
+# gives the caller exactly the bash answer. With "quiet" first, the tool's stderr, and so podman's, goes to /dev/null,
+# as the bash version's podman stderr does; with "stderr", podman's stderr reaches the caller's.
+_podman_tool_answers() {
+    local stderr_mode="$1" query="$2" text status
+    shift 2
+    # The tool's exit status after a dot keeps the output's own trailing newlines, which $(...) would drop
+    if [ "${stderr_mode}" = quiet ]; then
+        text=$(
+            "${ORCHESTRATOR_CMD}" podman "${query}" "$@" < /dev/null 2> /dev/null
+            printf '.%s' "$?"
+        )
+    else
+        text=$(
+            "${ORCHESTRATOR_CMD}" podman "${query}" "$@" < /dev/null
+            printf '.%s' "$?"
+        )
+    fi
+    status=${text##*.}
+    case "${status}" in
+        0 | 1)
+            podman_tool_output=${text%.*}
+            podman_tool_status=${status}
+            return 0
+            ;;
+    esac
+    warn "${ORCHESTRATOR_CMD} podman ${query} failed (exit ${status}); running podman in bash instead"
+    return 1
+}
+
+# Returns 0 when podman can inspect the name in $1 (podman inspect: a container, or any other object of that name) and
+# 1 when it cannot, printing nothing. ensure_agent_container_ready asks it about the agent container's name.
+# With ORCHESTRATOR_DOTNET_PODMAN=1 the tool runs it (_podman_tool_answers).
+agent_container_exists() {
+    local name="$1" podman_tool_output podman_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_PODMAN}" = 1 ] \
+        && _podman_tool_answers quiet container-exists --name "${name}"; then
+        return "${podman_tool_status}"
+    fi
+    podman inspect "${name}" > /dev/null 2>&1 || return 1
+}
+
+# Returns 0 when podman reports the container named in $1 as running (its .State.Running is exactly true, trailing
+# newlines aside) and 1 otherwise, printing nothing. With ORCHESTRATOR_DOTNET_PODMAN=1 the tool runs it
+# (_podman_tool_answers).
+agent_container_running() {
+    local name="$1" podman_tool_output podman_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_PODMAN}" = 1 ] \
+        && _podman_tool_answers quiet container-running --name "${name}"; then
+        return "${podman_tool_status}"
+    fi
+    [ "$(podman inspect --format '{{.State.Running}}' "${name}" 2> /dev/null)" = "true" ]
+}
+
+# Returns 0 when the image named in $1 is in local storage (podman image exists) and 1 otherwise; podman's output
+# and stderr pass through. pull_agent_image_once asks it when a pull fails. With ORCHESTRATOR_DOTNET_PODMAN=1 the
+# tool runs it (_podman_tool_answers).
+agent_image_cached() {
+    local image="$1" podman_tool_output podman_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_PODMAN}" = 1 ] \
+        && _podman_tool_answers stderr image-exists --image "${image}"; then
+        printf '%s' "${podman_tool_output}"
+        return "${podman_tool_status}"
+    fi
+    podman image exists "${image}" || return 1
+}
+
 # Reads the git SHA baked into the agent image's IMAGE_SHA_DEVELOPMENT_AGENT env var (set at build
 # time — see containers/agent/Dockerfile) directly off the image config, without running a
 # container (#1118). Assumes invoke_claude has already pulled ${ORCHESTRATOR_IMAGE} at least once
 # so far this run (ORCHESTRATOR_IMAGE_PULLED_THIS_RUN=1) — not necessarily on this specific call.
 # Best-effort: prints nothing and returns non-zero on any inspect failure — a failure here
 # only means the auto-unblock check below is skipped for this tick, never that anything breaks.
+# With ORCHESTRATOR_DOTNET_PODMAN=1 the tool reads it (_podman_tool_answers).
 current_agent_image_sha() {
-    local sha
+    local sha podman_tool_output podman_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_PODMAN}" = 1 ] \
+        && _podman_tool_answers quiet image-sha --image "${ORCHESTRATOR_IMAGE}"; then
+        printf '%s' "${podman_tool_output}"
+        return "${podman_tool_status}"
+    fi
     sha=$(podman inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${ORCHESTRATOR_IMAGE}" 2>/dev/null \
         | sed -n 's/^IMAGE_SHA_DEVELOPMENT_AGENT=//p')
     [ -n "${sha}" ] || return 1

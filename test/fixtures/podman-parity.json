@@ -1,0 +1,2053 @@
+{
+  "description": "Golden parity cases for the read-only lib/podman queries (#252): each case runs its lib/podman function with a podman stand-in (stub) that answers the scripted calls; arg, every podman argument and the scripted stdout and stderr are printf %b text. stdout, status and calls (what the function printed, returned and the podman calls it made) are recorded from bash by test/oneshot-podman-parity.bats.",
+  "stub": "#!/usr/bin/env bash\n# The podman stand-in of test/fixtures/podman-parity.json: logs each call to ${PODMAN_PARITY_DIR}/calls (the arguments,\n# each ended by \\x1f, one call a line), then answers with the response scripted for exactly those arguments: the\n# response-<n>.stdout and .stderr files hold printf %b text and .status the exit status\ndir=\"${PODMAN_PARITY_DIR:?}\"\n{\n    printf '%s\\x1f' \"$@\"\n    printf '\\n'\n} >> \"${dir}/calls\"\ncall=\"${dir}/call.$$\"\nprintf '%s\\0' \"$@\" > \"${call}\"\nfor args in \"${dir}\"/response-*.args; do\n    [ -f \"${args}\" ] || continue\n    cmp -s \"${args}\" \"${call}\" || continue\n    rm -f \"${call}\"\n    response=\"${args%.args}\"\n    text=\"\"\n    IFS= read -r -d '' text < \"${response}.stdout\"\n    printf '%b' \"${text}\"\n    text=\"\"\n    IFS= read -r -d '' text < \"${response}.stderr\"\n    printf '%b' \"${text}\" >&2\n    exit \"$(cat \"${response}.status\")\"\ndone\nrm -f \"${call}\"\nprintf 'podman parity stub: no response scripted for: %s\\n' \"$*\" >&2\nexit 125\n",
+  "cases": [
+    {
+      "name": "the image env holds the sha among other variables",
+      "function": "current_agent_image_sha",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "PATH=/usr/local/bin:/usr/bin\\nIMAGE_SHA_DEVELOPMENT_AGENT=0123456789abcdef0123456789abcdef01234567\\nHOME=/home/developer\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "0123456789abcdef0123456789abcdef01234567",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "the sha line is the last line, with no newline",
+      "function": "current_agent_image_sha",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "PATH=/usr/bin\\nIMAGE_SHA_DEVELOPMENT_AGENT=abc123",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "abc123",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "the sha line is the only line",
+      "function": "current_agent_image_sha",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "IMAGE_SHA_DEVELOPMENT_AGENT=abc123\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "abc123",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "the image env has no sha variable",
+      "function": "current_agent_image_sha",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "PATH=/usr/bin\\nHOME=/home/developer\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "the image env is empty",
+      "function": "current_agent_image_sha",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "the image env is blank lines only",
+      "function": "current_agent_image_sha",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "\\n\\n\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "podman cannot find the image",
+      "function": "current_agent_image_sha",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "",
+          "stderr": "Error: no such object: \"ghcr.io/credfeto/development-agent:latest\"\\n",
+          "status": 125
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "podman fails with exit 1 and no output",
+      "function": "current_agent_image_sha",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "",
+          "stderr": "Error: something went wrong\\n",
+          "status": 1
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "podman fails after printing the sha line",
+      "function": "current_agent_image_sha",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "IMAGE_SHA_DEVELOPMENT_AGENT=abc123\\n",
+          "stderr": "Error: late failure\\n",
+          "status": 125
+        }
+      ],
+      "stdout": "abc123",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "the sha variable is empty",
+      "function": "current_agent_image_sha",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "PATH=/usr/bin\\nIMAGE_SHA_DEVELOPMENT_AGENT=\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "two sha lines both print",
+      "function": "current_agent_image_sha",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "IMAGE_SHA_DEVELOPMENT_AGENT=first\\nPATH=/usr/bin\\nIMAGE_SHA_DEVELOPMENT_AGENT=second\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "first\\nsecond",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "an empty sha line then a set one keeps the newline between",
+      "function": "current_agent_image_sha",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "IMAGE_SHA_DEVELOPMENT_AGENT=\\nIMAGE_SHA_DEVELOPMENT_AGENT=second\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "\\nsecond",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "a set sha line then an empty one drops the trailing newline",
+      "function": "current_agent_image_sha",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "IMAGE_SHA_DEVELOPMENT_AGENT=first\\nIMAGE_SHA_DEVELOPMENT_AGENT=\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "first",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "a CRLF line keeps the CR",
+      "function": "current_agent_image_sha",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "IMAGE_SHA_DEVELOPMENT_AGENT=abc123\\r\\nPATH=/usr/bin\\r\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "abc123\\r",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "trailing blank lines after the sha are dropped",
+      "function": "current_agent_image_sha",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "IMAGE_SHA_DEVELOPMENT_AGENT=abc123\\n\\n\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "abc123",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "a value holding equals signs, spaces and tabs",
+      "function": "current_agent_image_sha",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "IMAGE_SHA_DEVELOPMENT_AGENT=a=b c\\td \\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "a=b c\\td ",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "a leading space is not the variable",
+      "function": "current_agent_image_sha",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": " IMAGE_SHA_DEVELOPMENT_AGENT=abc123\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "a longer variable name is not the variable",
+      "function": "current_agent_image_sha",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "XIMAGE_SHA_DEVELOPMENT_AGENT=abc123\\nIMAGE_SHA_DEVELOPMENT_AGENT_OLD=def456\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "a lower-case name is not the variable",
+      "function": "current_agent_image_sha",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "image_sha_development_agent=abc123\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "the name without an equals sign is not the variable",
+      "function": "current_agent_image_sha",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "IMAGE_SHA_DEVELOPMENT_AGENT\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "the variable name inside another value is not the variable",
+      "function": "current_agent_image_sha",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "NOTE=IMAGE_SHA_DEVELOPMENT_AGENT=abc123\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "a non-ASCII UTF-8 value",
+      "function": "current_agent_image_sha",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "IMAGE_SHA_DEVELOPMENT_AGENT=caf\\xc3\\xa9-\\xe2\\x9c\\x93\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "caf\\xc3\\xa9-\\xe2\\x9c\\x93",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "a value of only a CR",
+      "function": "current_agent_image_sha",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "IMAGE_SHA_DEVELOPMENT_AGENT=\\r\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "\\r",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "a backslash in the value stays",
+      "function": "current_agent_image_sha",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "IMAGE_SHA_DEVELOPMENT_AGENT=a\\\\\\\\nb\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "a\\\\\\\\nb",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "a very long value",
+      "function": "current_agent_image_sha",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "IMAGE_SHA_DEVELOPMENT_AGENT=ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "an empty ORCHESTRATOR_IMAGE is passed as an empty name",
+      "function": "current_agent_image_sha",
+      "arg": "",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            ""
+          ],
+          "stdout": "",
+          "stderr": "Error: no such object: \"\"\\n",
+          "status": 125
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          ""
+        ]
+      ]
+    },
+    {
+      "name": "an image name with spaces and a leading dash is passed as one argument",
+      "function": "current_agent_image_sha",
+      "arg": "--odd name ",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "--odd name "
+          ],
+          "stdout": "IMAGE_SHA_DEVELOPMENT_AGENT=abc123\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "abc123",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "--odd name "
+        ]
+      ]
+    },
+    {
+      "name": "an image name with non-ASCII UTF-8",
+      "function": "current_agent_image_sha",
+      "arg": "registry.example/caf\\xc3\\xa9:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "registry.example/caf\\xc3\\xa9:latest"
+          ],
+          "stdout": "IMAGE_SHA_DEVELOPMENT_AGENT=abc123\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "abc123",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "registry.example/café:latest"
+        ]
+      ]
+    },
+    {
+      "name": "output that is not UTF-8 is refused",
+      "function": "current_agent_image_sha",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "refuses",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "PATH=/usr/\\xff/bin\\nIMAGE_SHA_DEVELOPMENT_AGENT=abc123\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "abc123",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "a sha that is not UTF-8 is refused",
+      "function": "current_agent_image_sha",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "refuses",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "IMAGE_SHA_DEVELOPMENT_AGENT=ab\\xffc\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "ab\\xffc",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "output holding a NUL byte is refused",
+      "function": "current_agent_image_sha",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "refuses",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "PATH=/usr\\x00/bin\\nIMAGE_SHA_DEVELOPMENT_AGENT=abc123\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "abc123",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "an image name that is not UTF-8 is refused",
+      "function": "current_agent_image_sha",
+      "arg": "registry.example/\\xff:latest",
+      "tool": "refuses",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            "registry.example/\\xff:latest"
+          ],
+          "stdout": "IMAGE_SHA_DEVELOPMENT_AGENT=abc123\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "abc123",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{range .Config.Env}}{{println .}}{{end}}",
+          "registry.example/�:latest"
+        ]
+      ]
+    },
+    {
+      "name": "podman inspects the container",
+      "function": "agent_container_exists",
+      "arg": "orchestrator-credfeto",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "orchestrator-credfeto"
+          ],
+          "stdout": "[\\n    {\\n        \"Id\": \"abc\"\\n    }\\n]\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "orchestrator-credfeto"
+        ]
+      ]
+    },
+    {
+      "name": "podman inspects it with no output",
+      "function": "agent_container_exists",
+      "arg": "orchestrator-credfeto",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "orchestrator-credfeto"
+          ],
+          "stdout": "",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "orchestrator-credfeto"
+        ]
+      ]
+    },
+    {
+      "name": "podman has no such object",
+      "function": "agent_container_exists",
+      "arg": "orchestrator-credfeto",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "orchestrator-credfeto"
+          ],
+          "stdout": "[]\\n",
+          "stderr": "Error: no such object: \"orchestrator-credfeto\"\\n",
+          "status": 125
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "orchestrator-credfeto"
+        ]
+      ]
+    },
+    {
+      "name": "podman fails with exit 1",
+      "function": "agent_container_exists",
+      "arg": "orchestrator-credfeto",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "orchestrator-credfeto"
+          ],
+          "stdout": "",
+          "stderr": "Error: failed\\n",
+          "status": 1
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "orchestrator-credfeto"
+        ]
+      ]
+    },
+    {
+      "name": "podman fails with exit 2",
+      "function": "agent_container_exists",
+      "arg": "orchestrator-credfeto",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "orchestrator-credfeto"
+          ],
+          "stdout": "",
+          "stderr": "",
+          "status": 2
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "orchestrator-credfeto"
+        ]
+      ]
+    },
+    {
+      "name": "podman fails with exit 3",
+      "function": "agent_container_exists",
+      "arg": "orchestrator-credfeto",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "orchestrator-credfeto"
+          ],
+          "stdout": "",
+          "stderr": "",
+          "status": 3
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "orchestrator-credfeto"
+        ]
+      ]
+    },
+    {
+      "name": "podman fails with exit 127",
+      "function": "agent_container_exists",
+      "arg": "orchestrator-credfeto",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "orchestrator-credfeto"
+          ],
+          "stdout": "",
+          "stderr": "",
+          "status": 127
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "orchestrator-credfeto"
+        ]
+      ]
+    },
+    {
+      "name": "an empty name",
+      "function": "agent_container_exists",
+      "arg": "",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            ""
+          ],
+          "stdout": "",
+          "stderr": "Error: no names or ids specified\\n",
+          "status": 125
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          ""
+        ]
+      ]
+    },
+    {
+      "name": "a name like an option",
+      "function": "agent_container_exists",
+      "arg": "--help",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--help"
+          ],
+          "stdout": "",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "--help"
+        ]
+      ]
+    },
+    {
+      "name": "a name with spaces",
+      "function": "agent_container_exists",
+      "arg": "a container name",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "a container name"
+          ],
+          "stdout": "",
+          "stderr": "",
+          "status": 125
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "a container name"
+        ]
+      ]
+    },
+    {
+      "name": "a non-ASCII UTF-8 name",
+      "function": "agent_container_exists",
+      "arg": "caf\\xc3\\xa9",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "caf\\xc3\\xa9"
+          ],
+          "stdout": "",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "café"
+        ]
+      ]
+    },
+    {
+      "name": "a name that is not UTF-8 is refused",
+      "function": "agent_container_exists",
+      "arg": "bad\\xffname",
+      "tool": "refuses",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "bad\\xffname"
+          ],
+          "stdout": "",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "bad�name"
+        ]
+      ]
+    },
+    {
+      "name": "the container is running",
+      "function": "agent_container_running",
+      "arg": "orchestrator-credfeto",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{.State.Running}}",
+            "orchestrator-credfeto"
+          ],
+          "stdout": "true\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{.State.Running}}",
+          "orchestrator-credfeto"
+        ]
+      ]
+    },
+    {
+      "name": "the container is stopped",
+      "function": "agent_container_running",
+      "arg": "orchestrator-credfeto",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{.State.Running}}",
+            "orchestrator-credfeto"
+          ],
+          "stdout": "false\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{.State.Running}}",
+          "orchestrator-credfeto"
+        ]
+      ]
+    },
+    {
+      "name": "true with no newline",
+      "function": "agent_container_running",
+      "arg": "orchestrator-credfeto",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{.State.Running}}",
+            "orchestrator-credfeto"
+          ],
+          "stdout": "true",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{.State.Running}}",
+          "orchestrator-credfeto"
+        ]
+      ]
+    },
+    {
+      "name": "true then blank lines",
+      "function": "agent_container_running",
+      "arg": "orchestrator-credfeto",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{.State.Running}}",
+            "orchestrator-credfeto"
+          ],
+          "stdout": "true\\n\\n\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{.State.Running}}",
+          "orchestrator-credfeto"
+        ]
+      ]
+    },
+    {
+      "name": "True in another case is not running",
+      "function": "agent_container_running",
+      "arg": "orchestrator-credfeto",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{.State.Running}}",
+            "orchestrator-credfeto"
+          ],
+          "stdout": "True\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{.State.Running}}",
+          "orchestrator-credfeto"
+        ]
+      ]
+    },
+    {
+      "name": "a leading space is not running",
+      "function": "agent_container_running",
+      "arg": "orchestrator-credfeto",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{.State.Running}}",
+            "orchestrator-credfeto"
+          ],
+          "stdout": " true\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{.State.Running}}",
+          "orchestrator-credfeto"
+        ]
+      ]
+    },
+    {
+      "name": "a trailing space is not running",
+      "function": "agent_container_running",
+      "arg": "orchestrator-credfeto",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{.State.Running}}",
+            "orchestrator-credfeto"
+          ],
+          "stdout": "true \\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{.State.Running}}",
+          "orchestrator-credfeto"
+        ]
+      ]
+    },
+    {
+      "name": "a CRLF true is not running",
+      "function": "agent_container_running",
+      "arg": "orchestrator-credfeto",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{.State.Running}}",
+            "orchestrator-credfeto"
+          ],
+          "stdout": "true\\r\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{.State.Running}}",
+          "orchestrator-credfeto"
+        ]
+      ]
+    },
+    {
+      "name": "two containers both running is not running",
+      "function": "agent_container_running",
+      "arg": "orchestrator-credfeto",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{.State.Running}}",
+            "orchestrator-credfeto"
+          ],
+          "stdout": "true\\ntrue\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{.State.Running}}",
+          "orchestrator-credfeto"
+        ]
+      ]
+    },
+    {
+      "name": "empty output is not running",
+      "function": "agent_container_running",
+      "arg": "orchestrator-credfeto",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{.State.Running}}",
+            "orchestrator-credfeto"
+          ],
+          "stdout": "",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{.State.Running}}",
+          "orchestrator-credfeto"
+        ]
+      ]
+    },
+    {
+      "name": "no such container",
+      "function": "agent_container_running",
+      "arg": "orchestrator-credfeto",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{.State.Running}}",
+            "orchestrator-credfeto"
+          ],
+          "stdout": "",
+          "stderr": "Error: no such object: \"orchestrator-credfeto\"\\n",
+          "status": 125
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{.State.Running}}",
+          "orchestrator-credfeto"
+        ]
+      ]
+    },
+    {
+      "name": "podman fails after printing true still counts as running",
+      "function": "agent_container_running",
+      "arg": "orchestrator-credfeto",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{.State.Running}}",
+            "orchestrator-credfeto"
+          ],
+          "stdout": "true\\n",
+          "stderr": "Error: late\\n",
+          "status": 125
+        }
+      ],
+      "stdout": "",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{.State.Running}}",
+          "orchestrator-credfeto"
+        ]
+      ]
+    },
+    {
+      "name": "podman fails after printing false",
+      "function": "agent_container_running",
+      "arg": "orchestrator-credfeto",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{.State.Running}}",
+            "orchestrator-credfeto"
+          ],
+          "stdout": "false\\n",
+          "stderr": "",
+          "status": 1
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{.State.Running}}",
+          "orchestrator-credfeto"
+        ]
+      ]
+    },
+    {
+      "name": "output that is not UTF-8 is not running",
+      "function": "agent_container_running",
+      "arg": "orchestrator-credfeto",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{.State.Running}}",
+            "orchestrator-credfeto"
+          ],
+          "stdout": "tru\\xff\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{.State.Running}}",
+          "orchestrator-credfeto"
+        ]
+      ]
+    },
+    {
+      "name": "a NUL byte in the output is refused",
+      "function": "agent_container_running",
+      "arg": "orchestrator-credfeto",
+      "tool": "refuses",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{.State.Running}}",
+            "orchestrator-credfeto"
+          ],
+          "stdout": "tr\\x00ue\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{.State.Running}}",
+          "orchestrator-credfeto"
+        ]
+      ]
+    },
+    {
+      "name": "an empty name",
+      "function": "agent_container_running",
+      "arg": "",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{.State.Running}}",
+            ""
+          ],
+          "stdout": "",
+          "stderr": "Error: no names or ids specified\\n",
+          "status": 125
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{.State.Running}}",
+          ""
+        ]
+      ]
+    },
+    {
+      "name": "a name like an option",
+      "function": "agent_container_running",
+      "arg": "--format",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{.State.Running}}",
+            "--format"
+          ],
+          "stdout": "true\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{.State.Running}}",
+          "--format"
+        ]
+      ]
+    },
+    {
+      "name": "a name that is not UTF-8 is refused",
+      "function": "agent_container_running",
+      "arg": "bad\\xffname",
+      "tool": "refuses",
+      "podman": [
+        {
+          "args": [
+            "inspect",
+            "--format",
+            "{{.State.Running}}",
+            "bad\\xffname"
+          ],
+          "stdout": "true\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 0,
+      "calls": [
+        [
+          "inspect",
+          "--format",
+          "{{.State.Running}}",
+          "bad�name"
+        ]
+      ]
+    },
+    {
+      "name": "the image is in local storage",
+      "function": "agent_image_cached",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "image",
+            "exists",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 0,
+      "calls": [
+        [
+          "image",
+          "exists",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "the image is not in local storage",
+      "function": "agent_image_cached",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "image",
+            "exists",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "",
+          "stderr": "",
+          "status": 1
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "image",
+          "exists",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "podman fails with its stderr passed through",
+      "function": "agent_image_cached",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "image",
+            "exists",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "",
+          "stderr": "Error: storage is not initialised\\n",
+          "status": 125
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "image",
+          "exists",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "podman fails with exit 2",
+      "function": "agent_image_cached",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "image",
+            "exists",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "",
+          "stderr": "Error: usage\\n",
+          "status": 2
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "image",
+          "exists",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "podman prints to stdout, which passes through with its newlines",
+      "function": "agent_image_cached",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "image",
+            "exists",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "note\\n\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "note\\n\\n",
+      "status": 0,
+      "calls": [
+        [
+          "image",
+          "exists",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "podman prints non-ASCII UTF-8 and fails",
+      "function": "agent_image_cached",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "image",
+            "exists",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "caf\\xc3\\xa9\\n",
+          "stderr": "warn \\xc3\\xa9\\n",
+          "status": 1
+        }
+      ],
+      "stdout": "caf\\xc3\\xa9\\n",
+      "status": 1,
+      "calls": [
+        [
+          "image",
+          "exists",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "an empty image name",
+      "function": "agent_image_cached",
+      "arg": "",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "image",
+            "exists",
+            ""
+          ],
+          "stdout": "",
+          "stderr": "Error: invalid reference format\\n",
+          "status": 125
+        }
+      ],
+      "stdout": "",
+      "status": 1,
+      "calls": [
+        [
+          "image",
+          "exists",
+          ""
+        ]
+      ]
+    },
+    {
+      "name": "an image name like an option",
+      "function": "agent_image_cached",
+      "arg": "--help",
+      "tool": "answers",
+      "podman": [
+        {
+          "args": [
+            "image",
+            "exists",
+            "--help"
+          ],
+          "stdout": "",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 0,
+      "calls": [
+        [
+          "image",
+          "exists",
+          "--help"
+        ]
+      ]
+    },
+    {
+      "name": "podman prints bytes that are not UTF-8 is refused",
+      "function": "agent_image_cached",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "refuses",
+      "podman": [
+        {
+          "args": [
+            "image",
+            "exists",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "a\\xffb\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "a\\xffb\\n",
+      "status": 0,
+      "calls": [
+        [
+          "image",
+          "exists",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "podman prints a NUL byte is refused",
+      "function": "agent_image_cached",
+      "arg": "ghcr.io/credfeto/development-agent:latest",
+      "tool": "refuses",
+      "podman": [
+        {
+          "args": [
+            "image",
+            "exists",
+            "ghcr.io/credfeto/development-agent:latest"
+          ],
+          "stdout": "a\\x00b\\n",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "ab\\n",
+      "status": 0,
+      "calls": [
+        [
+          "image",
+          "exists",
+          "ghcr.io/credfeto/development-agent:latest"
+        ]
+      ]
+    },
+    {
+      "name": "an image name that is not UTF-8 is refused",
+      "function": "agent_image_cached",
+      "arg": "registry.example/\\xff",
+      "tool": "refuses",
+      "podman": [
+        {
+          "args": [
+            "image",
+            "exists",
+            "registry.example/\\xff"
+          ],
+          "stdout": "",
+          "stderr": "",
+          "status": 0
+        }
+      ],
+      "stdout": "",
+      "status": 0,
+      "calls": [
+        [
+          "image",
+          "exists",
+          "registry.example/�"
+        ]
+      ]
+    }
+  ]
+}
