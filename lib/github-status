@@ -3,12 +3,51 @@
 # checks, blocked-label detection) and the Blocked-label application/escalation machinery built
 # on top of them.
 
+# Runs `ORCHESTRATOR_CMD predicate <name>` (ORCHESTRATOR_DOTNET_PREDICATES=1, #252), the .NET port of
+# one of the predicates and reads below, with the pull request or Issue JSON $2 on stdin. The further
+# arguments are the command's options; an option named --*-file is followed by the content to put in
+# that file, which goes to the tool in a temporary file so no value meets the per-argument size limit.
+# The tool's output and exit status are passed through: it prints what the jq path prints, and exits 0
+# where the jq path returns 0 (test/fixtures/predicates-parity.json holds the cases both are tested
+# against). A predicate's false is exit 3, and input jq would fail on is exit 1, so a missing or
+# failing tool reads as false, as a jq failure does.
+_predicate_with_orchestrator_cmd() {
+    local name="$1" json="$2" file status=0
+    shift 2
+    local -a args=() files=()
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --*-file)
+                if ! file=$(mktemp --suffix=.json); then
+                    [ "${#files[@]}" -eq 0 ] || rm -f "${files[@]}"
+                    return 1
+                fi
+                files+=("${file}")
+                printf '%s' "$2" > "${file}"
+                args+=("$1" "${file}")
+                shift 2
+                ;;
+            *)
+                args+=("$1")
+                shift
+                ;;
+        esac
+    done
+    printf '%s' "${json}" | "${ORCHESTRATOR_CMD}" predicate "${name}" ${args[@]+"${args[@]}"} || status=$?
+    [ "${#files[@]}" -eq 0 ] || rm -f "${files[@]}"
+    return "${status}"
+}
+
 # Whether the PR still carries the .deleteme.now placeholder a template repo's opening commit adds
 # (agent-roles.instructions.md, Changelog skip case): the real change has not landed, so the PR
 # must never be treated as ready or settled. Only the first 100 files are visible in pr_json, which
 # is enough because a placeholder-only PR has one.
 pr_json_has_placeholder_file() {
     local pr_json="$1"
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+        _predicate_with_orchestrator_cmd pr-has-placeholder-file "${pr_json}" > /dev/null 2>&1 || return 1
+        return 0
+    fi
     printf '%s' "${pr_json}" | jq -e '(.files // []) | any(.[]; .path == ".deleteme.now")' > /dev/null 2>&1
 }
 
@@ -42,6 +81,16 @@ pr_json_has_placeholder_file() {
 # predicate below reads as "required-ness unknown".
 annotate_pr_json_required_checks() {
     local pr_json="$1" required_names_json="${2:-}" base_requires_checks="${3:-}"
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+        local annotated
+        if annotated=$(_predicate_with_orchestrator_cmd pr-annotate-required-checks "${pr_json}" \
+            --required-file "${required_names_json}" --base-requires-checks "${base_requires_checks}" 2> /dev/null && printf x); then
+            printf '%s' "${annotated%x}"
+        else
+            printf '%s' "${pr_json}"
+        fi
+        return 0
+    fi
     if [ -z "${required_names_json}" ]; then
         printf '%s' "${pr_json}"
         return 0
@@ -72,6 +121,10 @@ annotate_pr_json_required_checks() {
 # out differently for knowing which checks are required, so the lookup is not worth an API call.
 pr_json_has_only_passed_checks() {
     local pr_json="$1"
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+        _predicate_with_orchestrator_cmd pr-has-only-passed-checks "${pr_json}" > /dev/null 2>&1 || return 1
+        return 0
+    fi
     printf '%s' "${pr_json}" | jq -e '
         (.statusCheckRollup // [])
         | all(.[];
@@ -158,6 +211,11 @@ set_pr_required_checks() {
 # pipeline "finished" — either can go stale after the fact and both still need a human.
 pr_json_is_terminal() {
     local pr_json="$1" review_pipeline_finished="${2:-false}"
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+        _predicate_with_orchestrator_cmd pr-is-terminal "${pr_json}" \
+            --review-pipeline-finished "${review_pipeline_finished}" > /dev/null 2>&1 || return 1
+        return 0
+    fi
     printf '%s' "${pr_json}" | jq -e --argjson finished "${review_pipeline_finished}" "${_JQ_DEF_LATEST_CHECK_RUNS}${_JQ_DEF_CHECK_FAILED}"'
         .isDraft != true
         and ((.files // []) | all(.[]; .path != ".deleteme.now"))
@@ -273,6 +331,14 @@ _jq_pr_json_with_comment_arrays() {
 # last-seen marker as if another trusted commenter had spoken. Empty excludes nothing.
 pr_json_latest_trusted_comment_timestamp() {
     local pr_json="$1" trusted_logins="${2:-null}" review_comments_json="${3:-[]}" issue_comments_json="${4:-[]}" exclude_login="${5:-}"
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+        local latest
+        latest=$(_predicate_with_orchestrator_cmd pr-latest-trusted-comment-timestamp "${pr_json}" \
+            --trusted-file "${trusted_logins}" --review-comments-file "${review_comments_json}" \
+            --issue-comments-file "${issue_comments_json}" --exclude-login "${exclude_login}") || return 1
+        printf '%s' "${latest}"
+        return 0
+    fi
     # shellcheck disable=SC2016  # the program's $variables are jq's, not the shell's
     _jq_pr_json_with_comment_arrays "${pr_json}" "${review_comments_json}" "${issue_comments_json}" "${_JQ_DEF_COUNTED_LOGIN}${_JQ_DEF_AUTOMATED_SUMMARY}"'
         def tc(cs): cs | map(select(counted_login(.author.login)));
@@ -328,6 +394,14 @@ pr_json_has_unaddressed_trusted_comment() {
 pr_json_unaddressed_trusted_comments_text() {
     local pr_json="$1" trusted_logins="${2:-null}" last_seen_timestamp="${3:-}" review_comments_json="${4:-[]}" issue_comments_json="${5:-[]}" exclude_login="${6:-}"
     local text
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+        text=$(_predicate_with_orchestrator_cmd pr-unaddressed-trusted-comments "${pr_json}" \
+            --trusted-file "${trusted_logins}" --review-comments-file "${review_comments_json}" \
+            --issue-comments-file "${issue_comments_json}" --exclude-login "${exclude_login}" \
+            --last-seen "${last_seen_timestamp}" --per-comment-max "${PR_UNADDRESSED_COMMENT_MAX_CHARS}") || return 1
+        _cap_unaddressed_trusted_comments_text "${text}"
+        return 0
+    fi
     # shellcheck disable=SC2016  # the program's $variables are jq's, not the shell's
     text=$(_jq_pr_json_with_comment_arrays "${pr_json}" "${review_comments_json}" "${issue_comments_json}" "${_JQ_DEF_COUNTED_LOGIN}${_JQ_DEF_AUTOMATED_SUMMARY}"'
         def clip: if length > $per then .[0:$per] + " [truncated]" else . end;
@@ -346,6 +420,13 @@ pr_json_unaddressed_trusted_comments_text() {
         | join("\n")
     ' -r --argjson trusted "${trusted_logins}" --arg me "${exclude_login}" \
         --arg last "${last_seen_timestamp}" --argjson per "${PR_UNADDRESSED_COMMENT_MAX_CHARS}") || return 1
+    _cap_unaddressed_trusted_comments_text "${text}"
+}
+
+# Prints pr_json_unaddressed_trusted_comments_text's text $1, cut at PR_UNADDRESSED_COMMENTS_MAX_CHARS
+# characters with a note saying so.
+_cap_unaddressed_trusted_comments_text() {
+    local text="$1"
     if [ "${#text}" -gt "${PR_UNADDRESSED_COMMENTS_MAX_CHARS}" ]; then
         text="${text:0:${PR_UNADDRESSED_COMMENTS_MAX_CHARS}}
 [further comments truncated: read the rest on the PR]"
@@ -416,6 +497,10 @@ pr_merge_state_stuck_behind() {
 # required-ness is unknown, or a failure a later run superseded, never produces that claim.
 pr_json_has_failed_required_check() {
     local pr_json="$1"
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+        _predicate_with_orchestrator_cmd pr-has-failed-required-check "${pr_json}" > /dev/null 2>&1 || return 1
+        return 0
+    fi
     printf '%s' "${pr_json}" | jq -e "${_JQ_DEF_LATEST_CHECK_RUNS}${_JQ_DEF_CHECK_FAILED}"'
         (.statusCheckRollup // [])
         | latest_check_runs
@@ -430,6 +515,10 @@ pr_json_has_failed_required_check() {
 # treats it as blocking, and pr_next_phase_for_board_status routes it the same way.
 pr_json_has_failed_check_of_unknown_requiredness() {
     local pr_json="$1"
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+        _predicate_with_orchestrator_cmd pr-has-failed-check-of-unknown-requiredness "${pr_json}" > /dev/null 2>&1 || return 1
+        return 0
+    fi
     printf '%s' "${pr_json}" | jq -e "${_JQ_DEF_LATEST_CHECK_RUNS}${_JQ_DEF_CHECK_FAILED}"'
         (.statusCheckRollup // [])
         | latest_check_runs
@@ -578,6 +667,10 @@ block_pr_for_idle_exhausted_failure() {
 # PR that already has auto-merge enabled (which otherwise makes pr_json_is_terminal stop early).
 pr_json_has_unaddressed_review_request() {
     local pr_json="$1"
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+        _predicate_with_orchestrator_cmd pr-has-unaddressed-review-request "${pr_json}" > /dev/null 2>&1 || return 1
+        return 0
+    fi
     printf '%s' "${pr_json}" | jq -e '.reviewDecision == "CHANGES_REQUESTED"' > /dev/null 2>&1
 }
 
@@ -589,6 +682,10 @@ pr_json_has_unaddressed_review_request() {
 # for changes rather than the PR just sitting unapproved (#1278).
 pr_json_needs_review_approval() {
     local pr_json="$1"
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+        _predicate_with_orchestrator_cmd pr-needs-review-approval "${pr_json}" > /dev/null 2>&1 || return 1
+        return 0
+    fi
     printf '%s' "${pr_json}" | jq -e '.reviewDecision == "REVIEW_REQUIRED"' > /dev/null 2>&1
 }
 
@@ -698,6 +795,10 @@ block_issue_for_idle_exhausted_no_plan() {
 # (see the identical check embedded into the generated CLAUDE.md, lib/prompts).
 issue_json_has_plan_comment() {
     local issue_json="$1"
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+        _predicate_with_orchestrator_cmd issue-has-plan-comment "${issue_json}" > /dev/null 2>&1 || return 1
+        return 0
+    fi
     printf '%s' "${issue_json}" | jq -e '
         [.comments[]?.body // ""] | any(test("##\\s*Implementation Plan";"i"))
     ' > /dev/null 2>&1
@@ -716,6 +817,11 @@ issue_json_has_plan_comment() {
 # replaced on every dimension, so it never accepts what either refused.
 issue_json_has_human_plan_approval() {
     local issue_json="$1" me_login="$2" trusted_logins_json="$3"
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+        _predicate_with_orchestrator_cmd issue-has-human-plan-approval "${issue_json}" \
+            --me "${me_login}" --trusted-file "${trusted_logins_json:-null}" > /dev/null 2>&1 || return 1
+        return 0
+    fi
     # $a, $c, $i, $me, $planby, $t, $l and $trusted below are jq variables, not shell ones.
     # shellcheck disable=SC2016
     printf '%s' "${issue_json}" | jq -e --arg me "${me_login}" --argjson trusted "${trusted_logins_json:-null}" \
@@ -1029,6 +1135,10 @@ issue_blocked_without_plan_needs_replan() {
 # run on the PR's head commit is still running, whether or not the rollup shows it (#1860).
 pr_json_has_pending_ci_checks() {
     local pr_json="$1"
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+        _predicate_with_orchestrator_cmd pr-has-pending-ci-checks "${pr_json}" > /dev/null || return 1
+        return 0
+    fi
     # statusCheckRollup mixes two GraphQL node types: CheckRun (modern GitHub Actions
     # checks, has .status) and StatusContext (legacy commit statuses, has only .state
     # and no .status at all). Treating a StatusContext's absent .status as "not
@@ -1127,9 +1237,13 @@ pr_json_has_blocked_label() {
 # comment carries the marker — the normal case for every other kind of Blocked.
 pr_json_env_block_image_sha() {
     local pr_json="$1" sha
-    sha=$(printf '%s' "${pr_json}" | jq -r '
-        [.comments[]?.body // "" | capture("<!--\\s*orchestrator:env-block\\s+image-sha=(?<sha>[0-9a-f]+)\\s*-->").sha] | last // empty
-    ' 2>/dev/null)
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+        sha=$(_predicate_with_orchestrator_cmd pr-env-block-image-sha "${pr_json}" 2> /dev/null)
+    else
+        sha=$(printf '%s' "${pr_json}" | jq -r '
+            [.comments[]?.body // "" | capture("<!--\\s*orchestrator:env-block\\s+image-sha=(?<sha>[0-9a-f]+)\\s*-->").sha] | last // empty
+        ' 2>/dev/null)
+    fi
     [ -n "${sha}" ] || return 1
     printf '%s' "${sha}"
 }
@@ -1144,6 +1258,13 @@ pr_json_env_block_image_sha() {
 # as its transcripts live in that repository's state tree.
 pr_json_lowest_closing_issue() {
     local pr_json="$1" repo_full="$2" issue
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+        issue=$(_predicate_with_orchestrator_cmd pr-lowest-closing-issue "${pr_json}" --repo "${repo_full}" 2> /dev/null) \
+            || return 1
+        [[ "${issue}" =~ ^[0-9]+$ ]] || return 1
+        printf '%s' "${issue}"
+        return 0
+    fi
     issue=$(printf '%s' "${pr_json}" | jq -er --arg repo "${repo_full}" '
         [(.closingIssuesReferences // [])[]
             | select(.repository == null

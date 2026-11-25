@@ -79,6 +79,8 @@ FINGERPRINT_SCHEMA_VERSION=2
 # ORCHESTRATOR_DOTNET_DISCOVERY: work discovery, that is the priorities feed (fetch_all_priorities), the
 # trusted logins (get_trusted_logins, whose collaborators read goes through the same cfwf MCP server) and
 # the GitHub health gate (github_incident_open).
+# ORCHESTRATOR_DOTNET_PREDICATES: the pure predicates and reads of lib/github-status over a pull
+# request's or Issue's JSON, including the plan-approval rule (label writes and auto-merge stay here).
 # shellcheck disable=SC2034  # read by lib/fingerprints after sourcing
 ORCHESTRATOR_CMD="${ORCHESTRATOR_CMD:-credfeto-orchestrator}"
 # shellcheck disable=SC2034  # read by lib/fingerprints after sourcing
@@ -90,6 +92,8 @@ ORCHESTRATOR_DOTNET_GITHUB="${ORCHESTRATOR_DOTNET_GITHUB:-0}"
 ORCHESTRATOR_DOTNET_PROMPTS="${ORCHESTRATOR_DOTNET_PROMPTS:-0}"
 # shellcheck disable=SC2034  # read by lib/github and lib/github-health after sourcing
 ORCHESTRATOR_DOTNET_DISCOVERY="${ORCHESTRATOR_DOTNET_DISCOVERY:-0}"
+# shellcheck disable=SC2034  # read by lib/github-status after sourcing
+ORCHESTRATOR_DOTNET_PREDICATES="${ORCHESTRATOR_DOTNET_PREDICATES:-0}"
 # shellcheck disable=SC2034  # read by lib/github after sourcing
 ORCHESTRATOR_CFWF_MCP_URL="${ORCHESTRATOR_CFWF_MCP_URL:-https://workflow-mcp.markridgwell.com/mcp}"
 # ORCHESTRATOR_DOTNET_GIT: the read-only lib/git checkout queries (branch, changes, status, stash

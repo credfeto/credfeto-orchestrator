@@ -18,6 +18,9 @@ public static class ExitCodes
     // discovery github-incident: no incident is open on a used component (github_incident_open returns 1)
     public const int NoIncident = 4;
 
+    // A predicate's answer is false, or the read found nothing
+    public const int No = 3;
+
     // Stopped by SIGINT or SIGTERM
     public const int Cancelled = 130;
 }

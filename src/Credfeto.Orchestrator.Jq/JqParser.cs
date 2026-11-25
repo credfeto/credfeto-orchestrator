@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using System.Text.Json;
 
 namespace Credfeto.Orchestrator.Jq;
@@ -10,6 +11,14 @@ public static class JqParser
 
     private static readonly JsonDocumentOptions Options = new()
     {
+        AllowTrailingCommas = false,
+        CommentHandling = JsonCommentHandling.Disallow,
+        MaxDepth = MAXIMUM_DEPTH,
+    };
+
+    private static readonly JsonReaderOptions StreamOptions = new()
+    {
+        AllowMultipleValues = true,
         AllowTrailingCommas = false,
         CommentHandling = JsonCommentHandling.Disallow,
         MaxDepth = MAXIMUM_DEPTH,
@@ -30,6 +39,37 @@ public static class JqParser
         catch (InvalidOperationException exception)
         {
             throw new JqException(message: "Invalid JSON string: " + exception.Message, innerException: exception);
+        }
+    }
+
+    // jq reads its input as a stream of JSON texts, one after another: Values holds every text read
+    // before the first one that is not JSON, and Complete is false when there was such a text
+    public static JqInput ParseStream(string json)
+    {
+        List<JqValue> values = [];
+        Utf8JsonReader reader = new(jsonData: Encoding.UTF8.GetBytes(json), options: StreamOptions);
+
+        try
+        {
+            while (reader.Read())
+            {
+                using JsonDocument document = JsonDocument.ParseValue(ref reader);
+                values.Add(Convert(document.RootElement));
+            }
+
+            return new(Values: values, Complete: true);
+        }
+        catch (JsonException)
+        {
+            return new(Values: values, Complete: false);
+        }
+        catch (InvalidOperationException)
+        {
+            return new(Values: values, Complete: false);
+        }
+        catch (JqException)
+        {
+            return new(Values: values, Complete: false);
         }
     }
 
