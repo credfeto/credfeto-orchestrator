@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Credfeto.Orchestrator.Commands;
+using Credfeto.Orchestrator.Discord;
 using Credfeto.Orchestrator.Discovery;
 using Credfeto.Orchestrator.Fingerprints;
 using Credfeto.Orchestrator.GitHub;
@@ -72,6 +73,14 @@ public static class Program
 
     private static Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
     {
+        // discord only prints the payload it builds from its arguments: it reads nothing else
+        if (DiscordCommandParser.IsVerb(args))
+        {
+            return DiscordCommandRunner
+                .RunAsync(args: args, output: Console.Out, error: Console.Error, cancellationToken: cancellationToken)
+                .AsTask();
+        }
+
         if (GitCommandParser.IsVerb(args))
         {
             return RunGitAsync(args: args, cancellationToken: cancellationToken);
