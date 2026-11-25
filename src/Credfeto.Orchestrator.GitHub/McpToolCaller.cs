@@ -32,7 +32,7 @@ public sealed class McpToolCaller : IMcpToolCaller
 
     public async ValueTask<string> CallAsync(
         string tool,
-        IReadOnlyDictionary<string, string> arguments,
+        IReadOnlyDictionary<string, JsonElement> arguments,
         CancellationToken cancellationToken
     )
     {
@@ -50,7 +50,7 @@ public sealed class McpToolCaller : IMcpToolCaller
     private async ValueTask<CallToolResult> CallToolAsync(
         CfwfMcpSettings settings,
         string tool,
-        IReadOnlyDictionary<string, string> arguments,
+        IReadOnlyDictionary<string, JsonElement> arguments,
         CancellationToken cancellationToken
     )
     {
@@ -108,15 +108,11 @@ public sealed class McpToolCaller : IMcpToolCaller
         };
     }
 
-    private static Dictionary<string, JsonElement> Arguments(IReadOnlyDictionary<string, string> arguments)
+    private static Dictionary<string, JsonElement> Arguments(IReadOnlyDictionary<string, JsonElement> arguments)
     {
         return arguments.ToDictionary(
             keySelector: argument => argument.Key,
-            elementSelector: argument =>
-                JsonSerializer.SerializeToElement(
-                    value: argument.Value,
-                    jsonTypeInfo: GitHubJsonContext.Default.String
-                ),
+            elementSelector: argument => argument.Value,
             comparer: StringComparer.Ordinal
         );
     }

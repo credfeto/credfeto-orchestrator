@@ -33,13 +33,17 @@ _parity_field() {
 }
 
 # A gh stand-in serving the case's responses: pr list applies its --jq filter to pulls.json, as gh
-# does, or prints pulls.json when it has none, and the branch and rules endpoints print branch.json and rules.json. A missing file fails
-# the call.
+# does, or prints pulls.json when it has none; the branch and rules endpoints print branch.json and
+# rules.json; api user and the compare endpoint apply their --jq filter to user.json and
+# compare.json; pr view prints pr.json. A missing file fails the call.
 make_parity_gh_stub() {
     make_stub_multiline gh \
         'case "$*" in' \
         '    "pr list "*"--jq "*) [ -f "${TEST_TMP}/pulls.json" ] || exit 1; jq -r "${@: -1}" "${TEST_TMP}/pulls.json" ;;' \
         '    "pr list "*) [ -f "${TEST_TMP}/pulls.json" ] || exit 1; cat "${TEST_TMP}/pulls.json" ;;' \
+        '    "pr view "*) [ -f "${TEST_TMP}/pr.json" ] || exit 1; cat "${TEST_TMP}/pr.json" ;;' \
+        '    "api user --jq "*) [ -f "${TEST_TMP}/user.json" ] || exit 1; jq -r "${@: -1}" "${TEST_TMP}/user.json" ;;' \
+        '    *"/compare/"*) [ -f "${TEST_TMP}/compare.json" ] || exit 1; jq -r "${@: -1}" "${TEST_TMP}/compare.json" ;;' \
         '    *"/rules/branches/"*) [ -f "${TEST_TMP}/rules.json" ] || exit 1; cat "${TEST_TMP}/rules.json" ;;' \
         '    *"/branches/"*) [ -f "${TEST_TMP}/branch.json" ] || exit 1; cat "${TEST_TMP}/branch.json" ;;' \
         '    *) exit 1 ;;' \
@@ -122,8 +126,72 @@ _check_open_pr_cases() {
     [ "${failures}" -eq 0 ]
 }
 
+# Checks the read run by "$2" (given the case index; it prints what the read printed, or "null" when
+# it failed) against field expected of every case in collection $1.
+_check_read_cases() {
+    local collection="$1" read="$2" count i name expected actual failures=0
+    make_parity_gh_stub
+    count=$(jq --arg c "${collection}" '.[$c] | length' "${PARITY_FIXTURE}")
+    [ "${count}" -gt 0 ]
+    for ((i = 0; i < count; i++)); do
+        name=$(_parity_field "${collection}" "${i}" name)
+        expected=$(_parity_field "${collection}" "${i}" expected)
+        actual=$("${read}" "${i}")
+        if [ "${actual}" != "${expected}" ]; then
+            printf '%s case %d (%s): expected %s, got %s\n' "${collection}" "${i}" "${name}" "${expected}" "${actual}"
+            failures=$((failures + 1))
+        fi
+    done
+    [ "${failures}" -eq 0 ]
+}
+
+_read_current_login() {
+    _parity_gh_response currentLogin "$1" gh "${TEST_TMP}/user.json"
+    fetch_current_login 2> /dev/null || printf 'null'
+}
+
+_read_open_prs_with_closing_issues() {
+    _parity_gh_response openPullRequestsWithClosingIssues "$1" gh "${TEST_TMP}/pulls.json"
+    fetch_open_prs_with_closing_issues "$(_parity_field openPullRequestsWithClosingIssues "$1" repo)" 2> /dev/null \
+        || printf 'null'
+}
+
+_read_pr_commit_authors() {
+    _parity_gh_response pullRequestCommitAuthors "$1" gh "${TEST_TMP}/pr.json"
+    fetch_pr_commit_authors_json "$(_parity_field pullRequestCommitAuthors "$1" repo)" \
+        "$(_parity_field pullRequestCommitAuthors "$1" pr)" 2> /dev/null || printf 'null'
+}
+
+_read_branch_behind_by() {
+    _parity_gh_response branchBehindBy "$1" gh "${TEST_TMP}/compare.json"
+    fetch_branch_behind_by "$(_parity_field branchBehindBy "$1" repo)" "$(_parity_field branchBehindBy "$1" base)" \
+        "$(_parity_field branchBehindBy "$1" head)" 2> /dev/null || printf 'null'
+}
+
+@test "fetch_current_login prints the golden login for every current login parity case (#252)" {
+    unset ORCHESTRATOR_DOTNET_GITHUB
+    _check_read_cases currentLogin _read_current_login
+}
+
+@test "fetch_open_prs_with_closing_issues prints the golden JSON for every closing issues parity case (#252)" {
+    unset ORCHESTRATOR_DOTNET_GITHUB
+    _check_read_cases openPullRequestsWithClosingIssues _read_open_prs_with_closing_issues
+}
+
+@test "fetch_pr_commit_authors_json prints the golden JSON for every commit authors parity case (#252)" {
+    unset ORCHESTRATOR_DOTNET_GITHUB
+    GH_ITEM_FETCH_RETRY_ATTEMPTS=2
+    GH_ITEM_FETCH_RETRY_DELAY_SECS=0
+    _check_read_cases pullRequestCommitAuthors _read_pr_commit_authors
+}
+
+@test "fetch_branch_behind_by prints the golden count for every behind-by parity case (#252)" {
+    unset ORCHESTRATOR_DOTNET_GITHUB
+    _check_read_cases branchBehindBy _read_branch_behind_by
+}
+
 @test "every parity case gives the tool either a cfwf MCP result or a failure, never both (#252)" {
-    run jq -r '[.openPullRequests[], .branchRequiresStatusChecks[], .ownOpenPullRequests[] | select(has("mcp") == has("mcpError"))] | length' "${PARITY_FIXTURE}"
+    run jq -r '[.[][] | select(has("mcp") == has("mcpError"))] | length' "${PARITY_FIXTURE}"
     [ "${status}" -eq 0 ]
     [ "${output}" = "0" ]
 }

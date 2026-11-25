@@ -95,6 +95,14 @@ internal static class GitHubParityFixture
         );
     }
 
+    // One case of a collection, detached from the fixture document so it outlives it
+    public static async Task<JsonElement> ItemAsync(string collection, int index, CancellationToken cancellationToken)
+    {
+        using JsonDocument document = await LoadAsync(cancellationToken);
+
+        return document.RootElement.GetProperty(collection)[index].Clone();
+    }
+
     private static async Task<JsonDocument> LoadAsync(CancellationToken cancellationToken)
     {
         await using Stream stream = typeof(GitHubParityFixture).Assembly.GetManifestResourceStream(RESOURCE_NAME)

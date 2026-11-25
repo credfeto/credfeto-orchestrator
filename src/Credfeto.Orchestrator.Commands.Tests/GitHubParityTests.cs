@@ -1,4 +1,7 @@
+using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Credfeto.Orchestrator.Fingerprints;
 using Credfeto.Orchestrator.GitHub;
@@ -75,6 +78,143 @@ public sealed class GitHubParityTests : TestBase
         );
         Assert.Equal(expected: "pr_list", actual: tools.Tool);
         Assert.Equal(expected: parity.Repository, actual: tools.Arguments?["repo"]);
+    }
+
+    public static Task<TheoryData<int, string>> CurrentLoginCasesAsync()
+    {
+        return GitHubParityFixture.CaseNamesAsync("currentLogin");
+    }
+
+    [Theory]
+    [MemberData(nameof(CurrentLoginCasesAsync))]
+    public Task CurrentLoginMatchesTheShellVersionAsync(int index, string name)
+    {
+        return this.CheckCaseAsync(
+            collection: "currentLogin",
+            index: index,
+            name: name,
+            tool: "auth_status",
+            args: static _ => ["whoami"],
+            arguments: static _ => [with(StringComparer.Ordinal)]
+        );
+    }
+
+    public static Task<TheoryData<int, string>> ClosingIssuesCasesAsync()
+    {
+        return GitHubParityFixture.CaseNamesAsync("openPullRequestsWithClosingIssues");
+    }
+
+    [Theory]
+    [MemberData(nameof(ClosingIssuesCasesAsync))]
+    public Task OpenPullRequestsWithClosingIssuesMatchTheShellVersionAsync(int index, string name)
+    {
+        return this.CheckCaseAsync(
+            collection: "openPullRequestsWithClosingIssues",
+            index: index,
+            name: name,
+            tool: "pr_list",
+            args: static item => ["open-prs-closing-issues", "--repo", Text(item: item, field: "repo")],
+            arguments: static item =>
+                new(StringComparer.Ordinal) { ["repo"] = Text(item: item, field: "repo"), ["closingIssues"] = "true" }
+        );
+    }
+
+    public static Task<TheoryData<int, string>> CommitAuthorCasesAsync()
+    {
+        return GitHubParityFixture.CaseNamesAsync("pullRequestCommitAuthors");
+    }
+
+    [Theory]
+    [MemberData(nameof(CommitAuthorCasesAsync))]
+    public Task PullRequestCommitAuthorsMatchTheShellVersionAsync(int index, string name)
+    {
+        return this.CheckCaseAsync(
+            collection: "pullRequestCommitAuthors",
+            index: index,
+            name: name,
+            tool: "pr_view",
+            args: static item =>
+                ["pr-commit-authors", "--repo", Text(item: item, field: "repo"), "--pr", Text(item: item, field: "pr")],
+            arguments: static item =>
+                new(StringComparer.Ordinal)
+                {
+                    ["repo"] = Text(item: item, field: "repo"),
+                    ["pr"] = Text(item: item, field: "pr"),
+                    ["fields"] = "[\"commits\"]",
+                }
+        );
+    }
+
+    public static Task<TheoryData<int, string>> BehindByCasesAsync()
+    {
+        return GitHubParityFixture.CaseNamesAsync("branchBehindBy");
+    }
+
+    [Theory]
+    [MemberData(nameof(BehindByCasesAsync))]
+    public Task BranchBehindByMatchesTheShellVersionAsync(int index, string name)
+    {
+        return this.CheckCaseAsync(
+            collection: "branchBehindBy",
+            index: index,
+            name: name,
+            tool: "branch_compare",
+            args: static item =>
+                [
+                    "branch-behind-by",
+                    "--repo",
+                    Text(item: item, field: "repo"),
+                    "--base",
+                    Text(item: item, field: "base"),
+                    "--head",
+                    Text(item: item, field: "head"),
+                ],
+            arguments: static item =>
+                new(StringComparer.Ordinal)
+                {
+                    ["repo"] = Text(item: item, field: "repo"),
+                    ["base"] = Text(item: item, field: "base"),
+                    ["head"] = Text(item: item, field: "head"),
+                }
+        );
+    }
+
+    // Runs "github <args>" against the case's MCP result or failure and checks what it prints against the case's
+    // expected field (null: it must fail), and that it asked the tool with the given arguments
+    private async Task CheckCaseAsync(
+        string collection,
+        int index,
+        string name,
+        string tool,
+        Func<JsonElement, string[]> args,
+        Func<JsonElement, Dictionary<string, string>> arguments
+    )
+    {
+        JsonElement item = await GitHubParityFixture.ItemAsync(
+            collection: collection,
+            index: index,
+            cancellationToken: this.CancellationToken()
+        );
+        FakeMcpToolCaller tools = new(
+            result: item.TryGetProperty(propertyName: "mcp", value: out JsonElement mcp) ? mcp.GetRawText() : null,
+            error: item.TryGetProperty(propertyName: "mcpError", value: out JsonElement error)
+                ? error.GetString()
+                : null
+        );
+
+        string? actual = await this.RunAsync(Runner(tools), ["github", .. args(item)]);
+
+        Assert.Equal(
+            expected: Describe(name: name, printed: item.GetProperty("expected").GetString()),
+            actual: Describe(name: name, printed: actual)
+        );
+        Assert.Equal(expected: tool, actual: tools.Tool);
+        Assert.Equal(expected: arguments(item), actual: tools.Arguments);
+    }
+
+    private static string Text(JsonElement item, string field)
+    {
+        return item.GetProperty(field).GetString() ?? string.Empty;
     }
 
     private static CommandRunner Runner(FakeMcpToolCaller tools)

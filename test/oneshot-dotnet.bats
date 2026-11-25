@@ -276,3 +276,151 @@ make_orchestrator_github_stub() {
     [ "${status}" -eq 0 ]
     [ "${output}" = "PullRequest #7" ]
 }
+
+# A stand-in for the tool that answers each github read differently: records its arguments (one
+# line per call, joined with spaces) and prints ${TEST_TMP}/github_<read>, or fails when that file
+# is missing.
+make_orchestrator_github_reads_stub() {
+    make_stub_multiline fake-orchestrator \
+        'printf "%s\n" "$*" >> "${TEST_TMP}/cmd_calls"' \
+        '[ -f "${TEST_TMP}/github_$2" ] || exit 1' \
+        'cat "${TEST_TMP}/github_$2"'
+    export ORCHESTRATOR_CMD=fake-orchestrator
+}
+
+@test "the stand-off reads use gh, never ORCHESTRATOR_CMD, while ORCHESTRATOR_DOTNET_GITHUB is off (#252)" {
+    make_orchestrator_github_reads_stub
+    ORCHESTRATOR_DOTNET_GITHUB=0
+    make_stub gh 'case "$*" in
+        "api user --jq .login") printf "bot-user\n" ;;
+        "pr list --repo org/repo --state open --limit 200 --json number,author,closingIssuesReferences,headRefName") printf "%s" "[{\"number\":7,\"author\":{\"login\":\"x\",\"is_bot\":false},\"closingIssuesReferences\":[{\"id\":\"I\",\"number\":3}],\"headRefName\":\"fix/3-a\"}]" ;;
+        "pr view 7 --repo org/repo --json commits") printf "%s" "{\"commits\":[{\"oid\":\"a\",\"authors\":[{\"id\":\"U\",\"login\":\"x\",\"email\":\"x@example.test\",\"name\":\"X\"}]}]}" ;;
+        "api repos/org/repo/compare/main...fix%2F3-a --jq .behind_by") printf "4\n" ;;
+        *) exit 1 ;;
+    esac'
+    run fetch_current_login
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "bot-user" ]
+    run fetch_open_prs_with_closing_issues org/repo
+    [ "${status}" -eq 0 ]
+    [ "${output}" = '[{"number":7,"author":{"login":"x"},"closingIssuesReferences":[{"number":3}],"headRefName":"fix/3-a"}]' ]
+    run fetch_pr_commit_authors_json org/repo 7
+    [ "${status}" -eq 0 ]
+    [ "${output}" = '{"commits":[{"authors":[{"login":"x","email":"x@example.test"}]}]}' ]
+    run fetch_branch_behind_by org/repo main fix/3-a
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "4" ]
+    [ ! -f "${TEST_TMP}/cmd_calls" ]
+}
+
+@test "the stand-off reads hand their arguments to ORCHESTRATOR_CMD github when switched on (#252)" {
+    make_orchestrator_github_reads_stub
+    make_stub gh 'exit 1'
+    ORCHESTRATOR_DOTNET_GITHUB=1
+    printf 'bot-user\n' > "${TEST_TMP}/github_whoami"
+    printf '[]\n' > "${TEST_TMP}/github_open-prs-closing-issues"
+    printf '{"commits":[]}\n' > "${TEST_TMP}/github_pr-commit-authors"
+    printf '0\n' > "${TEST_TMP}/github_branch-behind-by"
+
+    run fetch_current_login
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "bot-user" ]
+    run fetch_open_prs_with_closing_issues org/repo
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "[]" ]
+    run fetch_pr_commit_authors_json org/repo 7
+    [ "${status}" -eq 0 ]
+    [ "${output}" = '{"commits":[]}' ]
+    run fetch_branch_behind_by org/repo "release/1.0" "fix/3 a#b"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "0" ]
+    [ "$(cat "${TEST_TMP}/cmd_calls")" = "$(printf '%s\n' \
+        'github whoami' \
+        'github open-prs-closing-issues --repo org/repo' \
+        'github pr-commit-authors --repo org/repo --pr 7' \
+        'github branch-behind-by --repo org/repo --base release/1.0 --head fix/3 a#b')" ]
+}
+
+@test "fetch_pr_commit_authors_json retries the tool as fetch_pr_fields_json retries gh (#252)" {
+    make_orchestrator_github_reads_stub
+    make_stub gh 'exit 1'
+    ORCHESTRATOR_DOTNET_GITHUB=1
+    GH_ITEM_FETCH_RETRY_ATTEMPTS=3
+    GH_ITEM_FETCH_RETRY_DELAY_SECS=0
+    run fetch_pr_commit_authors_json org/repo 7
+    [ "${status}" -ne 0 ]
+    [ -z "${output}" ]
+    [ "$(wc -l < "${TEST_TMP}/cmd_calls")" -eq 3 ]
+}
+
+@test "the takeover stand-off, the pivot, the identity and the behind check use the tool's reads when switched on (#252)" {
+    make_orchestrator_github_reads_stub
+    make_stub gh 'exit 1'
+    ORCHESTRATOR_DOTNET_GITHUB=1
+    REPO_FULL=org/repo
+    PR_CREATOR_LOGIN=app/prpixie
+    GIT_USER_EMAIL=bot@example.test
+    get_trusted_logins() { printf '["owner"]'; }
+    _GH_ME=""
+    printf 'bot-user\n' > "${TEST_TMP}/github_whoami"
+    resolve_gh_me
+    [ "${_GH_ME}" = "bot-user" ]
+
+    printf '%s\n' '[{"number":31,"author":{"login":"app/prpixie"},"closingIssuesReferences":[{"number":12}],"headRefName":"feat/12-thing"},{"number":5,"author":{"login":"owner"},"closingIssuesReferences":[],"headRefName":"fix/9-other"}]' \
+        > "${TEST_TMP}/github_open-prs-closing-issues"
+    printf '%s\n' '{"commits":[{"authors":[{"login":"owner","email":"owner@example.test"}]}]}' > "${TEST_TMP}/github_pr-commit-authors"
+    run find_human_taken_over_pr_for_issue 12
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "31" ]
+
+    printf '%s\n' '{"commits":[{"authors":[{"login":"","email":"Bot@Example.test"}]}]}' > "${TEST_TMP}/github_pr-commit-authors"
+    run find_human_taken_over_pr_for_issue 12
+    [ "${status}" -eq 1 ]
+    run pr_has_bot_authored_commit org/repo 31
+    [ "${status}" -eq 0 ]
+
+    printf '31\n' > "${TEST_TMP}/github_own-open-prs"
+    run find_open_nonblocked_pr_for_repo org/repo
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "31" ]
+
+    printf '3\n' > "${TEST_TMP}/github_branch-behind-by"
+    run pr_branch_behind_base org/repo '{"baseRefName":"main","headRefName":"feat/12-thing"}'
+    [ "${status}" -eq 0 ]
+    printf '0\n' > "${TEST_TMP}/github_branch-behind-by"
+    run pr_branch_behind_base org/repo '{"baseRefName":"main","headRefName":"feat/12-thing"}'
+    [ "${status}" -eq 1 ]
+    run pr_branch_behind_base org/repo '{"baseRefName":"main","headRefName":"feat/12-thing","isCrossRepository":true}'
+    [ "${status}" -eq 1 ]
+}
+
+@test "the takeover stand-off, the pivot, the identity and the behind check fail safe when ORCHESTRATOR_CMD fails (#252)" {
+    make_orchestrator_github_reads_stub
+    make_stub gh 'exit 1'
+    ORCHESTRATOR_DOTNET_GITHUB=1
+    GH_USER_RETRY_ATTEMPTS=2
+    GH_USER_RETRY_DELAY_SECS=0
+    GH_ITEM_FETCH_RETRY_ATTEMPTS=2
+    GH_ITEM_FETCH_RETRY_DELAY_SECS=0
+    REPO_FULL=org/repo
+    PR_CREATOR_LOGIN=app/prpixie
+    get_trusted_logins() { printf '["owner"]'; }
+    _GH_ME=""
+    run resolve_gh_me
+    [ "${status}" -eq 1 ]
+
+    _GH_ME=bot-user
+    run find_human_taken_over_pr_for_issue 12
+    [ "${status}" -eq 2 ]
+    [ -z "${output}" ]
+
+    printf '%s\n' '[{"number":31,"author":{"login":"app/prpixie"},"closingIssuesReferences":[{"number":12}],"headRefName":"feat/12-thing"}]' \
+        > "${TEST_TMP}/github_open-prs-closing-issues"
+    run find_human_taken_over_pr_for_issue 12
+    [ "${status}" -eq 2 ]
+    run pr_has_bot_authored_commit org/repo 31
+    [ "${status}" -eq 2 ]
+
+    run pr_branch_behind_base org/repo '{"baseRefName":"main","headRefName":"feat/12-thing"}'
+    [ "${status}" -eq 2 ]
+}
