@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -155,6 +156,79 @@ public sealed class GitQueries : IGitQueries
         }
 
         return No();
+    }
+
+    // git status --porcelain --untracked-files=normal
+    public ValueTask<GitResult> PorcelainStatusAsync(string repository, CancellationToken cancellationToken)
+    {
+        return this._git.RunAsync(
+            repository: repository,
+            arguments: ["status", "--porcelain", "--untracked-files=normal"],
+            cancellationToken: cancellationToken
+        );
+    }
+
+    // git status --porcelain --untracked-files=all | wc -l: the newlines git printed, whatever its status, as wc
+    // prints the count, and wc's status
+    public async ValueTask<GitResult> ChangedFileCountAsync(string repository, CancellationToken cancellationToken)
+    {
+        GitResult status = await this._git.RunAsync(
+            repository: repository,
+            arguments: ["status", "--porcelain", "--untracked-files=all"],
+            cancellationToken: cancellationToken
+        );
+
+        int count = status.Output.Span.Count((byte)'\n');
+
+        return new(ExitCode: 0, Output: Encoding.ASCII.GetBytes(count.ToString(CultureInfo.InvariantCulture) + "\n"));
+    }
+
+    // git rev-parse --verify -q refs/stash
+    public ValueTask<GitResult> StashHeadAsync(string repository, CancellationToken cancellationToken)
+    {
+        return this._git.RunAsync(
+            repository: repository,
+            arguments: ["rev-parse", "--verify", "-q", "refs/stash"],
+            cancellationToken: cancellationToken
+        );
+    }
+
+    // git stash list --format=%gd%x09%gs, then the autostashes beyond the keep (AutostashList); bash reads the list
+    // whatever git's status, and its loop prints nothing else, so the status is always 0
+    public async ValueTask<GitResult> AutostashesBeyondKeepAsync(
+        string repository,
+        string prefix,
+        string keep,
+        CancellationToken cancellationToken
+    )
+    {
+        if (!AutostashList.IsPlainPrefix(prefix))
+        {
+            throw new GitRefusedException($"the prefix '{prefix}' is not plain letters, digits, '-' and '_'");
+        }
+
+        long limit = AutostashList.ParseKeep(keep)
+            ?? throw new GitRefusedException($"the keep '{keep}' is not a decimal number [ reads as bash does");
+
+        GitResult list = await this._git.RunAsync(
+            repository: repository,
+            arguments: ["stash", "list", "--format=%gd%x09%gs"],
+            cancellationToken: cancellationToken
+        );
+
+        if (!AutostashList.IsReadAlike(list.Output.Span))
+        {
+            throw new GitRefusedException("the stash list is not UTF-8, so bash matches it by the locale");
+        }
+
+        return new(
+            ExitCode: 0,
+            Output: AutostashList.BeyondKeep(
+                list: list.Output.Span,
+                prefix: Encoding.ASCII.GetBytes(prefix),
+                keep: limit
+            )
+        );
     }
 
     // One line of the loop: candidate="${full_branch#origin/}", then the regex, then commits ahead of origin/main

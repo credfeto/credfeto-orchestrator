@@ -112,7 +112,45 @@ public sealed class GitParityTests : TestBase, IClassFixture<GitParityRepositori
                 issue: arguments[0],
                 cancellationToken: cancellationToken
             ),
-            _ => throw new InvalidOperationException("No query for " + parity.Function),
+            _ => await AskStatusAsync(
+                queries: queries,
+                function: parity.Function,
+                repository: repository,
+                arguments: arguments,
+                cancellationToken: cancellationToken
+            ),
+        };
+    }
+
+    private static async Task<GitResult> AskStatusAsync(
+        GitQueries queries,
+        string function,
+        string repository,
+        string[] arguments,
+        CancellationToken cancellationToken
+    )
+    {
+        return function switch
+        {
+            "checkout_porcelain_status" => await queries.PorcelainStatusAsync(
+                repository: repository,
+                cancellationToken: cancellationToken
+            ),
+            "checkout_changed_file_count" => await queries.ChangedFileCountAsync(
+                repository: repository,
+                cancellationToken: cancellationToken
+            ),
+            "checkout_stash_head" => await queries.StashHeadAsync(
+                repository: repository,
+                cancellationToken: cancellationToken
+            ),
+            "autostashes_beyond_keep" => await queries.AutostashesBeyondKeepAsync(
+                repository: repository,
+                prefix: arguments[0],
+                keep: arguments[1],
+                cancellationToken: cancellationToken
+            ),
+            _ => throw new InvalidOperationException("No query for " + function),
         };
     }
 }
