@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Credfeto.Orchestrator.Commands;
 using Credfeto.Orchestrator.Fingerprints;
 using Credfeto.Orchestrator.GitHub;
+using Credfeto.Orchestrator.Podman;
 
 namespace Credfeto.Orchestrator.Cmd;
 
@@ -59,6 +60,11 @@ public static class Program
             return RunPromptAsync(args: args, cancellationToken: cancellationToken);
         }
 
+        if (PodmanCommandParser.IsVerb(args))
+        {
+            return RunPodmanAsync(args: args, cancellationToken: cancellationToken);
+        }
+
         return RunCommandAsync(args: args, cancellationToken: cancellationToken);
     }
 
@@ -68,6 +74,16 @@ public static class Program
         await using Stream output = Console.OpenStandardOutput();
 
         return await GitCommandRunner
+            .CreateDefault()
+            .RunAsync(args: args, output: output, error: Console.Error, cancellationToken: cancellationToken);
+    }
+
+    // podman has its own runner: it writes the bytes podman printed to stdout untouched, not through Console.Out
+    private static async Task<int> RunPodmanAsync(string[] args, CancellationToken cancellationToken)
+    {
+        await using Stream output = Console.OpenStandardOutput();
+
+        return await PodmanCommandRunner
             .CreateDefault()
             .RunAsync(args: args, output: output, error: Console.Error, cancellationToken: cancellationToken);
     }
