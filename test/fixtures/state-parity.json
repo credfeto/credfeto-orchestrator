@@ -1,0 +1,5476 @@
+{
+  "cases": [
+    {
+      "name": "infra_failure_count: no file",
+      "function": "load_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "infra_failure_count: a count",
+      "function": "load_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "content": "3\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "3",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.infra-failures"
+      ]
+    },
+    {
+      "name": "infra_failure_count: a count with no newline",
+      "function": "load_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "content": "3"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "3",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.infra-failures"
+      ]
+    },
+    {
+      "name": "infra_failure_count: leading zeros",
+      "function": "load_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "content": "007\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "007",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.infra-failures"
+      ]
+    },
+    {
+      "name": "infra_failure_count: trailing blank lines",
+      "function": "load_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "content": "3\\n\\n\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "3",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.infra-failures"
+      ]
+    },
+    {
+      "name": "infra_failure_count: an empty file",
+      "function": "load_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "content": ""
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.infra-failures"
+      ]
+    },
+    {
+      "name": "infra_failure_count: letters",
+      "function": "load_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "content": "abc\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.infra-failures"
+      ]
+    },
+    {
+      "name": "infra_failure_count: a trailing space",
+      "function": "load_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "content": "3 \\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.infra-failures"
+      ]
+    },
+    {
+      "name": "infra_failure_count: a negative number",
+      "function": "load_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "content": "-1\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.infra-failures"
+      ]
+    },
+    {
+      "name": "infra_failure_count: a CRLF line",
+      "function": "load_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "content": "3\\r\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.infra-failures"
+      ]
+    },
+    {
+      "name": "infra_failure_count: two lines",
+      "function": "load_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "content": "3\\n4\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.infra-failures"
+      ]
+    },
+    {
+      "name": "infra_failure_count: a number past 64 bits",
+      "function": "load_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "content": "99999999999999999999999\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "99999999999999999999999",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.infra-failures"
+      ]
+    },
+    {
+      "name": "infra_failure_count: a leading newline",
+      "function": "load_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "content": "\\n3\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.infra-failures"
+      ]
+    },
+    {
+      "name": "infra_failure_count: a tab",
+      "function": "load_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "content": "\\t3\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.infra-failures"
+      ]
+    },
+    {
+      "name": "infra_failure_count: a directory",
+      "function": "load_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "dir": true
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.infra-failures"
+      ]
+    },
+    {
+      "name": "infra_failure_count: a link to a count",
+      "function": "load_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/count",
+          "content": "4\\n"
+        },
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "link": "count"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "4",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.infra-failures",
+        "./owner/repo/count"
+      ]
+    },
+    {
+      "name": "infra_failure_count: a dangling link",
+      "function": "load_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "link": "missing"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.infra-failures"
+      ]
+    },
+    {
+      "name": "infra_failure_count: another item only",
+      "function": "load_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_8.infra-failures",
+          "content": "5\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_8.infra-failures"
+      ]
+    },
+    {
+      "name": "infra_failure_count: a NUL byte",
+      "function": "load_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "content": "3\\x00\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "3",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.infra-failures"
+      ]
+    },
+    {
+      "name": "infra_failure_count: a non-ASCII letter",
+      "function": "load_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "content": "5\\xc3\\xa9\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.infra-failures"
+      ]
+    },
+    {
+      "name": "infra_failure_count: bytes that are not UTF-8",
+      "function": "load_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "content": "\\xff\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.infra-failures"
+      ]
+    },
+    {
+      "name": "infra_failure_count: a superscript two in C.UTF-8",
+      "function": "load_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "content": "\\xc2\\xb2\\n"
+        }
+      ],
+      "tool": "refuses",
+      "locale": "C.UTF-8",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.infra-failures"
+      ]
+    },
+    {
+      "name": "infra_failure_count: a superscript two in en_GB.UTF-8",
+      "function": "load_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "content": "\\xc2\\xb2\\n"
+        }
+      ],
+      "tool": "refuses",
+      "locale": "en_GB.UTF-8",
+      "stdout": "\\xc2\\xb2",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.infra-failures"
+      ]
+    },
+    {
+      "name": "env_unblock_attempts: no file",
+      "function": "load_env_unblock_attempts",
+      "args": [
+        "7"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "env_unblock_attempts: a count",
+      "function": "load_env_unblock_attempts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "content": "3\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "3",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.env-unblocks"
+      ]
+    },
+    {
+      "name": "env_unblock_attempts: a count with no newline",
+      "function": "load_env_unblock_attempts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "content": "3"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "3",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.env-unblocks"
+      ]
+    },
+    {
+      "name": "env_unblock_attempts: leading zeros",
+      "function": "load_env_unblock_attempts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "content": "007\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "007",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.env-unblocks"
+      ]
+    },
+    {
+      "name": "env_unblock_attempts: trailing blank lines",
+      "function": "load_env_unblock_attempts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "content": "3\\n\\n\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "3",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.env-unblocks"
+      ]
+    },
+    {
+      "name": "env_unblock_attempts: an empty file",
+      "function": "load_env_unblock_attempts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "content": ""
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.env-unblocks"
+      ]
+    },
+    {
+      "name": "env_unblock_attempts: letters",
+      "function": "load_env_unblock_attempts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "content": "abc\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.env-unblocks"
+      ]
+    },
+    {
+      "name": "env_unblock_attempts: a trailing space",
+      "function": "load_env_unblock_attempts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "content": "3 \\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.env-unblocks"
+      ]
+    },
+    {
+      "name": "env_unblock_attempts: a negative number",
+      "function": "load_env_unblock_attempts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "content": "-1\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.env-unblocks"
+      ]
+    },
+    {
+      "name": "env_unblock_attempts: a CRLF line",
+      "function": "load_env_unblock_attempts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "content": "3\\r\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.env-unblocks"
+      ]
+    },
+    {
+      "name": "env_unblock_attempts: two lines",
+      "function": "load_env_unblock_attempts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "content": "3\\n4\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.env-unblocks"
+      ]
+    },
+    {
+      "name": "env_unblock_attempts: a number past 64 bits",
+      "function": "load_env_unblock_attempts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "content": "99999999999999999999999\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "99999999999999999999999",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.env-unblocks"
+      ]
+    },
+    {
+      "name": "env_unblock_attempts: a leading newline",
+      "function": "load_env_unblock_attempts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "content": "\\n3\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.env-unblocks"
+      ]
+    },
+    {
+      "name": "env_unblock_attempts: a tab",
+      "function": "load_env_unblock_attempts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "content": "\\t3\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.env-unblocks"
+      ]
+    },
+    {
+      "name": "env_unblock_attempts: a directory",
+      "function": "load_env_unblock_attempts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "dir": true
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.env-unblocks"
+      ]
+    },
+    {
+      "name": "env_unblock_attempts: a link to a count",
+      "function": "load_env_unblock_attempts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/count",
+          "content": "4\\n"
+        },
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "link": "count"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "4",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.env-unblocks",
+        "./owner/repo/count"
+      ]
+    },
+    {
+      "name": "env_unblock_attempts: a dangling link",
+      "function": "load_env_unblock_attempts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "link": "missing"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.env-unblocks"
+      ]
+    },
+    {
+      "name": "env_unblock_attempts: another item only",
+      "function": "load_env_unblock_attempts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_8.env-unblocks",
+          "content": "5\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_8.env-unblocks"
+      ]
+    },
+    {
+      "name": "env_unblock_attempts: a NUL byte",
+      "function": "load_env_unblock_attempts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "content": "3\\x00\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "3",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.env-unblocks"
+      ]
+    },
+    {
+      "name": "env_unblock_attempts: a non-ASCII letter",
+      "function": "load_env_unblock_attempts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "content": "5\\xc3\\xa9\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.env-unblocks"
+      ]
+    },
+    {
+      "name": "env_unblock_attempts: bytes that are not UTF-8",
+      "function": "load_env_unblock_attempts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "content": "\\xff\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.env-unblocks"
+      ]
+    },
+    {
+      "name": "env_unblock_attempts: a superscript two in C.UTF-8",
+      "function": "load_env_unblock_attempts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "content": "\\xc2\\xb2\\n"
+        }
+      ],
+      "tool": "refuses",
+      "locale": "C.UTF-8",
+      "stdout": "0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.env-unblocks"
+      ]
+    },
+    {
+      "name": "env_unblock_attempts: a superscript two in en_GB.UTF-8",
+      "function": "load_env_unblock_attempts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "content": "\\xc2\\xb2\\n"
+        }
+      ],
+      "tool": "refuses",
+      "locale": "en_GB.UTF-8",
+      "stdout": "\\xc2\\xb2",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.env-unblocks"
+      ]
+    },
+    {
+      "name": "infra_failure_count: an Issue",
+      "function": "load_infra_failure_count",
+      "args": [
+        "Issue",
+        "12"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_12.infra-failures",
+          "content": "2\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "2",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_12.infra-failures"
+      ]
+    },
+    {
+      "name": "infra_failure_count: an id with a space",
+      "function": "load_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7 8"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7 8.infra-failures",
+          "content": "6\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "6",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7 8.infra-failures"
+      ]
+    },
+    {
+      "name": "infra_failure_count: an id that is not UTF-8",
+      "function": "load_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7\\xff"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7\\xff.infra-failures",
+          "content": "6\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "6",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7\\xff.infra-failures"
+      ]
+    },
+    {
+      "name": "pr_invocations: no file",
+      "function": "load_pr_invocation_counts",
+      "args": [
+        "7"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "0 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "pr_invocations: two counters",
+      "function": "load_pr_invocation_counts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": "3 1\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "3 1",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.invocations"
+      ]
+    },
+    {
+      "name": "pr_invocations: two counters, no newline",
+      "function": "load_pr_invocation_counts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": "3 1"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "3 1",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.invocations"
+      ]
+    },
+    {
+      "name": "pr_invocations: one counter",
+      "function": "load_pr_invocation_counts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": "3\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.invocations"
+      ]
+    },
+    {
+      "name": "pr_invocations: one counter, no newline",
+      "function": "load_pr_invocation_counts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": "4"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.invocations"
+      ]
+    },
+    {
+      "name": "pr_invocations: two spaces",
+      "function": "load_pr_invocation_counts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": "3  1\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.invocations"
+      ]
+    },
+    {
+      "name": "pr_invocations: three counters",
+      "function": "load_pr_invocation_counts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": "3 1 2\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.invocations"
+      ]
+    },
+    {
+      "name": "pr_invocations: a leading space",
+      "function": "load_pr_invocation_counts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": " 3 1\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.invocations"
+      ]
+    },
+    {
+      "name": "pr_invocations: trailing blank lines",
+      "function": "load_pr_invocation_counts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": "3 1\\n\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "3 1",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.invocations"
+      ]
+    },
+    {
+      "name": "pr_invocations: leading zeros",
+      "function": "load_pr_invocation_counts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": "03 001\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "03 001",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.invocations"
+      ]
+    },
+    {
+      "name": "pr_invocations: letters after the total",
+      "function": "load_pr_invocation_counts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": "3 x\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.invocations"
+      ]
+    },
+    {
+      "name": "pr_invocations: letters first",
+      "function": "load_pr_invocation_counts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": "a 1\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.invocations"
+      ]
+    },
+    {
+      "name": "pr_invocations: a CRLF line",
+      "function": "load_pr_invocation_counts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": "3 1\\r\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.invocations"
+      ]
+    },
+    {
+      "name": "pr_invocations: a tab between",
+      "function": "load_pr_invocation_counts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": "3\\t1\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.invocations"
+      ]
+    },
+    {
+      "name": "pr_invocations: two lines of counters",
+      "function": "load_pr_invocation_counts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": "3 1\\n4 5\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.invocations"
+      ]
+    },
+    {
+      "name": "pr_invocations: a total then a second line",
+      "function": "load_pr_invocation_counts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": "4 2\\n5\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.invocations"
+      ]
+    },
+    {
+      "name": "pr_invocations: a total, a newline and letters",
+      "function": "load_pr_invocation_counts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": "4\\nx\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.invocations"
+      ]
+    },
+    {
+      "name": "pr_invocations: a trailing space",
+      "function": "load_pr_invocation_counts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": "4 \\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.invocations"
+      ]
+    },
+    {
+      "name": "pr_invocations: an empty file",
+      "function": "load_pr_invocation_counts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": ""
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.invocations"
+      ]
+    },
+    {
+      "name": "pr_invocations: a space only",
+      "function": "load_pr_invocation_counts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": " \\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.invocations"
+      ]
+    },
+    {
+      "name": "pr_invocations: numbers past 64 bits",
+      "function": "load_pr_invocation_counts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": "99999999999999999999 99999999999999999999\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "99999999999999999999 99999999999999999999",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.invocations"
+      ]
+    },
+    {
+      "name": "pr_invocations: a directory",
+      "function": "load_pr_invocation_counts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "dir": true
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.invocations"
+      ]
+    },
+    {
+      "name": "pr_invocations: a link to counters",
+      "function": "load_pr_invocation_counts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/counts",
+          "content": "6 2\\n"
+        },
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "link": "counts"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "6 2",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.invocations",
+        "./owner/repo/counts"
+      ]
+    },
+    {
+      "name": "pr_invocations: the other item type only",
+      "function": "load_pr_invocation_counts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_7.invocations",
+          "content": "5 5\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_7.invocations"
+      ]
+    },
+    {
+      "name": "pr_invocations: a NUL byte",
+      "function": "load_pr_invocation_counts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": "3 1\\x00\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "3 1",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.invocations"
+      ]
+    },
+    {
+      "name": "pr_invocations: a non-ASCII digit in C.UTF-8",
+      "function": "load_pr_invocation_counts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": "3 \\xd9\\xa3\\n"
+        }
+      ],
+      "tool": "refuses",
+      "locale": "C.UTF-8",
+      "stdout": "0 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.invocations"
+      ]
+    },
+    {
+      "name": "pr_invocations: a non-ASCII digit in en_GB.UTF-8",
+      "function": "load_pr_invocation_counts",
+      "args": [
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": "3 \\xd9\\xa3\\n"
+        }
+      ],
+      "tool": "refuses",
+      "locale": "en_GB.UTF-8",
+      "stdout": "3 \\xd9\\xa3",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.invocations"
+      ]
+    },
+    {
+      "name": "issue_invocations: no file",
+      "function": "load_issue_invocation_counts",
+      "args": [
+        "9"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "0 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "issue_invocations: two counters",
+      "function": "load_issue_invocation_counts",
+      "args": [
+        "9"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": "3 1\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "3 1",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_9.invocations"
+      ]
+    },
+    {
+      "name": "issue_invocations: two counters, no newline",
+      "function": "load_issue_invocation_counts",
+      "args": [
+        "9"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": "3 1"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "3 1",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_9.invocations"
+      ]
+    },
+    {
+      "name": "issue_invocations: one counter",
+      "function": "load_issue_invocation_counts",
+      "args": [
+        "9"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": "3\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "3 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_9.invocations"
+      ]
+    },
+    {
+      "name": "issue_invocations: one counter, no newline",
+      "function": "load_issue_invocation_counts",
+      "args": [
+        "9"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": "4"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "4 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_9.invocations"
+      ]
+    },
+    {
+      "name": "issue_invocations: two spaces",
+      "function": "load_issue_invocation_counts",
+      "args": [
+        "9"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": "3  1\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "3 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_9.invocations"
+      ]
+    },
+    {
+      "name": "issue_invocations: three counters",
+      "function": "load_issue_invocation_counts",
+      "args": [
+        "9"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": "3 1 2\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "3 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_9.invocations"
+      ]
+    },
+    {
+      "name": "issue_invocations: a leading space",
+      "function": "load_issue_invocation_counts",
+      "args": [
+        "9"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": " 3 1\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_9.invocations"
+      ]
+    },
+    {
+      "name": "issue_invocations: trailing blank lines",
+      "function": "load_issue_invocation_counts",
+      "args": [
+        "9"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": "3 1\\n\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "3 1",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_9.invocations"
+      ]
+    },
+    {
+      "name": "issue_invocations: leading zeros",
+      "function": "load_issue_invocation_counts",
+      "args": [
+        "9"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": "03 001\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "03 001",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_9.invocations"
+      ]
+    },
+    {
+      "name": "issue_invocations: letters after the total",
+      "function": "load_issue_invocation_counts",
+      "args": [
+        "9"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": "3 x\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "3 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_9.invocations"
+      ]
+    },
+    {
+      "name": "issue_invocations: letters first",
+      "function": "load_issue_invocation_counts",
+      "args": [
+        "9"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": "a 1\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_9.invocations"
+      ]
+    },
+    {
+      "name": "issue_invocations: a CRLF line",
+      "function": "load_issue_invocation_counts",
+      "args": [
+        "9"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": "3 1\\r\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "3 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_9.invocations"
+      ]
+    },
+    {
+      "name": "issue_invocations: a tab between",
+      "function": "load_issue_invocation_counts",
+      "args": [
+        "9"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": "3\\t1\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_9.invocations"
+      ]
+    },
+    {
+      "name": "issue_invocations: two lines of counters",
+      "function": "load_issue_invocation_counts",
+      "args": [
+        "9"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": "3 1\\n4 5\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "3 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_9.invocations"
+      ]
+    },
+    {
+      "name": "issue_invocations: a total then a second line",
+      "function": "load_issue_invocation_counts",
+      "args": [
+        "9"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": "4 2\\n5\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "4 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_9.invocations"
+      ]
+    },
+    {
+      "name": "issue_invocations: a total, a newline and letters",
+      "function": "load_issue_invocation_counts",
+      "args": [
+        "9"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": "4\\nx\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_9.invocations"
+      ]
+    },
+    {
+      "name": "issue_invocations: a trailing space",
+      "function": "load_issue_invocation_counts",
+      "args": [
+        "9"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": "4 \\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "4 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_9.invocations"
+      ]
+    },
+    {
+      "name": "issue_invocations: an empty file",
+      "function": "load_issue_invocation_counts",
+      "args": [
+        "9"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": ""
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_9.invocations"
+      ]
+    },
+    {
+      "name": "issue_invocations: a space only",
+      "function": "load_issue_invocation_counts",
+      "args": [
+        "9"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": " \\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_9.invocations"
+      ]
+    },
+    {
+      "name": "issue_invocations: numbers past 64 bits",
+      "function": "load_issue_invocation_counts",
+      "args": [
+        "9"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": "99999999999999999999 99999999999999999999\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "99999999999999999999 99999999999999999999",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_9.invocations"
+      ]
+    },
+    {
+      "name": "issue_invocations: a directory",
+      "function": "load_issue_invocation_counts",
+      "args": [
+        "9"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "dir": true
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_9.invocations"
+      ]
+    },
+    {
+      "name": "issue_invocations: a link to counters",
+      "function": "load_issue_invocation_counts",
+      "args": [
+        "9"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/counts",
+          "content": "6 2\\n"
+        },
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "link": "counts"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "6 2",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_9.invocations",
+        "./owner/repo/counts"
+      ]
+    },
+    {
+      "name": "issue_invocations: the other item type only",
+      "function": "load_issue_invocation_counts",
+      "args": [
+        "9"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_9.invocations",
+          "content": "5 5\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "0 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_9.invocations"
+      ]
+    },
+    {
+      "name": "issue_invocations: a NUL byte",
+      "function": "load_issue_invocation_counts",
+      "args": [
+        "9"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": "3 1\\x00\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "3 1",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_9.invocations"
+      ]
+    },
+    {
+      "name": "issue_invocations: a non-ASCII digit in C.UTF-8",
+      "function": "load_issue_invocation_counts",
+      "args": [
+        "9"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": "3 \\xd9\\xa3\\n"
+        }
+      ],
+      "tool": "refuses",
+      "locale": "C.UTF-8",
+      "stdout": "3 0",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_9.invocations"
+      ]
+    },
+    {
+      "name": "issue_invocations: a non-ASCII digit in en_GB.UTF-8",
+      "function": "load_issue_invocation_counts",
+      "args": [
+        "9"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": "3 \\xd9\\xa3\\n"
+        }
+      ],
+      "tool": "refuses",
+      "locale": "en_GB.UTF-8",
+      "stdout": "3 \\xd9\\xa3",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_9.invocations"
+      ]
+    },
+    {
+      "name": "issue_plan_block: present",
+      "function": "issue_plan_block_marked",
+      "args": [
+        "5"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_5.plan-block",
+          "content": ""
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_5.plan-block"
+      ]
+    },
+    {
+      "name": "issue_plan_block: missing",
+      "function": "issue_plan_block_marked",
+      "args": [
+        "5"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "issue_plan_block: a directory",
+      "function": "issue_plan_block_marked",
+      "args": [
+        "5"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_5.plan-block",
+          "dir": true
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_5.plan-block"
+      ]
+    },
+    {
+      "name": "issue_plan_block: a link to a file",
+      "function": "issue_plan_block_marked",
+      "args": [
+        "5"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/target",
+          "content": ""
+        },
+        {
+          "path": "owner/repo/Issue_5.plan-block",
+          "link": "target"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_5.plan-block",
+        "./owner/repo/target"
+      ]
+    },
+    {
+      "name": "issue_plan_block: a link to a directory",
+      "function": "issue_plan_block_marked",
+      "args": [
+        "5"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/target-dir",
+          "dir": true
+        },
+        {
+          "path": "owner/repo/Issue_5.plan-block",
+          "link": "target-dir"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_5.plan-block",
+        "./owner/repo/target-dir"
+      ]
+    },
+    {
+      "name": "issue_plan_block: a dangling link",
+      "function": "issue_plan_block_marked",
+      "args": [
+        "5"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_5.plan-block",
+          "link": "missing"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_5.plan-block"
+      ]
+    },
+    {
+      "name": "issue_plan_block: holding text",
+      "function": "issue_plan_block_marked",
+      "args": [
+        "5"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_5.plan-block",
+          "content": "x\\x00\\xff\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_5.plan-block"
+      ]
+    },
+    {
+      "name": "issue_blocked_replan: present",
+      "function": "issue_blocked_replan_marked",
+      "args": [
+        "5"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_5.blocked-replan",
+          "content": ""
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_5.blocked-replan"
+      ]
+    },
+    {
+      "name": "issue_blocked_replan: missing",
+      "function": "issue_blocked_replan_marked",
+      "args": [
+        "5"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "issue_blocked_replan: a directory",
+      "function": "issue_blocked_replan_marked",
+      "args": [
+        "5"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_5.blocked-replan",
+          "dir": true
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_5.blocked-replan"
+      ]
+    },
+    {
+      "name": "issue_blocked_replan: a link to a file",
+      "function": "issue_blocked_replan_marked",
+      "args": [
+        "5"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/target",
+          "content": ""
+        },
+        {
+          "path": "owner/repo/Issue_5.blocked-replan",
+          "link": "target"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_5.blocked-replan",
+        "./owner/repo/target"
+      ]
+    },
+    {
+      "name": "issue_blocked_replan: a link to a directory",
+      "function": "issue_blocked_replan_marked",
+      "args": [
+        "5"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/target-dir",
+          "dir": true
+        },
+        {
+          "path": "owner/repo/Issue_5.blocked-replan",
+          "link": "target-dir"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_5.blocked-replan",
+        "./owner/repo/target-dir"
+      ]
+    },
+    {
+      "name": "issue_blocked_replan: a dangling link",
+      "function": "issue_blocked_replan_marked",
+      "args": [
+        "5"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_5.blocked-replan",
+          "link": "missing"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_5.blocked-replan"
+      ]
+    },
+    {
+      "name": "issue_blocked_replan: holding text",
+      "function": "issue_blocked_replan_marked",
+      "args": [
+        "5"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_5.blocked-replan",
+          "content": "x\\x00\\xff\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_5.blocked-replan"
+      ]
+    },
+    {
+      "name": "background_stall: present",
+      "function": "background_stall_marked",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.background-stall",
+          "content": ""
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.background-stall"
+      ]
+    },
+    {
+      "name": "background_stall: missing",
+      "function": "background_stall_marked",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "background_stall: a directory",
+      "function": "background_stall_marked",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.background-stall",
+          "dir": true
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.background-stall"
+      ]
+    },
+    {
+      "name": "background_stall: a link to a file",
+      "function": "background_stall_marked",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/target",
+          "content": ""
+        },
+        {
+          "path": "owner/repo/PullRequest_7.background-stall",
+          "link": "target"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.background-stall",
+        "./owner/repo/target"
+      ]
+    },
+    {
+      "name": "background_stall: a link to a directory",
+      "function": "background_stall_marked",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/target-dir",
+          "dir": true
+        },
+        {
+          "path": "owner/repo/PullRequest_7.background-stall",
+          "link": "target-dir"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.background-stall",
+        "./owner/repo/target-dir"
+      ]
+    },
+    {
+      "name": "background_stall: a dangling link",
+      "function": "background_stall_marked",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.background-stall",
+          "link": "missing"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.background-stall"
+      ]
+    },
+    {
+      "name": "background_stall: holding text",
+      "function": "background_stall_marked",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.background-stall",
+          "content": "x\\x00\\xff\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.background-stall"
+      ]
+    },
+    {
+      "name": "background_stall: another item type only",
+      "function": "background_stall_marked",
+      "args": [
+        "Issue",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.background-stall",
+          "content": ""
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.background-stall"
+      ]
+    },
+    {
+      "name": "plan_block: another repository only",
+      "function": "issue_plan_block_marked",
+      "args": [
+        "5"
+      ],
+      "files": [
+        {
+          "path": "owner/other/Issue_5.plan-block",
+          "content": ""
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/other",
+        "./owner/other/Issue_5.plan-block",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "last_diagnostic: no file",
+      "function": "load_last_diagnostic",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "last_diagnostic: text",
+      "function": "load_last_diagnostic",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.last-diagnostic",
+          "content": "denied: git push\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "denied: git push\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.last-diagnostic"
+      ]
+    },
+    {
+      "name": "last_diagnostic: trailing blank lines",
+      "function": "load_last_diagnostic",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.last-diagnostic",
+          "content": "a\\n\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "a\\n\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.last-diagnostic"
+      ]
+    },
+    {
+      "name": "last_diagnostic: no newline",
+      "function": "load_last_diagnostic",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.last-diagnostic",
+          "content": "a"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "a",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.last-diagnostic"
+      ]
+    },
+    {
+      "name": "last_diagnostic: an empty file",
+      "function": "load_last_diagnostic",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.last-diagnostic",
+          "content": ""
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.last-diagnostic"
+      ]
+    },
+    {
+      "name": "last_diagnostic: bytes that are not UTF-8",
+      "function": "load_last_diagnostic",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.last-diagnostic",
+          "content": "\\xff\\xfe\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "\\xff\\xfe\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.last-diagnostic"
+      ]
+    },
+    {
+      "name": "last_diagnostic: a line separator",
+      "function": "load_last_diagnostic",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.last-diagnostic",
+          "content": "a\\xe2\\x80\\xa8b"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "a\\xe2\\x80\\xa8b",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.last-diagnostic"
+      ]
+    },
+    {
+      "name": "last_diagnostic: a no-break space and zero-width space",
+      "function": "load_last_diagnostic",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.last-diagnostic",
+          "content": "a\\xc2\\xa0b\\xe2\\x80\\x8bc"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "a\\xc2\\xa0b\\xe2\\x80\\x8bc",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.last-diagnostic"
+      ]
+    },
+    {
+      "name": "last_diagnostic: control characters",
+      "function": "load_last_diagnostic",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.last-diagnostic",
+          "content": "\\x01\\x1b[0m\\r\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "\\x01\\x1b[0m\\r\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.last-diagnostic"
+      ]
+    },
+    {
+      "name": "last_diagnostic: backslashes",
+      "function": "load_last_diagnostic",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.last-diagnostic",
+          "content": "a\\\\nb\\\\"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "a\\\\nb\\\\",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.last-diagnostic"
+      ]
+    },
+    {
+      "name": "last_diagnostic: a directory",
+      "function": "load_last_diagnostic",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.last-diagnostic",
+          "dir": true
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.last-diagnostic"
+      ]
+    },
+    {
+      "name": "last_diagnostic: a dangling link",
+      "function": "load_last_diagnostic",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.last-diagnostic",
+          "link": "missing"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.last-diagnostic"
+      ]
+    },
+    {
+      "name": "last_diagnostic: a link to text",
+      "function": "load_last_diagnostic",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/diag",
+          "content": "linked\\n"
+        },
+        {
+          "path": "owner/repo/PullRequest_7.last-diagnostic",
+          "link": "diag"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "linked\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.last-diagnostic",
+        "./owner/repo/diag"
+      ]
+    },
+    {
+      "name": "last_diagnostic: a NUL byte",
+      "function": "load_last_diagnostic",
+      "args": [
+        "PullRequest",
+        "7"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.last-diagnostic",
+          "content": "a\\x00b"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "ab",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.last-diagnostic"
+      ]
+    },
+    {
+      "name": "last_diagnostic: an Issue",
+      "function": "load_last_diagnostic",
+      "args": [
+        "Issue",
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_3.last-diagnostic",
+          "content": "issue text"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "issue text",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/Issue_3.last-diagnostic"
+      ]
+    },
+    {
+      "name": "precheck: no record",
+      "function": "load_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "precheck: pass",
+      "function": "load_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": "abc123\\npass\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "pass",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.precheck"
+      ]
+    },
+    {
+      "name": "precheck: fail",
+      "function": "load_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": "abc123\\nfail\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "fail",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.precheck"
+      ]
+    },
+    {
+      "name": "precheck: timeout",
+      "function": "load_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": "abc123\\ntimeout\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "timeout",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.precheck"
+      ]
+    },
+    {
+      "name": "precheck: status with no newline",
+      "function": "load_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": "abc123\\npass"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.precheck"
+      ]
+    },
+    {
+      "name": "precheck: an unknown status",
+      "function": "load_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": "abc123\\nunknown\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.precheck"
+      ]
+    },
+    {
+      "name": "precheck: another sha",
+      "function": "load_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": "other\\npass\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.precheck"
+      ]
+    },
+    {
+      "name": "precheck: a third line",
+      "function": "load_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": "abc123\\npass\\nextra\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "pass",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.precheck"
+      ]
+    },
+    {
+      "name": "precheck: a CR after the sha",
+      "function": "load_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": "abc123\\r\\npass\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.precheck"
+      ]
+    },
+    {
+      "name": "precheck: a CR after the status",
+      "function": "load_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": "abc123\\npass\\r\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.precheck"
+      ]
+    },
+    {
+      "name": "precheck: one line",
+      "function": "load_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": "abc123\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.precheck"
+      ]
+    },
+    {
+      "name": "precheck: a blank status",
+      "function": "load_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": "abc123\\n\\npass\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.precheck"
+      ]
+    },
+    {
+      "name": "precheck: a leading space",
+      "function": "load_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": " abc123\\npass\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.precheck"
+      ]
+    },
+    {
+      "name": "precheck: an upper-case status",
+      "function": "load_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": "abc123\\nPASS\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.precheck"
+      ]
+    },
+    {
+      "name": "precheck: an empty file",
+      "function": "load_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": ""
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.precheck"
+      ]
+    },
+    {
+      "name": "precheck: a sha that is not UTF-8",
+      "function": "load_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": "\\xff\\npass\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.precheck"
+      ]
+    },
+    {
+      "name": "precheck: a trailing space on the status",
+      "function": "load_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": "abc123\\npass \\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.precheck"
+      ]
+    },
+    {
+      "name": "precheck: a backslash",
+      "function": "load_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": "abc\\\\123\\npass\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.precheck"
+      ]
+    },
+    {
+      "name": "precheck: an empty sha",
+      "function": "load_precheck_result",
+      "args": [
+        "PullRequest_7",
+        ""
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": "\\npass\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.precheck"
+      ]
+    },
+    {
+      "name": "precheck: main",
+      "function": "load_precheck_result",
+      "args": [
+        "main",
+        "abc123"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/main.precheck",
+          "content": "abc123\\nfail\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "fail",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/main.precheck"
+      ]
+    },
+    {
+      "name": "precheck: a prefix of the sha",
+      "function": "load_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": "abc123\\npass\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.precheck"
+      ]
+    },
+    {
+      "name": "precheck: a directory",
+      "function": "load_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "dir": true
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.precheck"
+      ]
+    },
+    {
+      "name": "precheck: a link",
+      "function": "load_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/record",
+          "content": "abc123\\ntimeout\\n"
+        },
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "link": "record"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "timeout",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.precheck",
+        "./owner/repo/record"
+      ]
+    },
+    {
+      "name": "precheck: a NUL byte",
+      "function": "load_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": "abc123\\npass\\x00\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "pass",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.precheck"
+      ]
+    },
+    {
+      "name": "precheck: a sha argument that is not UTF-8",
+      "function": "load_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "\\xff"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": "\\xff\\npass\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "pass",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/repo/PullRequest_7.precheck"
+      ]
+    },
+    {
+      "name": "baseline: no file",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [],
+      "tool": "answers",
+      "globals": {
+        "PULL_DURATION_MIN_SAMPLES": "3"
+      },
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "baseline: three samples",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/pull-durations",
+          "content": "10\\n20\\n30\\n"
+        }
+      ],
+      "tool": "answers",
+      "globals": {
+        "PULL_DURATION_MIN_SAMPLES": "3"
+      },
+      "stdout": "20\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/pull-durations",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "baseline: unsorted",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/pull-durations",
+          "content": "30\\n10\\n20\\n"
+        }
+      ],
+      "tool": "answers",
+      "globals": {
+        "PULL_DURATION_MIN_SAMPLES": "3"
+      },
+      "stdout": "20\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/pull-durations",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "baseline: two samples",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/pull-durations",
+          "content": "10\\n20\\n"
+        }
+      ],
+      "tool": "answers",
+      "globals": {
+        "PULL_DURATION_MIN_SAMPLES": "3"
+      },
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/pull-durations",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "baseline: four samples",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/pull-durations",
+          "content": "1\\n2\\n3\\n4\\n"
+        }
+      ],
+      "tool": "answers",
+      "globals": {
+        "PULL_DURATION_MIN_SAMPLES": "3"
+      },
+      "stdout": "2\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/pull-durations",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "baseline: five samples",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/pull-durations",
+          "content": "9\\n1\\n7\\n3\\n5\\n"
+        }
+      ],
+      "tool": "answers",
+      "globals": {
+        "PULL_DURATION_MIN_SAMPLES": "3"
+      },
+      "stdout": "5\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/pull-durations",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "baseline: equal samples",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/pull-durations",
+          "content": "5\\n5\\n5\\n"
+        }
+      ],
+      "tool": "answers",
+      "globals": {
+        "PULL_DURATION_MIN_SAMPLES": "3"
+      },
+      "stdout": "5\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/pull-durations",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "baseline: leading zeros",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/pull-durations",
+          "content": "07\\n7\\n3\\n"
+        }
+      ],
+      "tool": "answers",
+      "globals": {
+        "PULL_DURATION_MIN_SAMPLES": "3"
+      },
+      "stdout": "07\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/pull-durations",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "baseline: leading zeros the other way",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/pull-durations",
+          "content": "7\\n07\\n007\\n8\\n9\\n"
+        }
+      ],
+      "tool": "answers",
+      "globals": {
+        "PULL_DURATION_MIN_SAMPLES": "3"
+      },
+      "stdout": "7\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/pull-durations",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "baseline: junk lines",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/pull-durations",
+          "content": "x\\n10\\n 5\\n20\\n-3\\n30\\n\\n"
+        }
+      ],
+      "tool": "answers",
+      "globals": {
+        "PULL_DURATION_MIN_SAMPLES": "3"
+      },
+      "stdout": "20\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/pull-durations",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "baseline: no final newline",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/pull-durations",
+          "content": "10\\n20\\n30"
+        }
+      ],
+      "tool": "answers",
+      "globals": {
+        "PULL_DURATION_MIN_SAMPLES": "3"
+      },
+      "stdout": "20\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/pull-durations",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "baseline: an empty file",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/pull-durations",
+          "content": ""
+        }
+      ],
+      "tool": "answers",
+      "globals": {
+        "PULL_DURATION_MIN_SAMPLES": "3"
+      },
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/pull-durations",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "baseline: a number past 64 bits",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/pull-durations",
+          "content": "99999999999999999999999\\n1\\n2\\n"
+        }
+      ],
+      "tool": "answers",
+      "globals": {
+        "PULL_DURATION_MIN_SAMPLES": "3"
+      },
+      "stdout": "2\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/pull-durations",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "baseline: numbers past 64 bits sorted",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/pull-durations",
+          "content": "99999999999999999999999\\n99999999999999999999998\\n1\\n"
+        }
+      ],
+      "tool": "answers",
+      "globals": {
+        "PULL_DURATION_MIN_SAMPLES": "3"
+      },
+      "stdout": "99999999999999999999998\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/pull-durations",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "baseline: CRLF lines",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/pull-durations",
+          "content": "10\\r\\n20\\r\\n30\\r\\n"
+        }
+      ],
+      "tool": "answers",
+      "globals": {
+        "PULL_DURATION_MIN_SAMPLES": "3"
+      },
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/pull-durations",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "baseline: zeros",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/pull-durations",
+          "content": "0\\n0\\n0\\n"
+        }
+      ],
+      "tool": "answers",
+      "globals": {
+        "PULL_DURATION_MIN_SAMPLES": "3"
+      },
+      "stdout": "0\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/pull-durations",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "baseline: tabs",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/pull-durations",
+          "content": "1\\t\\n2\\n3\\n4\\n"
+        }
+      ],
+      "tool": "answers",
+      "globals": {
+        "PULL_DURATION_MIN_SAMPLES": "3"
+      },
+      "stdout": "3\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/pull-durations",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "baseline: a long history",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/pull-durations",
+          "content": "12\\n15\\n11\\n90\\n14\\n13\\n16\\n12\\n10\\n200\\n"
+        }
+      ],
+      "tool": "answers",
+      "globals": {
+        "PULL_DURATION_MIN_SAMPLES": "3"
+      },
+      "stdout": "13\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/pull-durations",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "baseline: a minimum of one",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/pull-durations",
+          "content": "42\\n"
+        }
+      ],
+      "tool": "answers",
+      "globals": {
+        "PULL_DURATION_MIN_SAMPLES": "1"
+      },
+      "stdout": "42\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/pull-durations",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "baseline: a minimum of zero and no samples",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/pull-durations",
+          "content": "x\\n"
+        }
+      ],
+      "tool": "answers",
+      "globals": {
+        "PULL_DURATION_MIN_SAMPLES": "0"
+      },
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/pull-durations",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "baseline: a minimum with leading zeros",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/pull-durations",
+          "content": "1\\n2\\n"
+        }
+      ],
+      "tool": "answers",
+      "globals": {
+        "PULL_DURATION_MIN_SAMPLES": "002"
+      },
+      "stdout": "1\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/pull-durations",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "baseline: the default minimum",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/pull-durations",
+          "content": "1\\n2\\n3\\n4\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/pull-durations",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "baseline: a minimum that is not a number",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/pull-durations",
+          "content": "1\\n2\\n3\\n"
+        }
+      ],
+      "tool": "refuses",
+      "globals": {
+        "PULL_DURATION_MIN_SAMPLES": "abc"
+      },
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/pull-durations",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "baseline: an empty minimum",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/pull-durations",
+          "content": "1\\n2\\n3\\n"
+        }
+      ],
+      "tool": "refuses",
+      "globals": {
+        "PULL_DURATION_MIN_SAMPLES": ""
+      },
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/pull-durations",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "baseline: a directory",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/pull-durations",
+          "dir": true
+        }
+      ],
+      "tool": "answers",
+      "globals": {
+        "PULL_DURATION_MIN_SAMPLES": "3"
+      },
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/pull-durations",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "baseline: a link",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/durations",
+          "content": "4\\n5\\n6\\n"
+        },
+        {
+          "path": "owner/pull-durations",
+          "link": "durations"
+        }
+      ],
+      "tool": "answers",
+      "globals": {
+        "PULL_DURATION_MIN_SAMPLES": "3"
+      },
+      "stdout": "5\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/durations",
+        "./owner/pull-durations",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "baseline: another owner only",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [
+        {
+          "path": "other/pull-durations",
+          "content": "4\\n5\\n6\\n"
+        }
+      ],
+      "tool": "answers",
+      "globals": {
+        "PULL_DURATION_MIN_SAMPLES": "3"
+      },
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./other",
+        "./other/pull-durations",
+        "./owner",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "baseline: a NUL byte",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/pull-durations",
+          "content": "1\\n2\\x00\\n3\\n4\\n"
+        }
+      ],
+      "tool": "refuses",
+      "globals": {
+        "PULL_DURATION_MIN_SAMPLES": "3"
+      },
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/pull-durations",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "baseline: a non-ASCII line",
+      "function": "pull_duration_baseline",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/pull-durations",
+          "content": "1\\n2\\n\\xc2\\xb2\\n3\\n"
+        }
+      ],
+      "tool": "refuses",
+      "globals": {
+        "PULL_DURATION_MIN_SAMPLES": "3"
+      },
+      "stdout": "2\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/pull-durations",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "rate_limit: no file",
+      "function": "is_owner_rate_limited",
+      "args": [],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "rate_limit: a past reset",
+      "function": "is_owner_rate_limited",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "content": "1\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "rate_limit: a future reset",
+      "function": "is_owner_rate_limited",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "content": "99999999999\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/rate-limit",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "rate_limit: a future reset, no newline",
+      "function": "is_owner_rate_limited",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "content": "99999999999"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/rate-limit",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "rate_limit: zero",
+      "function": "is_owner_rate_limited",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "content": "0\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "rate_limit: a future reset with leading zeros",
+      "function": "is_owner_rate_limited",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "content": "000099999999999\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/rate-limit",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "rate_limit: letters",
+      "function": "is_owner_rate_limited",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "content": "abc\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "rate_limit: an empty file",
+      "function": "is_owner_rate_limited",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "content": ""
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "rate_limit: a negative number",
+      "function": "is_owner_rate_limited",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "content": "-5\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "rate_limit: a leading space",
+      "function": "is_owner_rate_limited",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "content": " 99999999999\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "rate_limit: trailing blank lines",
+      "function": "is_owner_rate_limited",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "content": "99999999999\\n\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/rate-limit",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "rate_limit: a trailing space",
+      "function": "is_owner_rate_limited",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "content": "99999999999 \\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "rate_limit: an exponent",
+      "function": "is_owner_rate_limited",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "content": "1e20\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "rate_limit: two lines",
+      "function": "is_owner_rate_limited",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "content": "99999999999\\n1\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "rate_limit: a CRLF line",
+      "function": "is_owner_rate_limited",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "content": "99999999999\\r\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "rate_limit: eighteen digits",
+      "function": "is_owner_rate_limited",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "content": "999999999999999999\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/rate-limit",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "rate_limit: many leading zeros",
+      "function": "is_owner_rate_limited",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "content": "0000000000000000000000001\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "rate_limit: the largest 64-bit number",
+      "function": "is_owner_rate_limited",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "content": "9223372036854775807\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/rate-limit",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "rate_limit: a number past 64 bits",
+      "function": "is_owner_rate_limited",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "content": "99999999999999999999\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/rate-limit",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "rate_limit: a non-ASCII digit in C.UTF-8",
+      "function": "is_owner_rate_limited",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "content": "\\xd9\\xa3\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo"
+      ],
+      "locale": "C.UTF-8"
+    },
+    {
+      "name": "rate_limit: a non-ASCII digit in en_GB.UTF-8",
+      "function": "is_owner_rate_limited",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "content": "\\xd9\\xa3\\n"
+        }
+      ],
+      "tool": "refuses",
+      "locale": "en_GB.UTF-8",
+      "stdout": "",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/rate-limit",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "rate_limit: a NUL byte",
+      "function": "is_owner_rate_limited",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "content": "99999999999\\x00\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/rate-limit",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "rate_limit: a directory",
+      "function": "is_owner_rate_limited",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "dir": true
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/rate-limit",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "rate_limit: a link to a future reset",
+      "function": "is_owner_rate_limited",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/reset",
+          "content": "99999999999\\n"
+        },
+        {
+          "path": "owner/rate-limit",
+          "link": "reset"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/rate-limit",
+        "./owner/repo",
+        "./owner/reset"
+      ]
+    },
+    {
+      "name": "rate_limit: a link to a past reset",
+      "function": "is_owner_rate_limited",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/reset",
+          "content": "1\\n"
+        },
+        {
+          "path": "owner/rate-limit",
+          "link": "reset"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/reset"
+      ]
+    },
+    {
+      "name": "rate_limit: a dangling link",
+      "function": "is_owner_rate_limited",
+      "args": [],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "link": "missing"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./owner",
+        "./owner/rate-limit",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "rate_limit: another owner only",
+      "function": "is_owner_rate_limited",
+      "args": [],
+      "files": [
+        {
+          "path": "other/rate-limit",
+          "content": "99999999999\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 1,
+      "remaining": [
+        "./other",
+        "./other/rate-limit",
+        "./owner",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "summary: no file",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "null",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo"
+      ]
+    },
+    {
+      "name": "summary: an empty file",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": ""
+        }
+      ],
+      "tool": "answers",
+      "stdout": "{\"sessions\":0,\"denials\":0,\"stalled\":0,\"quits\":0,\"repos\":[],\"top_commands\":[]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: one session",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "2026-11-24T10:00:00+00:00\\tcredfeto/a\\tIssue\\t1\\t2\\t0\\t0\\tgit,cat\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "{\"sessions\":1,\"denials\":2,\"stalled\":0,\"quits\":0,\"repos\":[{\"repo\":\"credfeto/a\",\"sessions\":1,\"denials\":2,\"stalled\":0}],\"top_commands\":[{\"name\":\"cat\",\"count\":1},{\"name\":\"git\",\"count\":1}]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: several repositories",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "2026-11-24T10:00:00+00:00\\to/b\\tIssue\\t1\\t1\\t1\\t0\\tgit\\n2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t3\\t0\\t1\\tcat,git\\n2026-11-24T10:00:00+00:00\\to/c\\tIssue\\t1\\t1\\t0\\t0\\t-\\n2026-11-24T10:00:00+00:00\\to/b\\tIssue\\t1\\t2\\t0\\t0\\trm\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "{\"sessions\":4,\"denials\":7,\"stalled\":1,\"quits\":1,\"repos\":[{\"repo\":\"o/b\",\"sessions\":2,\"denials\":3,\"stalled\":1},{\"repo\":\"o/a\",\"sessions\":1,\"denials\":3,\"stalled\":0},{\"repo\":\"o/c\",\"sessions\":1,\"denials\":1,\"stalled\":0}],\"top_commands\":[{\"name\":\"git\",\"count\":2},{\"name\":\"cat\",\"count\":1},{\"name\":\"rm\",\"count\":1}]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: repositories tied on denials and stalls",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "2026-11-24T10:00:00+00:00\\to/zeta\\tIssue\\t1\\t1\\t1\\t0\\t-\\n2026-11-24T10:00:00+00:00\\to/Alpha\\tIssue\\t1\\t1\\t1\\t0\\t-\\n2026-11-24T10:00:00+00:00\\to/alpha\\tIssue\\t1\\t1\\t1\\t0\\t-\\n2026-11-24T10:00:00+00:00\\to/\\xc3\\xa9\\tIssue\\t1\\t1\\t1\\t0\\t-\\n2026-11-24T10:00:00+00:00\\to/beta\\tIssue\\t1\\t1\\t0\\t0\\t-\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "{\"sessions\":5,\"denials\":5,\"stalled\":4,\"quits\":0,\"repos\":[{\"repo\":\"o/Alpha\",\"sessions\":1,\"denials\":1,\"stalled\":1},{\"repo\":\"o/alpha\",\"sessions\":1,\"denials\":1,\"stalled\":1},{\"repo\":\"o/zeta\",\"sessions\":1,\"denials\":1,\"stalled\":1},{\"repo\":\"o/\\xc3\\xa9\",\"sessions\":1,\"denials\":1,\"stalled\":1},{\"repo\":\"o/beta\",\"sessions\":1,\"denials\":1,\"stalled\":0}],\"top_commands\":[]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: more than five commands with ties",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t6\\t0\\t0\\tf,e,d,c,b,a\\n2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t3\\t0\\t0\\tb,a,g\\n2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t1\\t0\\t0\\tZ\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "{\"sessions\":3,\"denials\":10,\"stalled\":0,\"quits\":0,\"repos\":[{\"repo\":\"o/a\",\"sessions\":3,\"denials\":10,\"stalled\":0}],\"top_commands\":[{\"name\":\"a\",\"count\":2},{\"name\":\"b\",\"count\":2},{\"name\":\"Z\",\"count\":1},{\"name\":\"c\",\"count\":1},{\"name\":\"d\",\"count\":1}]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: a command named twice in one session",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t2\\t0\\t0\\tgit,git\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "{\"sessions\":1,\"denials\":2,\"stalled\":0,\"quits\":0,\"repos\":[{\"repo\":\"o/a\",\"sessions\":1,\"denials\":2,\"stalled\":0}],\"top_commands\":[{\"name\":\"git\",\"count\":2}]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: empty commands",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t1\\t0\\t0\\t\\n2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t1\\t0\\t0\\ta,\\n2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t1\\t0\\t0\\t,,\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "{\"sessions\":3,\"denials\":3,\"stalled\":0,\"quits\":0,\"repos\":[{\"repo\":\"o/a\",\"sessions\":3,\"denials\":3,\"stalled\":0}],\"top_commands\":[{\"name\":\"\",\"count\":4},{\"name\":\"a\",\"count\":1}]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: short and long lines",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "t\\to/a\\tIssue\\t1\\t5\\t1\\t1\\n2026-11-24T10:00:00+00:00\\to/b\\tIssue\\t1\\t1\\t0\\t0\\t-\\textra\\tmore\\n\\n\\n\\t\\t\\t\\t\\t\\t\\t\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "{\"sessions\":2,\"denials\":1,\"stalled\":0,\"quits\":0,\"repos\":[{\"repo\":\"o/b\",\"sessions\":1,\"denials\":1,\"stalled\":0},{\"repo\":\"\",\"sessions\":1,\"denials\":0,\"stalled\":0}],\"top_commands\":[]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: no final newline",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t1\\t0\\t0\\t-\\n2026-11-24T10:00:00+00:00\\to/b\\tIssue\\t1\\t2\\t0\\t0\\t-"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "{\"sessions\":2,\"denials\":3,\"stalled\":0,\"quits\":0,\"repos\":[{\"repo\":\"o/b\",\"sessions\":1,\"denials\":2,\"stalled\":0},{\"repo\":\"o/a\",\"sessions\":1,\"denials\":1,\"stalled\":0}],\"top_commands\":[]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: a CRLF line",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t1\\t1\\t1\\t-\\r\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "{\"sessions\":1,\"denials\":1,\"stalled\":1,\"quits\":1,\"repos\":[{\"repo\":\"o/a\",\"sessions\":1,\"denials\":1,\"stalled\":1}],\"top_commands\":[{\"name\":\"-\\\\r\",\"count\":1}]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: flags that are not exactly 1",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t1\\t1 \\t01\\t-\\n2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t1\\ttrue\\t2\\t-\\n2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t1\\t\\t1\\t-\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "{\"sessions\":3,\"denials\":3,\"stalled\":0,\"quits\":1,\"repos\":[{\"repo\":\"o/a\",\"sessions\":3,\"denials\":3,\"stalled\":0}],\"top_commands\":[]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: denial counts jq reads as 0",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\tabc\\t0\\t0\\t-\\n2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t\\t0\\t0\\t-\\n2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t.\\t0\\t0\\t-\\n2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t-\\t0\\t0\\t-\\n2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\te\\t0\\t0\\t-\\n2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\tx y\\t0\\t0\\t-\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "{\"sessions\":6,\"denials\":0,\"stalled\":0,\"quits\":0,\"repos\":[{\"repo\":\"o/a\",\"sessions\":6,\"denials\":0,\"stalled\":0}],\"top_commands\":[]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: leading zeros in a denial count",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t007\\t0\\t0\\t-\\n2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t000\\t0\\t0\\t-\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "{\"sessions\":2,\"denials\":7,\"stalled\":0,\"quits\":0,\"repos\":[{\"repo\":\"o/a\",\"sessions\":2,\"denials\":7,\"stalled\":0}],\"top_commands\":[]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: fifteen-digit denial counts",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t999999999999999\\t0\\t0\\t-\\n2026-11-24T10:00:00+00:00\\to/b\\tIssue\\t1\\t1\\t0\\t0\\t-\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "{\"sessions\":2,\"denials\":1000000000000000,\"stalled\":0,\"quits\":0,\"repos\":[{\"repo\":\"o/a\",\"sessions\":1,\"denials\":999999999999999,\"stalled\":0},{\"repo\":\"o/b\",\"sessions\":1,\"denials\":1,\"stalled\":0}],\"top_commands\":[]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: a denial count jq may read differently: an exponent",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t1e2\\t0\\t0\\t-\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "{\"sessions\":1,\"denials\":1E+2,\"stalled\":0,\"quits\":0,\"repos\":[{\"repo\":\"o/a\",\"sessions\":1,\"denials\":1E+2,\"stalled\":0}],\"top_commands\":[]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: a denial count jq may read differently: a decimal",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t1.5\\t0\\t0\\t-\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "{\"sessions\":1,\"denials\":1.5,\"stalled\":0,\"quits\":0,\"repos\":[{\"repo\":\"o/a\",\"sessions\":1,\"denials\":1.5,\"stalled\":0}],\"top_commands\":[]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: a denial count jq may read differently: nan",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\tnan\\t0\\t0\\t-\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "{\"sessions\":1,\"denials\":null,\"stalled\":0,\"quits\":0,\"repos\":[{\"repo\":\"o/a\",\"sessions\":1,\"denials\":null,\"stalled\":0}],\"top_commands\":[]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: a denial count jq may read differently: inf",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\tInfinity\\t0\\t0\\t-\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "{\"sessions\":1,\"denials\":1.7976931348623157e+308,\"stalled\":0,\"quits\":0,\"repos\":[{\"repo\":\"o/a\",\"sessions\":1,\"denials\":1.7976931348623157e+308,\"stalled\":0}],\"top_commands\":[]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: a denial count jq may read differently: a leading space",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t 5\\t0\\t0\\t-\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "{\"sessions\":1,\"denials\":0,\"stalled\":0,\"quits\":0,\"repos\":[{\"repo\":\"o/a\",\"sessions\":1,\"denials\":0,\"stalled\":0}],\"top_commands\":[]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: a denial count jq may read differently: a sign",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t+5\\t0\\t0\\t-\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "{\"sessions\":1,\"denials\":5,\"stalled\":0,\"quits\":0,\"repos\":[{\"repo\":\"o/a\",\"sessions\":1,\"denials\":5,\"stalled\":0}],\"top_commands\":[]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: a denial count jq may read differently: a negative count",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t-5\\t0\\t0\\t-\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "{\"sessions\":1,\"denials\":-5,\"stalled\":0,\"quits\":0,\"repos\":[{\"repo\":\"o/a\",\"sessions\":1,\"denials\":-5,\"stalled\":0}],\"top_commands\":[]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: a denial count jq may read differently: sixteen digits",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t1234567890123456\\t0\\t0\\t-\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "{\"sessions\":1,\"denials\":1234567890123456,\"stalled\":0,\"quits\":0,\"repos\":[{\"repo\":\"o/a\",\"sessions\":1,\"denials\":1234567890123456,\"stalled\":0}],\"top_commands\":[]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: a non-ASCII digit, which jq reads as 0",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t\\xd9\\xa3\\t0\\t0\\t-\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "{\"sessions\":1,\"denials\":0,\"stalled\":0,\"quits\":0,\"repos\":[{\"repo\":\"o/a\",\"sessions\":1,\"denials\":0,\"stalled\":0}],\"top_commands\":[]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: denial counts adding up past 2^53",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t999999999999999\\t0\\t0\\t-\\n2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t999999999999999\\t0\\t0\\t-\\n2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t999999999999999\\t0\\t0\\t-\\n2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t999999999999999\\t0\\t0\\t-\\n2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t999999999999999\\t0\\t0\\t-\\n2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t999999999999999\\t0\\t0\\t-\\n2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t999999999999999\\t0\\t0\\t-\\n2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t999999999999999\\t0\\t0\\t-\\n2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t999999999999999\\t0\\t0\\t-\\n2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t999999999999999\\t0\\t0\\t-\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "{\"sessions\":10,\"denials\":9999999999999990,\"stalled\":0,\"quits\":0,\"repos\":[{\"repo\":\"o/a\",\"sessions\":10,\"denials\":9999999999999990,\"stalled\":0}],\"top_commands\":[]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: escapes in names",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "2026-11-24T10:00:00+00:00\\to/\"quoted\"\\\\path\\tIssue\\t1\\t1\\t0\\t0\\ta\\x01b,c\\x7fd,e/f\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "{\"sessions\":1,\"denials\":1,\"stalled\":0,\"quits\":0,\"repos\":[{\"repo\":\"o/\\\\\"quoted\\\\\"\\\\\\\\path\",\"sessions\":1,\"denials\":1,\"stalled\":0}],\"top_commands\":[{\"name\":\"a\\\\u0001b\",\"count\":1},{\"name\":\"c\\\\u007fd\",\"count\":1},{\"name\":\"e/f\",\"count\":1}]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: a line separator, no-break space and zero-width space",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "2026-11-24T10:00:00+00:00\\to/a\\xe2\\x80\\xa8b\\tIssue\\t1\\t1\\t0\\t0\\tx\\xc2\\xa0y,z\\xe2\\x80\\x8bw\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "{\"sessions\":1,\"denials\":1,\"stalled\":0,\"quits\":0,\"repos\":[{\"repo\":\"o/a\\xe2\\x80\\xa8b\",\"sessions\":1,\"denials\":1,\"stalled\":0}],\"top_commands\":[{\"name\":\"x\\xc2\\xa0y\",\"count\":1},{\"name\":\"z\\xe2\\x80\\x8bw\",\"count\":1}]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: names beyond the BMP and in the private use area",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "2026-11-24T10:00:00+00:00\\to/\\xf0\\x9f\\x98\\x80\\tIssue\\t1\\t1\\t0\\t0\\t-\\n2026-11-24T10:00:00+00:00\\to/\\xee\\x80\\x80\\tIssue\\t1\\t1\\t0\\t0\\t-\\n2026-11-24T10:00:00+00:00\\to/\\xef\\xbd\\x81\\tIssue\\t1\\t1\\t0\\t0\\t-\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "{\"sessions\":3,\"denials\":3,\"stalled\":0,\"quits\":0,\"repos\":[{\"repo\":\"o/\\xee\\x80\\x80\",\"sessions\":1,\"denials\":1,\"stalled\":0},{\"repo\":\"o/\\xef\\xbd\\x81\",\"sessions\":1,\"denials\":1,\"stalled\":0},{\"repo\":\"o/\\xf0\\x9f\\x98\\x80\",\"sessions\":1,\"denials\":1,\"stalled\":0}],\"top_commands\":[]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: a byte order mark",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "\\xef\\xbb\\xbf2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t1\\t0\\t0\\t-\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "{\"sessions\":1,\"denials\":1,\"stalled\":0,\"quits\":0,\"repos\":[{\"repo\":\"o/a\",\"sessions\":1,\"denials\":1,\"stalled\":0}],\"top_commands\":[]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: bytes that are not UTF-8",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "2026-11-24T10:00:00+00:00\\to/\\xff\\tIssue\\t1\\t1\\t0\\t0\\t-\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "{\"sessions\":1,\"denials\":1,\"stalled\":0,\"quits\":0,\"repos\":[{\"repo\":\"o/\\xef\\xbf\\xbd\",\"sessions\":1,\"denials\":1,\"stalled\":0}],\"top_commands\":[]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: a NUL byte",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "content": "2026-11-24T10:00:00+00:00\\to/a\\x00\\tIssue\\t1\\t1\\t0\\t0\\t-\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "{\"sessions\":1,\"denials\":1,\"stalled\":0,\"quits\":0,\"repos\":[{\"repo\":\"o/a\\\\u0000\",\"sessions\":1,\"denials\":1,\"stalled\":0}],\"top_commands\":[]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: a directory",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "dir": true
+        }
+      ],
+      "tool": "answers",
+      "stdout": "null",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: a dangling link",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "link": "missing"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "null",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: a link",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/day",
+          "content": "2026-11-24T10:00:00+00:00\\to/linked\\tIssue\\t1\\t4\\t1\\t1\\tx\\n"
+        },
+        {
+          "path": "owner/session-denials.2026-11-24",
+          "link": "day"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "{\"sessions\":1,\"denials\":4,\"stalled\":1,\"quits\":1,\"repos\":[{\"repo\":\"o/linked\",\"sessions\":1,\"denials\":4,\"stalled\":1}],\"top_commands\":[{\"name\":\"x\",\"count\":1}]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/day",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-24"
+      ]
+    },
+    {
+      "name": "summary: the day before only",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.2026-11-24"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.2026-11-23",
+          "content": "2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t1\\t0\\t0\\t-\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "null",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.2026-11-23"
+      ]
+    },
+    {
+      "name": "summary: a file name that is not UTF-8",
+      "function": "summarise_session_denials_day",
+      "args": [
+        "owner/session-denials.\\xff"
+      ],
+      "files": [
+        {
+          "path": "owner/session-denials.\\xff",
+          "content": "2026-11-24T10:00:00+00:00\\to/a\\tIssue\\t1\\t1\\t0\\t0\\t-\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "{\"sessions\":1,\"denials\":1,\"stalled\":0,\"quits\":0,\"repos\":[{\"repo\":\"o/a\",\"sessions\":1,\"denials\":1,\"stalled\":0}],\"top_commands\":[]}\\n",
+      "status": 0,
+      "remaining": [
+        "./owner",
+        "./owner/repo",
+        "./owner/session-denials.\\xff"
+      ]
+    }
+  ]
+}
