@@ -26,6 +26,19 @@ public static class Program
         );
 
         using CancellationTokenSource shutdown = new();
+
+        if (GitCommandParser.IsVerb(args))
+        {
+            Task<int> git = RunGitAsync(args: args, cancellationToken: shutdown.Token);
+
+            if (await Task.WhenAny(git, signalled.Task) != git)
+            {
+                await shutdown.CancelAsync();
+            }
+
+            return await git;
+        }
+
         await using Stream input = Console.OpenStandardInput();
         using HttpClient httpClient = new();
         CommandRunner runner = new(
@@ -60,5 +73,15 @@ public static class Program
     {
         context.Cancel = true;
         signalled.TrySetResult();
+    }
+
+    // git has its own runner: it writes the bytes git printed to stdout untouched, not through Console.Out
+    private static async Task<int> RunGitAsync(string[] args, CancellationToken cancellationToken)
+    {
+        await using Stream output = Console.OpenStandardOutput();
+
+        return await GitCommandRunner
+            .CreateDefault()
+            .RunAsync(args: args, output: output, error: Console.Error, cancellationToken: cancellationToken);
     }
 }

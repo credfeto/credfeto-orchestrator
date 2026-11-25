@@ -1,6 +1,9 @@
 # shellcheck shell=bash
 # Per-repo context and git plumbing: resolving the OWNER/REPO/REPO_FULL globals, host<->
 # container path mapping, and the git operations that keep the local checkout current.
+# The read-only checkout queries (current branch, uncommitted changes, origin branch, head commit,
+# commits behind, stale issue branch) can be handed to Credfeto.Orchestrator.Cmd with
+# ORCHESTRATOR_DOTNET_GIT=1 (#252); everything that changes a checkout stays here.
 
 # Maps a host file path to its container-internal equivalent.
 # Paths under REPO_WORK_DIR map to CONTAINER_REPO_PATH; paths under RULES_DIR
@@ -105,6 +108,78 @@ clean_local_git_url_rewrites() {
         | grep -iE '\.(insteadof|pushinsteadof)$' || true)
 }
 
+# Runs one read-only git query through Credfeto.Orchestrator.Cmd (ORCHESTRATOR_DOTNET_GIT=1, #252) and
+# returns 0 when the tool answered, leaving what it printed in git_tool_output and the status the shell
+# function returns in git_tool_status (the caller declares both local). The tool runs the same git
+# commands and exits with the function's own status: 0, 1, 128 or 129. Any other status (2 a usage
+# error, 3 an input it cannot answer exactly as bash would, 125 git could not be run, 126 or 127 the
+# tool is missing, 130 and above a signal) is no answer: this warns and returns 1, and the caller runs
+# its bash version. Every query only reads, so running it again in bash is safe, and gives the caller
+# exactly the bash answer. With "quiet" first, the tool's stderr, and so git's, goes to /dev/null, as
+# the bash version's git stderr does; with "stderr", git's stderr reaches the caller's.
+_git_tool_answers() {
+    local stderr_mode="$1" query="$2" text status
+    shift 2
+    # The tool's exit status after a dot keeps the output's own trailing newlines, which $(...) would drop
+    if [ "${stderr_mode}" = quiet ]; then
+        text=$(
+            "${ORCHESTRATOR_CMD}" git "${query}" "$@" < /dev/null 2> /dev/null
+            printf '.%s' "$?"
+        )
+    else
+        text=$(
+            "${ORCHESTRATOR_CMD}" git "${query}" "$@" < /dev/null
+            printf '.%s' "$?"
+        )
+    fi
+    status=${text##*.}
+    case "${status}" in
+        0 | 1 | 128 | 129)
+            git_tool_output=${text%.*}
+            git_tool_status=${status}
+            return 0
+            ;;
+    esac
+    warn "${ORCHESTRATOR_CMD} git ${query} failed (exit ${status}); running git in bash instead"
+    return 1
+}
+
+# Outputs the branch the checkout is on (git branch --show-current: nothing for a detached HEAD) and
+# returns git's status. With ORCHESTRATOR_DOTNET_GIT=1 the tool runs it (_git_tool_answers).
+checkout_current_branch() {
+    local git_tool_output git_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_GIT}" = 1 ] \
+        && _git_tool_answers stderr current-branch --repo "${REPO_WORK_DIR}"; then
+        printf '%s' "${git_tool_output}"
+        return "${git_tool_status}"
+    fi
+    git -C "${REPO_WORK_DIR}" branch --show-current
+}
+
+# Returns 0 when the checkout has uncommitted changes to tracked files, staged or not (untracked files
+# do not count), and 1 when it has none. A git error counts as changes, so a checkout git cannot read
+# is never taken for a clean one. With ORCHESTRATOR_DOTNET_GIT=1 the tool runs it (_git_tool_answers).
+checkout_has_uncommitted_changes() {
+    local git_tool_output git_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_GIT}" = 1 ] \
+        && _git_tool_answers stderr uncommitted-changes --repo "${REPO_WORK_DIR}"; then
+        return "${git_tool_status}"
+    fi
+    ! git -C "${REPO_WORK_DIR}" diff --quiet || ! git -C "${REPO_WORK_DIR}" diff --cached --quiet
+}
+
+# Returns 0 when origin has the branch named in $1 as of the last fetch (refs/remotes/origin/<branch>),
+# and git's status otherwise (1 when it does not, 128 when the checkout cannot be read). Prints nothing.
+# With ORCHESTRATOR_DOTNET_GIT=1 the tool runs it (_git_tool_answers).
+origin_branch_exists() {
+    local branch="$1" git_tool_output git_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_GIT}" = 1 ] \
+        && _git_tool_answers quiet origin-branch-exists --repo "${REPO_WORK_DIR}" --branch "${branch}"; then
+        return "${git_tool_status}"
+    fi
+    git -C "${REPO_WORK_DIR}" rev-parse --verify -q "refs/remotes/origin/${branch}" > /dev/null 2>&1
+}
+
 # Returns 0 on success. Returns 1 for a dirty working tree — the existing "hand off to agent to
 # recover" signal (oneshot hands it over only to the item whose branch the checkout is on, see
 # dirty_branch_belongs_to_item). Returns 2 for a transient git-fetch failure specifically: unlike
@@ -136,8 +211,8 @@ ensure_repo_current() {
         fi
 
         local current_branch
-        current_branch=$(git -C "${REPO_WORK_DIR}" branch --show-current)
-        if ! git -C "${REPO_WORK_DIR}" diff --quiet || ! git -C "${REPO_WORK_DIR}" diff --cached --quiet; then
+        current_branch=$(checkout_current_branch)
+        if checkout_has_uncommitted_changes; then
             # shellcheck disable=SC2034  # read by oneshot after sourcing
             DIRTY_BRANCH="${current_branch}"
             warn "Working tree has uncommitted changes on '${current_branch}' for ${REPO_FULL} — handing off to agent to recover"
@@ -145,8 +220,7 @@ ensure_repo_current() {
         fi
         if [ "${current_branch}" != "main" ]; then
             local left_on="${current_branch:-a detached HEAD}"
-            if [ -n "${current_branch}" ] \
-                    && git -C "${REPO_WORK_DIR}" rev-parse --verify "refs/remotes/origin/${current_branch}" >/dev/null 2>&1; then
+            if [ -n "${current_branch}" ] && origin_branch_exists "${current_branch}"; then
                 info "Checkout for ${REPO_FULL} was left on '${left_on}' by an earlier session — returning to main"
             else
                 warn "Branch '${left_on}' no longer exists on origin for ${REPO_FULL} — returning to main"
@@ -180,11 +254,11 @@ checkout_item_branch() {
     local target_branch="$1"
     [ -n "${target_branch}" ] || return 1
     if [ "${target_branch}" = "main" ]; then
-        [ "$(git -C "${REPO_WORK_DIR}" branch --show-current 2> /dev/null)" = "main" ] && return 0
+        [ "$(checkout_current_branch 2> /dev/null)" = "main" ] && return 0
         git -C "${REPO_WORK_DIR}" checkout main
         return
     fi
-    if ! git -C "${REPO_WORK_DIR}" rev-parse --verify -q "refs/remotes/origin/${target_branch}" > /dev/null 2>&1; then
+    if ! origin_branch_exists "${target_branch}"; then
         warn "Branch '${target_branch}' does not exist on origin for ${REPO_FULL}"
         return 1
     fi
@@ -197,7 +271,13 @@ checkout_item_branch() {
 
 # Outputs the commit the checkout is on, for the pre-flight failure record (lib/state). Returns 1
 # with no output when it cannot be read.
+# With ORCHESTRATOR_DOTNET_GIT=1 the tool reads it (_git_tool_answers).
 checkout_head_sha() {
+    local git_tool_output git_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_GIT}" = 1 ] && _git_tool_answers quiet head-sha --repo "${REPO_WORK_DIR}"; then
+        printf '%s' "${git_tool_output}"
+        return "${git_tool_status}"
+    fi
     git -C "${REPO_WORK_DIR}" rev-parse --verify -q HEAD 2> /dev/null
 }
 
@@ -287,13 +367,12 @@ recover_orphaned_branch() {
     [ -d "${REPO_WORK_DIR}/.git" ] || return 1
 
     local current_branch
-    current_branch=$(git -C "${REPO_WORK_DIR}" branch --show-current 2>/dev/null) || return 1
+    current_branch=$(checkout_current_branch 2> /dev/null) || return 1
     [ "${current_branch}" = "main" ] && return 1
 
     git -C "${REPO_WORK_DIR}" fetch --prune origin 2>/dev/null || return 1
 
-    git -C "${REPO_WORK_DIR}" rev-parse --verify "refs/remotes/origin/${current_branch}" >/dev/null 2>&1 \
-        && return 1
+    origin_branch_exists "${current_branch}" && return 1
 
     # checkout -f below has no dirty-tree check of its own — warn first so a discarded branch's
     # work leaves a trace a human could search for (#1281).
@@ -335,10 +414,19 @@ issue_branch_regex() {
 # "#1262 review" comment for why the second call exists.
 # Outputs the branch name (without the "origin/" prefix) and returns 0 when found; returns 1
 # when the repo has never been cloned locally, no branch matches the convention, or the only
-# match has no commits ahead of origin/main.
+# match has no commits ahead of origin/main. With ORCHESTRATOR_DOTNET_GIT=1 the tool answers
+# (_git_tool_answers), refusing an issue id that is not all digits and a branch name whose match bash
+# decides by the locale (a non-ASCII character where the regex looks), which bash then answers.
 find_stale_issue_branch() {
     local issue_id="$1"
     [ -d "${REPO_WORK_DIR}/.git" ] || return 1
+
+    local git_tool_output git_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_GIT}" = 1 ] \
+        && _git_tool_answers quiet stale-issue-branch --repo "${REPO_WORK_DIR}" --issue "${issue_id}"; then
+        printf '%s' "${git_tool_output}"
+        return "${git_tool_status}"
+    fi
 
     local branch_regex full_branch candidate ahead
     branch_regex=$(issue_branch_regex "${issue_id}")
@@ -411,9 +499,15 @@ find_ai_instructions() {
 # it. Returns 1 with no output if the count could not be determined — e.g. `upstream` doesn't
 # exist because a fetch has never succeeded — callers must treat that as INCONCLUSIVE, never as
 # "definitely stale", so a checkout that has simply never fetched yet is not wrongly refused.
+# With ORCHESTRATOR_DOTNET_GIT=1 the tool counts (_git_tool_answers).
 git_commits_behind() {
     local repo_dir="$1" ref="$2" upstream="$3"
-    local count
+    local count git_tool_output git_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_GIT}" = 1 ] \
+        && _git_tool_answers quiet commits-behind --repo "${repo_dir}" --ref "${ref}" --upstream "${upstream}"; then
+        printf '%s' "${git_tool_output}"
+        return "${git_tool_status}"
+    fi
     count=$(git -C "${repo_dir}" rev-list --count "${ref}..${upstream}" 2>/dev/null) || return 1
     [[ "${count}" =~ ^[0-9]+$ ]] || return 1
     printf '%s' "${count}"

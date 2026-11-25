@@ -85,8 +85,8 @@ source "${ONESHOT_DIR}/lib/podman" \
 # and pr_is_human_driven are declared in lib/github. ensure_rules_current,
 # clean_local_git_url_rewrites, ensure_repo_current,
 # checkout_item_branch, checkout_head_sha, dirty_branch_belongs_to_item, autostash_dirty_checkout,
-# prune_autostashes, recover_orphaned_branch, find_stale_issue_branch, and try_nonagentic_rebase are declared in
-# lib/git.
+# prune_autostashes, recover_orphaned_branch, find_stale_issue_branch, try_nonagentic_rebase, checkout_current_branch,
+# checkout_has_uncommitted_changes, origin_branch_exists and git_commits_behind are declared in lib/git.
 # check_required_tools and hash_sha256 are declared in lib/core.
 
 # invocation_guard_file_path, infra_failure_guard_file_path, load_infra_failure_count,

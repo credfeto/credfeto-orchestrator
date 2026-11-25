@@ -38,6 +38,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Credfeto.Orchestrator.Fingerprints/Credfeto.Orchestrator.Fingerprints.csproj" />
+    <ProjectReference Include="../Credfeto.Orchestrator.Git/Credfeto.Orchestrator.Git.csproj" />
     <ProjectReference Include="../Credfeto.Orchestrator.GitHub/Credfeto.Orchestrator.GitHub.csproj" />
   </ItemGroup>
   <ItemGroup>
