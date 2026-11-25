@@ -31,4 +31,8 @@
     <Project Path="Credfeto.Orchestrator.GitHub.Tests/Credfeto.Orchestrator.GitHub.Tests.csproj" />
     <Project Path="Credfeto.Orchestrator.GitHub/Credfeto.Orchestrator.GitHub.csproj" />
   </Folder>
+  <Folder Name="/Podman/">
+    <Project Path="Credfeto.Orchestrator.Podman.Tests/Credfeto.Orchestrator.Podman.Tests.csproj" />
+    <Project Path="Credfeto.Orchestrator.Podman/Credfeto.Orchestrator.Podman.csproj" />
+  </Folder>
 </Solution>

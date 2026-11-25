@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Credfeto.Orchestrator.Commands;
 using Credfeto.Orchestrator.Fingerprints;
 using Credfeto.Orchestrator.GitHub;
+using Credfeto.Orchestrator.Podman;
 
 namespace Credfeto.Orchestrator.Cmd;
 
@@ -27,9 +28,9 @@ public static class Program
 
         using CancellationTokenSource shutdown = new();
 
-        if (GitCommandParser.IsVerb(args))
+        if (GitCommandParser.IsVerb(args) || PodmanCommandParser.IsVerb(args))
         {
-            Task<int> git = RunGitAsync(args: args, cancellationToken: shutdown.Token);
+            Task<int> git = RunProcessVerbAsync(args: args, cancellationToken: shutdown.Token);
 
             if (await Task.WhenAny(git, signalled.Task) != git)
             {
@@ -75,10 +76,18 @@ public static class Program
         signalled.TrySetResult();
     }
 
-    // git has its own runner: it writes the bytes git printed to stdout untouched, not through Console.Out
-    private static async Task<int> RunGitAsync(string[] args, CancellationToken cancellationToken)
+    // git and podman have their own runners: they write the bytes git or podman printed to stdout untouched, not
+    // through Console.Out
+    private static async Task<int> RunProcessVerbAsync(string[] args, CancellationToken cancellationToken)
     {
         await using Stream output = Console.OpenStandardOutput();
+
+        if (PodmanCommandParser.IsVerb(args))
+        {
+            return await PodmanCommandRunner
+                .CreateDefault()
+                .RunAsync(args: args, output: output, error: Console.Error, cancellationToken: cancellationToken);
+        }
 
         return await GitCommandRunner
             .CreateDefault()
