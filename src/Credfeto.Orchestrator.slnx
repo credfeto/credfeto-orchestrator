@@ -31,6 +31,10 @@
     <Project Path="Credfeto.Orchestrator.Git.Tests/Credfeto.Orchestrator.Git.Tests.csproj" />
     <Project Path="Credfeto.Orchestrator.Git/Credfeto.Orchestrator.Git.csproj" />
   </Folder>
+  <Folder Name="/Agents/">
+    <Project Path="Credfeto.Orchestrator.Agents.Tests/Credfeto.Orchestrator.Agents.Tests.csproj" />
+    <Project Path="Credfeto.Orchestrator.Agents/Credfeto.Orchestrator.Agents.csproj" />
+  </Folder>
   <Folder Name="/Prompts/">
     <Project Path="Credfeto.Orchestrator.Prompts.Tests/Credfeto.Orchestrator.Prompts.Tests.csproj" />
     <Project Path="Credfeto.Orchestrator.Prompts/Credfeto.Orchestrator.Prompts.csproj" />

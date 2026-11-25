@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Credfeto.Orchestrator.Agents;
 using Credfeto.Orchestrator.Commands;
 using Credfeto.Orchestrator.Discovery;
 using Credfeto.Orchestrator.Fingerprints;
@@ -75,6 +76,15 @@ public static class Program
         if (GitCommandParser.IsVerb(args))
         {
             return RunGitAsync(args: args, cancellationToken: cancellationToken);
+        }
+
+        // agent only asks the ssh-agent at a socket for its keys: it prints nothing
+        if (AgentCommandParser.IsVerb(args))
+        {
+            return AgentCommandRunner
+                .CreateDefault()
+                .RunAsync(args: args, error: Console.Error, cancellationToken: cancellationToken)
+                .AsTask();
         }
 
         if (PromptCommandParser.IsVerb(args))

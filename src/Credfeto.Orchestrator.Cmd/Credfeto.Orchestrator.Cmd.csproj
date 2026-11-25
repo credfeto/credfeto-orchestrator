@@ -89,6 +89,7 @@
     <MSBuild Projects="@(_AotToolPackageProject)" Targets="Pack" />
   </Target>
   <ItemGroup>
+    <ProjectReference Include="../Credfeto.Orchestrator.Agents/Credfeto.Orchestrator.Agents.csproj" />
     <ProjectReference Include="../Credfeto.Orchestrator.Commands/Credfeto.Orchestrator.Commands.csproj" />
     <ProjectReference Include="../Credfeto.Orchestrator.Discovery/Credfeto.Orchestrator.Discovery.csproj" />
     <ProjectReference Include="../Credfeto.Orchestrator.Fingerprints/Credfeto.Orchestrator.Fingerprints.csproj" />
