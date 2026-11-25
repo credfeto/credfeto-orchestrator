@@ -936,24 +936,43 @@ load oneshot_helper
 
 # --- sync_pr_labels_from_linked_issues (#1321) --------------------------------
 
-@test "sync_pr_labels_from_linked_issues never copies Blocked or On-Hold, but still copies other labels" {
+@test "sync_pr_labels_from_linked_issues never copies Blocked, On Hold or On-Hold in any case, but still copies other labels" {
     set_repo_context "org/repo"
     local call_log="${TEST_TMP}/gh_calls"
     # shellcheck disable=SC2016
     make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"
     case "$*" in
-        *"pr view 42 --repo org/repo --json closingIssuesReferences"*) printf "164\n" ;;
-        *"issue view 164 --repo org/repo --json labels"*) printf "Bug\nBlocked\nOn-Hold\n" ;;
+        *"pr view 42 --repo org/repo --json closingIssuesReferences"*) printf "org/repo 164\n" ;;
+        *"issue view 164 --repo org/repo --json labels"*) printf "Bug\nBlocked\nOn-Hold\nOn Hold\nblocked\n" ;;
         *"pr edit"*) exit 0 ;;
     esac'
 
     sync_pr_labels_from_linked_issues 42 '{"labels":[]}'
 
     grep -q -- "pr edit 42 --repo org/repo --add-label Bug" "${call_log}"
-    run grep -- "--add-label Blocked" "${call_log}"
+    run grep -i -- "--add-label Blocked" "${call_log}"
     [ "${status}" -ne 0 ]
-    run grep -- "--add-label On-Hold" "${call_log}"
+    run grep -i -- "--add-label On.Hold" "${call_log}"
     [ "${status}" -ne 0 ]
+}
+
+@test "sync_pr_labels_from_linked_issues reads each closing issue's labels from that issue's own repository, once each (#252)" {
+    set_repo_context "org/repo"
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"
+    case "$*" in
+        *"pr view 42 --repo org/repo --json closingIssuesReferences"*) printf "org/repo 164\norg/other 7\n" ;;
+        *"issue view 164 --repo org/repo --json labels"*) printf "Bug\nAI-Work\n" ;;
+        *"issue view 7 --repo org/other --json labels"*) printf "Bug\nEnhancement\n" ;;
+        *"pr edit"*) exit 0 ;;
+    esac'
+
+    sync_pr_labels_from_linked_issues 42 '{"labels":[{"name":"AI-Work"}]}'
+
+    [ "$(grep -c -- "pr edit" "${call_log}")" -eq 2 ]
+    grep -q -- "pr edit 42 --repo org/repo --add-label Bug" "${call_log}"
+    grep -q -- "pr edit 42 --repo org/repo --add-label Enhancement" "${call_log}"
 }
 
 @test "sync_pr_labels_from_linked_issues does not call gh pr edit when there is nothing new to add" {
@@ -962,7 +981,7 @@ load oneshot_helper
     # shellcheck disable=SC2016
     make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"
     case "$*" in
-        *"pr view 42 --repo org/repo --json closingIssuesReferences"*) printf "164\n" ;;
+        *"pr view 42 --repo org/repo --json closingIssuesReferences"*) printf "org/repo 164\n" ;;
         *"issue view 164 --repo org/repo --json labels"*) printf "Blocked\nOn-Hold\n" ;;
         *"pr edit"*) exit 0 ;;
     esac'

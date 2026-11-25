@@ -56,4 +56,26 @@ public interface IGitHubReader
         string headBranch,
         CancellationToken cancellationToken
     );
+
+    // Every top-level comment and every inline review comment on the pull request, with whole bodies
+    ValueTask<PullRequestComments> PullRequestCommentsAsync(
+        string repository,
+        int pullRequest,
+        CancellationToken cancellationToken
+    );
+
+    // The numbers of the issues the pull request closes, in any repository, in GitHub's order
+    ValueTask<IReadOnlyList<int>> PullRequestClosingIssuesAsync(
+        string repository,
+        int pullRequest,
+        CancellationToken cancellationToken
+    );
+
+    // The labels of every issue the pull request closes that could be read, leaving out Blocked, On Hold and On-Hold
+    // in any case
+    ValueTask<IReadOnlyList<string>> ClosingIssueLabelsAsync(
+        string repository,
+        int pullRequest,
+        CancellationToken cancellationToken
+    );
 }
