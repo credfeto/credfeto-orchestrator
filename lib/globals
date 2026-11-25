@@ -90,6 +90,11 @@ ORCHESTRATOR_DOTNET_GITHUB="${ORCHESTRATOR_DOTNET_GITHUB:-0}"
 ORCHESTRATOR_DOTNET_PROMPTS="${ORCHESTRATOR_DOTNET_PROMPTS:-0}"
 # shellcheck disable=SC2034  # read by lib/github and lib/github-health after sourcing
 ORCHESTRATOR_DOTNET_DISCOVERY="${ORCHESTRATOR_DOTNET_DISCOVERY:-0}"
+# ORCHESTRATOR_DOTNET_STATE: the read-only lib/state queries over the state files (counters, markers,
+# the last diagnostic, the pre-check cache, the pull-duration baseline, the rate-limit check and the
+# session-denials summary); every write, and the rate-limit file's removal, stays in bash.
+# shellcheck disable=SC2034  # read by lib/state after sourcing
+ORCHESTRATOR_DOTNET_STATE="${ORCHESTRATOR_DOTNET_STATE:-0}"
 # shellcheck disable=SC2034  # read by lib/github after sourcing
 ORCHESTRATOR_CFWF_MCP_URL="${ORCHESTRATOR_CFWF_MCP_URL:-https://workflow-mcp.markridgwell.com/mcp}"
 # ORCHESTRATOR_DOTNET_GIT: the read-only lib/git checkout queries, which the tool answers by running
