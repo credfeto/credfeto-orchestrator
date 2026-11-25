@@ -89,6 +89,12 @@ ORCHESTRATOR_CFWF_MCP_URL="${ORCHESTRATOR_CFWF_MCP_URL:-https://workflow-mcp.mar
 # shellcheck disable=SC2034  # read by lib/git after sourcing
 ORCHESTRATOR_DOTNET_GIT="${ORCHESTRATOR_DOTNET_GIT:-0}"
 
+# ORCHESTRATOR_DOTNET_PODMAN: the read-only lib/podman queries (the agent image's IMAGE_SHA, whether the
+# agent container exists or runs, whether the image is cached), which the tool answers by running the
+# same podman commands (anything that starts, removes or pulls stays in bash).
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
+ORCHESTRATOR_DOTNET_PODMAN="${ORCHESTRATOR_DOTNET_PODMAN:-0}"
+
 # Conservative pre-send guard against grossly oversized prompts.
 # The launch prompt is deliberately tiny ("Work on <item> in <repo>") — everything of
 # substance lives in the generated CLAUDE.md — so this cap is only a sanity backstop and
