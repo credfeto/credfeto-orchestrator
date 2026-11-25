@@ -17,6 +17,10 @@ public sealed class GitCommandRunnerTests : TestBase
     [InlineData("git|origin-branch-exists|--repo|/r|--branch|b", "origin-branch-exists /r b")]
     [InlineData("git|commits-behind|--repo|/r|--ref|HEAD|--upstream|u", "commits-behind /r HEAD u")]
     [InlineData("git|stale-issue-branch|--repo|/r|--issue|7", "stale-issue-branch /r 7")]
+    [InlineData("git|porcelain-status|--repo|/r", "porcelain-status /r")]
+    [InlineData("git|changed-file-count|--repo|/r", "changed-file-count /r")]
+    [InlineData("git|stash-head|--repo|/r", "stash-head /r")]
+    [InlineData("git|autostashes-beyond-keep|--repo|/r|--prefix|p|--keep|2", "autostashes-beyond-keep /r p 2")]
     public async Task EachQueryPrintsTheAnswerByteForByteAndExitsWithItsStatusAsync(string args, string asked)
     {
         FakeGitQueries queries = new(exitCode: 128, output: "café\n\n");

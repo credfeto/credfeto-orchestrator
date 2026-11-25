@@ -4,10 +4,11 @@ using System.Linq;
 
 namespace Credfeto.Orchestrator.Commands;
 
-// git head-sha|current-branch|uncommitted-changes --repo <dir>
+// git head-sha|current-branch|uncommitted-changes|porcelain-status|changed-file-count|stash-head --repo <dir>
 // git origin-branch-exists --repo <dir> --branch <branch>
 // git commits-behind --repo <dir> --ref <ref> --upstream <ref>
 // git stale-issue-branch --repo <dir> --issue <number>
+// git autostashes-beyond-keep --repo <dir> --prefix <prefix> --keep <count>
 // Every option is required and may be empty, as the lib/git function's argument may be
 public static class GitCommandParser
 {
@@ -18,9 +19,12 @@ public static class GitCommandParser
     private const string REF = "--ref";
     private const string UPSTREAM = "--upstream";
     private const string ISSUE = "--issue";
+    private const string PREFIX = "--prefix";
+    private const string KEEP = "--keep";
 
     private const string QUERIES =
-        "head-sha, current-branch, uncommitted-changes, origin-branch-exists, commits-behind or stale-issue-branch";
+        "head-sha, current-branch, uncommitted-changes, origin-branch-exists, commits-behind, stale-issue-branch, "
+        + "porcelain-status, changed-file-count, stash-head or autostashes-beyond-keep";
 
     public static bool IsVerb(IReadOnlyList<string> args)
     {
@@ -75,6 +79,10 @@ public static class GitCommandParser
             "origin-branch-exists" => GitQuery.ORIGIN_BRANCH_EXISTS,
             "commits-behind" => GitQuery.COMMITS_BEHIND,
             "stale-issue-branch" => GitQuery.STALE_ISSUE_BRANCH,
+            "porcelain-status" => GitQuery.PORCELAIN_STATUS,
+            "changed-file-count" => GitQuery.CHANGED_FILE_COUNT,
+            "stash-head" => GitQuery.STASH_HEAD,
+            "autostashes-beyond-keep" => GitQuery.AUTOSTASHES_BEYOND_KEEP,
             _ => null,
         };
     }
@@ -86,6 +94,7 @@ public static class GitCommandParser
             GitQuery.ORIGIN_BRANCH_EXISTS => [REPO, BRANCH],
             GitQuery.COMMITS_BEHIND => [REPO, REF, UPSTREAM],
             GitQuery.STALE_ISSUE_BRANCH => [REPO, ISSUE],
+            GitQuery.AUTOSTASHES_BEYOND_KEEP => [REPO, PREFIX, KEEP],
             _ => [REPO],
         };
     }
@@ -138,6 +147,12 @@ public static class GitCommandParser
                 Upstream: options[UPSTREAM]
             ),
             GitQuery.STALE_ISSUE_BRANCH => new(Query: query, Repository: repository, Name: options[ISSUE]),
+            GitQuery.AUTOSTASHES_BEYOND_KEEP => new(
+                Query: query,
+                Repository: repository,
+                Name: options[PREFIX],
+                Keep: options[KEEP]
+            ),
             _ => new(Query: query, Repository: repository),
         };
     }

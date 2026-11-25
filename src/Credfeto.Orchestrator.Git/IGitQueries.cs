@@ -28,4 +28,21 @@ public interface IGitQueries
 
     // find_stale_issue_branch, after its own check that the checkout has a .git directory
     ValueTask<GitResult> StaleIssueBranchAsync(string repository, string issue, CancellationToken cancellationToken);
+
+    // checkout_porcelain_status
+    ValueTask<GitResult> PorcelainStatusAsync(string repository, CancellationToken cancellationToken);
+
+    // checkout_changed_file_count
+    ValueTask<GitResult> ChangedFileCountAsync(string repository, CancellationToken cancellationToken);
+
+    // checkout_stash_head
+    ValueTask<GitResult> StashHeadAsync(string repository, CancellationToken cancellationToken);
+
+    // autostashes_beyond_keep
+    ValueTask<GitResult> AutostashesBeyondKeepAsync(
+        string repository,
+        string prefix,
+        string keep,
+        CancellationToken cancellationToken
+    );
 }

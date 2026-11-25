@@ -27,6 +27,9 @@ public sealed class GitCommandParserTests : TestBase
     )]
     [InlineData("git|stale-issue-branch|--repo|/r|--issue|12", GitQuery.STALE_ISSUE_BRANCH, "/r", "12", "")]
     [InlineData("git|head-sha|--repo|/a|--repo|/b", GitQuery.HEAD_SHA, "/b", "", "")]
+    [InlineData("git|porcelain-status|--repo|/r", GitQuery.PORCELAIN_STATUS, "/r", "", "")]
+    [InlineData("git|changed-file-count|--repo|/r", GitQuery.CHANGED_FILE_COUNT, "/r", "", "")]
+    [InlineData("git|stash-head|--repo|", GitQuery.STASH_HEAD, "", "", "")]
     public static void EachQueryIsParsedWithItsOptions(
         string args,
         GitQuery query,
@@ -45,6 +48,30 @@ public sealed class GitCommandParserTests : TestBase
     }
 
     [Theory]
+    [InlineData("git|autostashes-beyond-keep|--keep|20|--repo|/r|--prefix|a b", "/r", "a b", "20")]
+    [InlineData("git|autostashes-beyond-keep|--repo|/r|--prefix||--keep|", "/r", "", "")]
+    public static void TheAutostashQueryIsParsedWithItsPrefixAndKeep(
+        string args,
+        string repository,
+        string prefix,
+        string keep
+    )
+    {
+        GitCommand? command = GitCommandParser.Parse(args: args.Split('|'), error: out string error);
+
+        Assert.Equal(
+            expected: new GitCommand(
+                Query: GitQuery.AUTOSTASHES_BEYOND_KEEP,
+                Repository: repository,
+                Name: prefix,
+                Keep: keep
+            ),
+            actual: command
+        );
+        Assert.Equal(expected: string.Empty, actual: error);
+    }
+
+    [Theory]
     [InlineData("git", "expected: git <query>")]
     [InlineData("github|head-sha", "expected: git <query>")]
     [InlineData("git|status", "unknown git query 'status'")]
@@ -54,6 +81,9 @@ public sealed class GitCommandParserTests : TestBase
     [InlineData("git|origin-branch-exists|--repo|/r", "git origin-branch-exists needs --branch")]
     [InlineData("git|commits-behind|--repo|/r|--ref|HEAD", "git commits-behind needs --upstream")]
     [InlineData("git|stale-issue-branch|--repo|/r", "git stale-issue-branch needs --issue")]
+    [InlineData("git|autostashes-beyond-keep|--repo|/r|--keep|1", "git autostashes-beyond-keep needs --prefix")]
+    [InlineData("git|autostashes-beyond-keep|--repo|/r|--prefix|p", "git autostashes-beyond-keep needs --keep")]
+    [InlineData("git|stash-head|--repo|/r|--keep|1", "unknown option '--keep'")]
     public static void AnIncompleteOrUnknownCommandIsRefused(string args, string expected)
     {
         GitCommand? command = GitCommandParser.Parse(args: args.Split('|'), error: out string error);
