@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Net.Http;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Credfeto.Orchestrator.Commands;
@@ -25,41 +26,12 @@ public static class Program
             handler: context => Signal(context: context, signalled: signalled)
         );
 
+        // UTF-8 whatever the locale, as jq and gh print: a prompt goes back to bash byte for byte
+        Console.OutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+
         using CancellationTokenSource shutdown = new();
 
-        if (GitCommandParser.IsVerb(args))
-        {
-            Task<int> git = RunGitAsync(args: args, cancellationToken: shutdown.Token);
-
-            if (await Task.WhenAny(git, signalled.Task) != git)
-            {
-                await shutdown.CancelAsync();
-            }
-
-            return await git;
-        }
-
-        await using Stream input = Console.OpenStandardInput();
-        using HttpClient httpClient = new();
-        CommandRunner runner = new(
-            fingerprints: new FingerprintCalculator(),
-            files: new FileContentReader(),
-            github: new GitHubReader(
-                new McpToolCaller(httpClient: httpClient, settings: static () =>
-                    CfwfMcpSettingsLoader.Load(Environment.GetEnvironmentVariable)
-                )
-            )
-        );
-
-        Task<int> run = runner
-            .RunAsync(
-                args: args,
-                input: input,
-                output: Console.Out,
-                error: Console.Error,
-                cancellationToken: shutdown.Token
-            )
-            .AsTask();
+        Task<int> run = RunAsync(args: args, cancellationToken: shutdown.Token);
 
         if (await Task.WhenAny(run, signalled.Task) != run)
         {
@@ -75,6 +47,21 @@ public static class Program
         signalled.TrySetResult();
     }
 
+    private static Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
+    {
+        if (GitCommandParser.IsVerb(args))
+        {
+            return RunGitAsync(args: args, cancellationToken: cancellationToken);
+        }
+
+        if (PromptCommandParser.IsVerb(args))
+        {
+            return RunPromptAsync(args: args, cancellationToken: cancellationToken);
+        }
+
+        return RunCommandAsync(args: args, cancellationToken: cancellationToken);
+    }
+
     // git has its own runner: it writes the bytes git printed to stdout untouched, not through Console.Out
     private static async Task<int> RunGitAsync(string[] args, CancellationToken cancellationToken)
     {
@@ -83,5 +70,42 @@ public static class Program
         return await GitCommandRunner
             .CreateDefault()
             .RunAsync(args: args, output: output, error: Console.Error, cancellationToken: cancellationToken);
+    }
+
+    // prompt has its own runner: it reads none of the files or GitHub data the other commands read
+    private static async Task<int> RunPromptAsync(string[] args, CancellationToken cancellationToken)
+    {
+        await using Stream input = Console.OpenStandardInput();
+
+        return await new PromptCommandRunner(Environment.GetEnvironmentVariable).RunAsync(
+            args: args,
+            input: input,
+            output: Console.Out,
+            error: Console.Error,
+            cancellationToken: cancellationToken
+        );
+    }
+
+    private static async Task<int> RunCommandAsync(string[] args, CancellationToken cancellationToken)
+    {
+        await using Stream input = Console.OpenStandardInput();
+        using HttpClient httpClient = new();
+        CommandRunner runner = new(
+            fingerprints: new FingerprintCalculator(),
+            files: new FileContentReader(),
+            github: new GitHubReader(
+                new McpToolCaller(httpClient: httpClient, settings: static () =>
+                    CfwfMcpSettingsLoader.Load(Environment.GetEnvironmentVariable)
+                )
+            )
+        );
+
+        return await runner.RunAsync(
+            args: args,
+            input: input,
+            output: Console.Out,
+            error: Console.Error,
+            cancellationToken: cancellationToken
+        );
     }
 }

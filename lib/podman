@@ -996,8 +996,8 @@ invoke_claude() {
 
     reset_session_outcome
 
-    local prompt_len=${#prompt}
-    if [ "${prompt_len}" -gt "${MAX_PROMPT_CHARS}" ]; then
+    local prompt_len
+    if prompt_len=$(prompt_exceeds_max_chars "${prompt}"); then
         notify_discord_claude_error "${item_type}" "${item_id}" \
             "Prompt is too long: ${prompt_len} characters (max ${MAX_PROMPT_CHARS})"
         die "Prompt is too long: ${prompt_len} characters exceeds limit of ${MAX_PROMPT_CHARS}"

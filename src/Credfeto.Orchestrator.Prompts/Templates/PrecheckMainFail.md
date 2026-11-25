@@ -1,0 +1,2 @@
+<!-- markdownlint-disable-file -->
+- `pre-commit-check` FAILED on `main` at `{{sha}}` before this session. The hooks below were already failing before your change: they are pre-existing failures, not yours, so don't mistake them for your own and don't spend this session chasing them unless this issue is about them. Don't run a baseline check. Already failing on main (up to {{precheck_summary_lines}} error lines per hook):

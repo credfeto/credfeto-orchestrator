@@ -1,0 +1,2 @@
+<!-- markdownlint-disable-file -->
+NEXT PHASE (named by the orchestrator): this PR has not changed since the last session, and its state and Workflow board status name {{next_phase}} as the next phase. Run it now unless the trusted-comments step above or PHASE A-C applies first. Required checks that report SKIPPED (workflows skip them while a PR is a draft) count as passed for PHASE D-H. A session that only reads state and stops makes no progress and is charged against this PR's idle budget.

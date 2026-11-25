@@ -1,0 +1,78 @@
+#!/bin/bash
+# regenerate [--check]: rebuilds the .NET prompt templates (src/Credfeto.Orchestrator.Prompts/Templates/*.md) and the
+# prompt parity fixtures (test/fixtures/prompts-parity.json and prompts-pr-parity.json) from the lib/prompts builders
+# of this checkout (#252). Run it after any change to a lib/prompts text, then commit what it changed: until
+# ORCHESTRATOR_DOTNET_PROMPTS is on by default, lib/prompts is where the prompt wording is edited, and the templates
+# and fixtures are generated from it, never edited by hand.
+#
+# With --check it changes nothing: it prints the files that are not what it would write and exits 1, or exits 0 when
+# they all are. test/oneshot-prompts-parity.bats runs it that way.
+#
+# The output depends only on the checkout: every step runs in an empty environment (PATH kept, LANG=C.UTF-8), so a
+# run on a clean tree changes nothing.
+
+_regen_fail() {
+    printf 'regenerate: %s\n' "$1" >&2
+    exit 1
+}
+
+check=0
+case "${1-}" in
+    "") ;;
+    --check) check=1 ;;
+    *)
+        printf 'usage: %s [--check]\n' "${0##*/}" >&2
+        exit 2
+        ;;
+esac
+
+_regen_here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)" || exit 1
+_regen_root="$(cd -- "${_regen_here}/../.." && pwd)" || exit 1
+templates="${_regen_root}/src/Credfeto.Orchestrator.Prompts/Templates"
+fixtures="${_regen_root}/test/fixtures"
+# The commit hook's check-added-large-files limit
+readonly MAX_FIXTURE_BYTES=$((500 * 1024))
+
+_regen_tmp="$(mktemp -d)" || exit 1
+trap 'rm -rf -- "${_regen_tmp}"' EXIT
+
+env -i PATH="${PATH}" LANG=C.UTF-8 bash "${_regen_here}/extract-templates" "${_regen_tmp}/Templates" \
+    || _regen_fail "extracting the templates failed"
+env -i PATH="${PATH}" LANG=C.UTF-8 bash "${_regen_here}/generate-fixtures" "${_regen_tmp}/fixtures" \
+    || _regen_fail "generating the fixtures failed"
+
+for fixture in prompts-parity.json prompts-pr-parity.json; do
+    size=$(wc -c < "${_regen_tmp}/fixtures/${fixture}")
+    if [ "${size}" -ge "${MAX_FIXTURE_BYTES}" ]; then
+        _regen_fail "${fixture} would be ${size} bytes, over the commit hook's 500 KB cap: move some cases to a file of their own"
+    fi
+done
+
+if [ "${check}" = 1 ]; then
+    stale=()
+    for file in "${_regen_tmp}"/Templates/*.md; do
+        cmp -s -- "${file}" "${templates}/${file##*/}" || stale+=("src/Credfeto.Orchestrator.Prompts/Templates/${file##*/}")
+    done
+    for file in "${templates}"/*.md; do
+        [ -e "${file}" ] || continue
+        [ -e "${_regen_tmp}/Templates/${file##*/}" ] \
+            || stale+=("src/Credfeto.Orchestrator.Prompts/Templates/${file##*/} (no longer generated)")
+    done
+    for fixture in prompts-parity.json prompts-pr-parity.json; do
+        cmp -s -- "${_regen_tmp}/fixtures/${fixture}" "${fixtures}/${fixture}" || stale+=("test/fixtures/${fixture}")
+    done
+    if [ "${#stale[@]}" -gt 0 ]; then
+        printf 'out of date with lib/prompts: %s\n' "${stale[@]}"
+        printf 'Run scripts/prompts/regenerate and commit the files it changes.\n'
+        exit 1
+    fi
+    exit 0
+fi
+
+mkdir -p -- "${templates}" || exit 1
+rm -f -- "${templates}"/*.md
+cp -- "${_regen_tmp}"/Templates/*.md "${templates}/" || _regen_fail "cannot write the templates"
+cp -- "${_regen_tmp}/fixtures/prompts-parity.json" "${_regen_tmp}/fixtures/prompts-pr-parity.json" "${fixtures}/" \
+    || _regen_fail "cannot write the fixtures"
+printf 'regenerated %d templates and 2 fixtures from lib/prompts; review and commit what changed (git status)\n' \
+    "$(find "${_regen_tmp}/Templates" -name '*.md' | wc -l)"
