@@ -1,104 +1,104 @@
 using System.Collections.Generic;
-using System.IO;
-using System.Text;
-using System.Text.Encodings.Web;
-using System.Text.Json;
+using System.Linq;
 using Credfeto.Orchestrator.GitHub;
+using Credfeto.Orchestrator.Jq;
 
 namespace Credfeto.Orchestrator.Commands;
 
 // Writes the JSON reads as jq -c prints the shell version's normalised gh output: compact, keys in the shell's order,
-// and text unescaped apart from what JSON requires, followed by a newline
+// and text escaped exactly as jq escapes it (control characters as \u00xx, everything else as itself), followed by a
+// newline
 public static class GitHubJsonOutput
 {
-    private static readonly JsonWriterOptions Options = new()
-    {
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-        Indented = false,
-    };
-
     // [{"number":N,"author":{"login":L},"closingIssuesReferences":[{"number":M}],"headRefName":H}]
     public static string OpenPullRequests(IReadOnlyList<OpenPullRequestReferences> pullRequests)
     {
-        using MemoryStream buffer = new();
-
-        using (Utf8JsonWriter writer = new(utf8Json: buffer, options: Options))
-        {
-            writer.WriteStartArray();
-
-            foreach (OpenPullRequestReferences pullRequest in pullRequests)
-            {
-                WriteOpenPullRequest(writer: writer, pullRequest: pullRequest);
-            }
-
-            writer.WriteEndArray();
-        }
-
-        return Text(buffer);
+        return Text(JqValue.FromArray([.. pullRequests.Select(OpenPullRequest)]));
     }
 
-    private static void WriteOpenPullRequest(Utf8JsonWriter writer, OpenPullRequestReferences pullRequest)
+    private static JqValue OpenPullRequest(OpenPullRequestReferences pullRequest)
     {
-        writer.WriteStartObject();
-        writer.WriteNumber(propertyName: "number", value: pullRequest.Number);
-        writer.WriteStartObject("author");
-        writer.WriteString(propertyName: "login", value: pullRequest.Author);
-        writer.WriteEndObject();
-        writer.WriteStartArray("closingIssuesReferences");
+        return JqValue.FromObject([
+            new(Name: "number", Value: JqValue.FromInteger(pullRequest.Number)),
+            new(Name: "author", Value: Login(pullRequest.Author)),
+            new(
+                Name: "closingIssuesReferences",
+                Value: JqValue.FromArray([.. pullRequest.ClosingIssues.Select(IssueNumber)])
+            ),
+            new(Name: "headRefName", Value: JqValue.FromString(pullRequest.Head)),
+        ]);
+    }
 
-        foreach (int issue in pullRequest.ClosingIssues)
-        {
-            writer.WriteStartObject();
-            writer.WriteNumber(propertyName: "number", value: issue);
-            writer.WriteEndObject();
-        }
-
-        writer.WriteEndArray();
-        writer.WriteString(propertyName: "headRefName", value: pullRequest.Head);
-        writer.WriteEndObject();
+    private static JqValue IssueNumber(int issue)
+    {
+        return JqValue.FromObject([new(Name: "number", Value: JqValue.FromInteger(issue))]);
     }
 
     // {"commits":[{"authors":[{"login":L,"email":E}]}]}
     public static string Commits(IReadOnlyList<PullRequestCommit> commits)
     {
-        using MemoryStream buffer = new();
-
-        using (Utf8JsonWriter writer = new(utf8Json: buffer, options: Options))
-        {
-            writer.WriteStartObject();
-            writer.WriteStartArray("commits");
-
-            foreach (PullRequestCommit commit in commits)
-            {
-                WriteCommit(writer: writer, commit: commit);
-            }
-
-            writer.WriteEndArray();
-            writer.WriteEndObject();
-        }
-
-        return Text(buffer);
+        return Text(JqValue.FromObject([new(Name: "commits", Value: JqValue.FromArray([.. commits.Select(Commit)]))]));
     }
 
-    private static void WriteCommit(Utf8JsonWriter writer, PullRequestCommit commit)
+    private static JqValue Commit(PullRequestCommit commit)
     {
-        writer.WriteStartObject();
-        writer.WriteStartArray("authors");
-
-        foreach (CommitAuthor author in commit.Authors)
-        {
-            writer.WriteStartObject();
-            writer.WriteString(propertyName: "login", value: author.Login);
-            writer.WriteString(propertyName: "email", value: author.Email);
-            writer.WriteEndObject();
-        }
-
-        writer.WriteEndArray();
-        writer.WriteEndObject();
+        return JqValue.FromObject([new(Name: "authors", Value: JqValue.FromArray([.. commit.Authors.Select(Author)]))]);
     }
 
-    private static string Text(MemoryStream buffer)
+    private static JqValue Author(CommitAuthor author)
     {
-        return Encoding.UTF8.GetString(buffer.ToArray()) + "\n";
+        return JqValue.FromObject([
+            new(Name: "login", Value: JqValue.FromString(author.Login)),
+            new(Name: "email", Value: JqValue.FromString(author.Email)),
+        ]);
+    }
+
+    // [{"user":{"login":L}|null,"path":P,"body":B,"updated_at":T}], the REST field names fetch_pr_review_comments'
+    // callers read
+    public static string ReviewComments(IReadOnlyList<PullRequestReviewComment> comments)
+    {
+        return Text(JqValue.FromArray([.. comments.Select(ReviewComment)]));
+    }
+
+    private static JqValue ReviewComment(PullRequestReviewComment comment)
+    {
+        return JqValue.FromObject([
+            new(Name: "user", Value: User(comment.Login)),
+            new(Name: "path", Value: JqValue.FromString(comment.Path)),
+            new(Name: "body", Value: JqValue.FromString(comment.Body)),
+            new(Name: "updated_at", Value: JqValue.FromString(comment.UpdatedAt)),
+        ]);
+    }
+
+    // [{"user":{"login":L}|null,"body":B,"created_at":C,"updated_at":T}], the REST field names
+    // fetch_pr_issue_comments' callers read
+    public static string IssueComments(IReadOnlyList<PullRequestComment> comments)
+    {
+        return Text(JqValue.FromArray([.. comments.Select(IssueComment)]));
+    }
+
+    private static JqValue IssueComment(PullRequestComment comment)
+    {
+        return JqValue.FromObject([
+            new(Name: "user", Value: User(comment.Login)),
+            new(Name: "body", Value: JqValue.FromString(comment.Body)),
+            new(Name: "created_at", Value: JqValue.FromString(comment.CreatedAt)),
+            new(Name: "updated_at", Value: JqValue.FromString(comment.UpdatedAt)),
+        ]);
+    }
+
+    private static JqValue User(string? login)
+    {
+        return login is null ? JqValue.Null : Login(login);
+    }
+
+    private static JqValue Login(string login)
+    {
+        return JqValue.FromObject([new(Name: "login", Value: JqValue.FromString(login))]);
+    }
+
+    private static string Text(JqValue value)
+    {
+        return JqFormatter.ToJson(value) + "\n";
     }
 }

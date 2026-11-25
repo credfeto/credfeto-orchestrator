@@ -12,6 +12,7 @@ namespace Credfeto.Orchestrator.Commands;
 // github open-prs-closing-issues --repo <owner/repo>
 // github pr-commit-authors --repo <owner/repo> --pr <number>
 // github branch-behind-by --repo <owner/repo> --base <branch> --head <branch>
+// github pr-review-comments|pr-issue-comments|pr-closing-issues|closing-issue-labels --repo <owner/repo> --pr <number>
 public static class GitHubCommandParser
 {
     public const string Verb = "github";
@@ -27,7 +28,8 @@ public static class GitHubCommandParser
 
     private const string READS =
         "open-prs, open-pr-count, branch-requires-status-checks, own-open-prs, whoami, open-prs-closing-issues, "
-        + "pr-commit-authors or branch-behind-by";
+        + "pr-commit-authors, branch-behind-by, pr-review-comments, pr-issue-comments, pr-closing-issues or "
+        + "closing-issue-labels";
 
     public static GitHubCommand? Parse(IReadOnlyList<string> args, out string error)
     {
@@ -64,6 +66,10 @@ public static class GitHubCommandParser
             "open-prs-closing-issues" => GitHubRead.OPEN_PULL_REQUESTS_WITH_CLOSING_ISSUES,
             "pr-commit-authors" => GitHubRead.PULL_REQUEST_COMMIT_AUTHORS,
             "branch-behind-by" => GitHubRead.BRANCH_BEHIND_BY,
+            "pr-review-comments" => GitHubRead.PULL_REQUEST_REVIEW_COMMENTS,
+            "pr-issue-comments" => GitHubRead.PULL_REQUEST_ISSUE_COMMENTS,
+            "pr-closing-issues" => GitHubRead.PULL_REQUEST_CLOSING_ISSUES,
+            "closing-issue-labels" => GitHubRead.CLOSING_ISSUE_LABELS,
             _ => null,
         };
     }
@@ -76,7 +82,11 @@ public static class GitHubCommandParser
             GitHubRead.OWN_OPEN_PULL_REQUESTS => [REPO, ME, CREATOR, INCLUDE_BLOCKED],
             GitHubRead.CURRENT_LOGIN => [],
             GitHubRead.OPEN_PULL_REQUESTS_WITH_CLOSING_ISSUES => [REPO],
-            GitHubRead.PULL_REQUEST_COMMIT_AUTHORS => [REPO, PR],
+            GitHubRead.PULL_REQUEST_COMMIT_AUTHORS
+            or GitHubRead.PULL_REQUEST_REVIEW_COMMENTS
+            or GitHubRead.PULL_REQUEST_ISSUE_COMMENTS
+            or GitHubRead.PULL_REQUEST_CLOSING_ISSUES
+            or GitHubRead.CLOSING_ISSUE_LABELS => [REPO, PR],
             GitHubRead.BRANCH_BEHIND_BY => [REPO, BASE, HEAD],
             _ => [REPO, HEAD],
         };
@@ -148,7 +158,12 @@ public static class GitHubCommandParser
                 Repository: repository,
                 Name: string.Empty
             ),
-            GitHubRead.PULL_REQUEST_COMMIT_AUTHORS => Commits(
+            GitHubRead.PULL_REQUEST_COMMIT_AUTHORS
+            or GitHubRead.PULL_REQUEST_REVIEW_COMMENTS
+            or GitHubRead.PULL_REQUEST_ISSUE_COMMENTS
+            or GitHubRead.PULL_REQUEST_CLOSING_ISSUES
+            or GitHubRead.CLOSING_ISSUE_LABELS => PullRequestNumbered(
+                read: read,
                 repository: repository,
                 options: options,
                 error: out error
@@ -200,7 +215,12 @@ public static class GitHubCommandParser
             );
     }
 
-    private static GitHubCommand? Commits(string repository, Dictionary<string, string> options, out string error)
+    private static GitHubCommand? PullRequestNumbered(
+        GitHubRead read,
+        string repository,
+        Dictionary<string, string> options,
+        out string error
+    )
     {
         string? value = Required(options: options, option: PR, error: out error);
 
@@ -218,7 +238,7 @@ public static class GitHubCommandParser
         }
 
         return new(
-            Read: GitHubRead.PULL_REQUEST_COMMIT_AUTHORS,
+            Read: read,
             Repository: repository,
             Name: string.Empty,
             PullRequest: int.Parse(s: value, provider: CultureInfo.InvariantCulture)
