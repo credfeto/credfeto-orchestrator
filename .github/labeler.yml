@@ -54,6 +54,10 @@
   - any: ['src/Credfeto.Orchestrator.Prompts/**/*']
 "credfeto-orchestrator-prompts-tests":
   - any: ['src/Credfeto.Orchestrator.Prompts.Tests/**/*']
+"credfeto-orchestrator-state":
+  - any: ['src/Credfeto.Orchestrator.State/**/*']
+"credfeto-orchestrator-state-tests":
+  - any: ['src/Credfeto.Orchestrator.State.Tests/**/*']
 "dotnet":
   - any: ['src/**/*.csproj']
 "Editorconfig":

@@ -128,6 +128,14 @@
   color: "0e8a16"
   description: "Changes in Credfeto.Orchestrator.Prompts.Tests project"
 
+- name: "credfeto-orchestrator-state"
+  color: "96f7d2"
+  description: "Changes in Credfeto.Orchestrator.State project"
+
+- name: "credfeto-orchestrator-state-tests"
+  color: "0e8a16"
+  description: "Changes in Credfeto.Orchestrator.State.Tests project"
+
 - name: "dependencies"
   color: "0366d6"
   description: "Updates to dependencies"
