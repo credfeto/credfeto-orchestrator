@@ -161,6 +161,130 @@ public sealed class GitHubCommandRunnerTests : TestBase
         Assert.Equal(expected: new(ExitCode: ExitCodes.Success, Output: "14\n", Error: string.Empty), actual: result);
     }
 
+    private const string COMMENTS = """
+        {"pr":"org/repo#7","reviewDecision":"","reviews":[],"summary":{},
+         "comments":[
+           {"id":"12","author":"app/prpixie","createdAt":"2026-11-01T10:00:00Z","updatedAt":"2026-11-01T10:00:00Z",
+            "body":"Summary \u001b \ud83e\udd16\n"},
+           {"id":"9","author":"","createdAt":"2026-11-01T09:00:00Z","updatedAt":"2026-11-01T09:30:00Z","body":"Gone"}
+         ],
+         "threads":[
+           {"path":"src/a.cs","comments":[
+             {"id":"30","author":"owner","createdAt":"2026-11-01T10:00:00Z","updatedAt":"2026-11-02T10:00:00Z","body":"x"},
+             {"id":"41","author":"mannequin/old","createdAt":"2026-11-01T10:00:00Z","updatedAt":"2026-11-01T10:00:00Z",
+              "body":"y"}
+           ]},
+           {"path":"lib/b","comments":[
+             {"id":"35","author":"reviewer","createdAt":"2026-11-01T10:00:00Z","updatedAt":"2026-11-01T10:00:00Z",
+              "body":"z"}
+           ]}
+         ]}
+        """;
+
+    [Fact]
+    public async Task ReviewCommentsArePrintedAsOneLineOfRestShapedJsonInIdOrderAsync()
+    {
+        Result result = await RunAsync(
+            tools: new(result: COMMENTS, error: null),
+            args: ["github", "pr-review-comments", "--repo", "org/repo", "--pr", "7"],
+            cancellationToken: this.CancellationToken()
+        );
+
+        Assert.Equal(
+            expected: new(
+                ExitCode: ExitCodes.Success,
+                Output: "[{\"user\":{\"login\":\"owner\"},\"path\":\"src/a.cs\",\"body\":\"x\","
+                    + "\"updated_at\":\"2026-11-02T10:00:00Z\"},"
+                    + "{\"user\":{\"login\":\"reviewer\"},\"path\":\"lib/b\",\"body\":\"z\","
+                    + "\"updated_at\":\"2026-11-01T10:00:00Z\"},"
+                    + "{\"user\":{\"login\":\"old\"},\"path\":\"src/a.cs\",\"body\":\"y\","
+                    + "\"updated_at\":\"2026-11-01T10:00:00Z\"}]\n",
+                Error: string.Empty
+            ),
+            actual: result
+        );
+    }
+
+    [Fact]
+    public async Task IssueCommentsArePrintedAsOneLineOfRestShapedJsonEscapedAsJqEscapesAsync()
+    {
+        Result result = await RunAsync(
+            tools: new(result: COMMENTS, error: null),
+            args: ["github", "pr-issue-comments", "--repo", "org/repo", "--pr", "7"],
+            cancellationToken: this.CancellationToken()
+        );
+
+        Assert.Equal(
+            expected: new(
+                ExitCode: ExitCodes.Success,
+                Output: "[{\"user\":null,\"body\":\"Gone\",\"created_at\":\"2026-11-01T09:00:00Z\","
+                    + "\"updated_at\":\"2026-11-01T09:30:00Z\"},"
+                    + "{\"user\":{\"login\":\"prpixie[bot]\"},\"body\":\"Summary \\u001b \U0001F916\\n\","
+                    + "\"created_at\":\"2026-11-01T10:00:00Z\",\"updated_at\":\"2026-11-01T10:00:00Z\"}]\n",
+                Error: string.Empty
+            ),
+            actual: result
+        );
+    }
+
+    [Fact]
+    public async Task ClosingIssuesArePrintedOneALineInTheServersOrderAsync()
+    {
+        Result result = await RunAsync(
+            tools: new(
+                result: """
+                {"pr":"org/repo#7","closingIssues":[{"repository":"org/repo","number":12},
+                 {"repository":"org/other","number":3}]}
+                """,
+                error: null
+            ),
+            args: ["github", "pr-closing-issues", "--repo", "org/repo", "--pr", "7"],
+            cancellationToken: this.CancellationToken()
+        );
+
+        Assert.Equal(
+            expected: new(ExitCode: ExitCodes.Success, Output: "12\n3\n", Error: string.Empty),
+            actual: result
+        );
+    }
+
+    [Fact]
+    public async Task ClosingIssueLabelsArePrintedOnceEachInCodePointOrderAsync()
+    {
+        Result result = await RunAsync(
+            tools: new(
+                result: """{"labels":["\uff01wide","\ud83d\ude00 smile","bug","Bug","bug"],"complete":true,"failedReferences":[]}""",
+                error: null
+            ),
+            args: ["github", "closing-issue-labels", "--repo", "org/repo", "--pr", "7"],
+            cancellationToken: this.CancellationToken()
+        );
+
+        Assert.Equal(
+            expected: new(
+                ExitCode: ExitCodes.Success,
+                Output: "Bug\nbug\n\uff01wide\n\U0001F600 smile\n",
+                Error: string.Empty
+            ),
+            actual: result
+        );
+    }
+
+    [Fact]
+    public async Task NoClosingIssueLabelsPrintNothingAsync()
+    {
+        Result result = await RunAsync(
+            tools: new(result: """{"labels":[],"complete":false,"failedReferences":["org/repo#5"]}""", error: null),
+            args: ["github", "closing-issue-labels", "--repo", "org/repo", "--pr", "7"],
+            cancellationToken: this.CancellationToken()
+        );
+
+        Assert.Equal(
+            expected: new(ExitCode: ExitCodes.Success, Output: string.Empty, Error: string.Empty),
+            actual: result
+        );
+    }
+
     [Fact]
     public async Task AFailedReadExitsOneWithItsMessageAsync()
     {

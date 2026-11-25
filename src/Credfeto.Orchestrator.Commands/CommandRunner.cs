@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Credfeto.Orchestrator.Fingerprints;
 using Credfeto.Orchestrator.GitHub;
+using Credfeto.Orchestrator.Jq;
 
 namespace Credfeto.Orchestrator.Commands;
 
@@ -25,6 +26,8 @@ public sealed class CommandRunner
                credfeto-orchestrator github open-prs-closing-issues --repo <owner/repo>
                credfeto-orchestrator github pr-commit-authors --repo <owner/repo> --pr <number>
                credfeto-orchestrator github branch-behind-by --repo <owner/repo> --base <branch> --head <branch>
+               credfeto-orchestrator github pr-review-comments|pr-issue-comments --repo <owner/repo> --pr <number>
+               credfeto-orchestrator github pr-closing-issues|closing-issue-labels --repo <owner/repo> --pr <number>
 
         fingerprint reads the pull request or issue JSON on stdin and prints its fingerprint, exactly
         as fingerprint_pr_json / fingerprint_issue_json in lib/fingerprints do.
@@ -38,7 +41,11 @@ public sealed class CommandRunner
         authenticates as; open-prs-closing-issues every open pull request's number, author login, closing
         issue numbers and head branch, newest first, as one line of JSON; pr-commit-authors the login and
         email of each commit author, as one line of JSON; branch-behind-by how many commits --head is
-        behind --base.
+        behind --base; pr-review-comments and pr-issue-comments the pull request's inline review
+        comments and top-level comments with the REST fields the shell reads, in id order, as one line
+        of JSON; pr-closing-issues the numbers of the issues the pull request closes, one a line;
+        closing-issue-labels the labels of those issues, leaving out Blocked, On Hold and On-Hold,
+        sorted, one a line.
 
         Exit codes: 0 printed; 1 the fingerprint could not be computed or the read failed; 2 a usage
         error.
@@ -180,6 +187,16 @@ public sealed class CommandRunner
                 command: command,
                 cancellationToken: cancellationToken
             ),
+            GitHubRead.PULL_REQUEST_REVIEW_COMMENTS or GitHubRead.PULL_REQUEST_ISSUE_COMMENTS =>
+                this.PullRequestCommentsAsync(command: command, cancellationToken: cancellationToken),
+            GitHubRead.PULL_REQUEST_CLOSING_ISSUES => this.PullRequestClosingIssuesAsync(
+                command: command,
+                cancellationToken: cancellationToken
+            ),
+            GitHubRead.CLOSING_ISSUE_LABELS => this.ClosingIssueLabelsAsync(
+                command: command,
+                cancellationToken: cancellationToken
+            ),
             _ => this.OpenPullRequestsOnHeadAsync(command: command, cancellationToken: cancellationToken),
         };
     }
@@ -272,6 +289,47 @@ public sealed class CommandRunner
         );
 
         return Line(behindBy);
+    }
+
+    private async ValueTask<string> PullRequestCommentsAsync(GitHubCommand command, CancellationToken cancellationToken)
+    {
+        PullRequestComments comments = await this._github.PullRequestCommentsAsync(
+            repository: command.Repository,
+            pullRequest: command.PullRequest,
+            cancellationToken: cancellationToken
+        );
+
+        return command.Read == GitHubRead.PULL_REQUEST_REVIEW_COMMENTS
+            ? GitHubJsonOutput.ReviewComments(comments.ReviewComments)
+            : GitHubJsonOutput.IssueComments(comments.Comments);
+    }
+
+    private async ValueTask<string> PullRequestClosingIssuesAsync(
+        GitHubCommand command,
+        CancellationToken cancellationToken
+    )
+    {
+        IReadOnlyList<int> issues = await this._github.PullRequestClosingIssuesAsync(
+            repository: command.Repository,
+            pullRequest: command.PullRequest,
+            cancellationToken: cancellationToken
+        );
+
+        return string.Concat(issues.Select(Line));
+    }
+
+    // Sorted and unique as jq's unique leaves the shell version's list: by code point
+    private async ValueTask<string> ClosingIssueLabelsAsync(GitHubCommand command, CancellationToken cancellationToken)
+    {
+        IReadOnlyList<string> labels = await this._github.ClosingIssueLabelsAsync(
+            repository: command.Repository,
+            pullRequest: command.PullRequest,
+            cancellationToken: cancellationToken
+        );
+
+        return string.Concat(
+            labels.Distinct(StringComparer.Ordinal).Order(JqStringComparer.Instance).Select(label => label + "\n")
+        );
     }
 
     private static string Line(int value)
