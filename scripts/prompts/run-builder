@@ -1,0 +1,33 @@
+#!/bin/bash
+# run-builder <kind>: reads a prompt parity case's name=value records (each ended by a NUL byte) on stdin and prints
+# exactly what its lib/prompts builder prints, with ORCHESTRATOR_DOTNET_PROMPTS off, through the same mapping as
+# test/oneshot-prompts-parity.bats (test/prompts_parity_helper.bash).
+# run-builder check-length <locale> <max>: reads a prompt as base64 on stdin and prints what prompt_exceeds_max_chars
+# prints for it with LC_ALL=<locale> and MAX_PROMPT_CHARS=<max> (the length), then rc=<its status>.
+# Used by scripts/prompts/generate-fixtures, which runs it in an empty environment.
+
+_run_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)" || exit 1
+BASEDIR="${_run_root}"
+# shellcheck source=lib/globals
+source "${_run_root}/lib/globals"
+# shellcheck source=lib/core
+source "${_run_root}/lib/core"
+# shellcheck source=lib/prompts
+source "${_run_root}/lib/prompts"
+# shellcheck source=test/prompts_parity_helper.bash
+source "${_run_root}/test/prompts_parity_helper.bash"
+ORCHESTRATOR_DOTNET_PROMPTS=0
+
+if [ "$1" = check-length ]; then
+    export LC_ALL="$2"
+    # shellcheck disable=SC2034  # read by prompt_exceeds_max_chars
+    MAX_PROMPT_CHARS="$3"
+    prompt=$(
+        base64 -d
+        printf x
+    )
+    prompt_exceeds_max_chars "${prompt%x}"
+    printf 'rc=%s\n' "$?"
+    exit 0
+fi
+_prompt_parity_call "$1"

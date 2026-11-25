@@ -1,0 +1,5 @@
+<!-- markdownlint-disable-file -->
+  - Otherwise, judge convergence yourself from the PR's history of prior {{review_label}} comments: are this round's findings substantively new/distinct, or substantially a repeat of findings already reported (and left unresolved, or fixed and now recurring) in an earlier round?
+{{round_cap_line}}
+    - Otherwise, if substantially repeating a prior round (you are not finding anything new; not converging) AND at least {{min_rounds}} {{review_label}} rounds (judge from the PR's history of {{review_label}} comments, counting this round) have now run: post a PR comment summarising the unresolved findings and stating that {{review_noun}} is not converging, advance the board to "{{next_status}}"{{board_next_status}}, post a one-line status comment, then STOP. Do NOT add the Blocked label; {{downstream_note}}
+    - Otherwise (either substantially new, or a repeat but fewer than {{min_rounds}} rounds have run so far, so one failed fix attempt is not yet enough evidence to give up; and the round cap has not been reached): {{fix_step}}

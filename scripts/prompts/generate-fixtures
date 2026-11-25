@@ -1,0 +1,226 @@
+#!/bin/bash
+# generate-fixtures <dir>: writes the prompt parity fixtures (#252), prompts-parity.json and prompts-pr-parity.json, to
+# <dir> by running every case below through its lib/prompts builder (scripts/prompts/run-builder, switch off) and
+# keeping exactly what it prints. Run it through scripts/prompts/regenerate.
+#
+# The pull request CLAUDE.md cases have a file of their own, so each file stays under the commit hook's 500 KB cap.
+# To add a case, add a line below and regenerate; a new kind of input also needs the matching record in
+# test/prompts_parity_helper.bash and in lib/prompts' _prompt_with_orchestrator_cmd call.
+
+if [ "$#" -ne 1 ] || [ -z "$1" ]; then
+    printf 'usage: %s <output directory>\n' "${0##*/}" >&2
+    exit 2
+fi
+
+_gen_out="$1"
+_gen_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)" || exit 1
+_gen_tmp="$(mktemp -d)" || exit 1
+trap 'rm -rf -- "${_gen_tmp}"' EXIT
+mkdir -p -- "${_gen_out}" || exit 1
+
+_gen_fail() {
+    printf 'generate-fixtures: %s\n' "$1" >&2
+    exit 1
+}
+
+# Runs scripts/prompts/run-builder in an empty environment, so nothing of the caller's reaches the builders
+_gen_run_builder() {
+    env -i PATH="${PATH}" LANG=C.UTF-8 bash "${_gen_root}/scripts/prompts/run-builder" "$@"
+}
+
+# The lib/globals values the cases pass on as they are
+# shellcheck disable=SC2016  # the inner script expands its own variables
+mapfile -d '' -t _gen_globals < <(
+    env -i PATH="${PATH}" bash -c 'BASEDIR="$1"; source "$1/lib/globals" &&
+        printf "%s\0" "${ROUND_MARKER_SIMPLIFY}" "${ROUND_MARKER_CODE_REVIEW}" "${ROUND_MARKER_SECURITY_REVIEW}" \
+            "${ROUND_MARKER_COVERAGE}" "${REVIEW_RESULT_CLEAN_MARKER}" "${REVIEW_RESULT_FINDINGS_MARKER}" \
+            "${PRECHECK_SUMMARY_LINES}" "${PRECHECK_TIMEOUT_MINUTES}"' _ "${_gen_root}"
+)
+[ "${#_gen_globals[@]}" -eq 8 ] || _gen_fail "cannot read the lib/globals values"
+
+# Adds one case to collection $1: kind $2, name $3, tool $4 (builds, or refuses for input the tool must refuse), then
+# its name=value records in order. A later record with the same name replaces the earlier one's value in its place, so
+# a case lists the defaults and then what it changes. wf-status is a JSON array, one record per element.
+_gen_case() {
+    local collection="$1" kind="$2" name="$3" tool="$4" pair key records
+    local -a order=() args=()
+    local -A value=()
+    shift 4
+    for pair in "$@"; do
+        key="${pair%%=*}"
+        [ -n "${value["${key}"]+set}" ] || order+=("${key}")
+        value["${key}"]="${pair#*=}"
+    done
+    for key in "${order[@]}"; do
+        args+=("${key}" "${value["${key}"]}")
+    done
+    records=$(jq -n '[$ARGS.positional as $p | range(0; $p | length; 2)
+        | {key: $p[.], value: (if $p[.] == "wf-status" then ($p[. + 1] | fromjson) else $p[. + 1] end)}]
+        | from_entries' --args "${args[@]}") || _gen_fail "${name}: cannot build its records"
+    # The same records stream test/oneshot-prompts-parity.bats sends
+    printf '%s' "${records}" \
+        | jq -j 'to_entries[] | .key as $k | (.value | if type == "array" then .[] else . end) | "\($k)=\(.)\u0000"' \
+        | _gen_run_builder "${kind}" > "${_gen_tmp}/expected" || _gen_fail "${name}: the builder failed"
+    jq -n --arg name "${name}" --arg kind "${kind}" --arg tool "${tool}" --argjson records "${records}" \
+        --rawfile expected "${_gen_tmp}/expected" \
+        '{name: $name, kind: $kind, tool: $tool, records: $records, expected: $expected}' \
+        >> "${_gen_tmp}/${collection}" || _gen_fail "${name}: cannot write the case"
+}
+
+readonly STATUSES='["Not Started","Planning","Approved","Development","AI Simplify","AI Review","AI Security Review","AI Coverage","Human Review","Complete"]'
+# shellcheck disable=SC2016  # the $HOME and the backticks are part of the text, never expanded
+readonly WEIRD='{{item_id}} %s \n \\ $HOME `x` '$'\xc3\xa9 \xe2\x80\x94 \xe2\x86\x92 \xe2\x80\xa8 \xe2\x98\x83'
+readonly PRECHECK=$'PRE-COMMIT RESULTS for abc123 (pre-commit-check run by the orchestrator):\n- FAILED on abc123. Failing hooks:\n    shellcheck\n      lib/x:3: SC2086'
+
+_gen_issue() {
+    local name="$1" tool="$2"
+    shift 2
+    _gen_case issueClaudeMd issue-claude-md "${name}" "${tool}" repo-full=credfeto/credfeto-orchestrator board=true \
+        "wf-status=${STATUSES}" item=1234 ai-instructions=/workspace/ai-instructions repo-path=/workspace/repo \
+        plan-approved=false 'trusted-logins=["credfeto","steward-warden"]' dirty-branch= stale-branch= \
+        background-stall=false precheck-section= "$@"
+}
+
+_gen_pr() {
+    local name="$1" tool="$2"
+    shift 2
+    _gen_case pullRequestClaudeMd pr-claude-md "${name}" "${tool}" repo-full=credfeto/credfeto-orchestrator board=true \
+        "wf-status=${STATUSES}" "round-marker-simplify=${_gen_globals[0]}" \
+        "round-marker-code-review=${_gen_globals[1]}" "round-marker-security-review=${_gen_globals[2]}" \
+        "round-marker-coverage=${_gen_globals[3]}" "review-result-clean-marker=${_gen_globals[4]}" \
+        "review-result-findings-marker=${_gen_globals[5]}" max-simplify-iterations=10 simplify-thrash-limit=3 \
+        max-code-review-iterations=15 max-security-review-iterations=15 max-coverage-iterations=6 \
+        min-review-convergence-rounds=3 item=2077 ai-instructions=/workspace/ai-instructions merge-state=CLEAN \
+        branch=feat/thing repo-path=/workspace/repo dirty-branch= dependency-pr=false 'trusted-logins=["credfeto"]' \
+        background-stall=false unaddressed-comments= next-phase= precheck-section= dependency-branch=false "$@"
+}
+
+_gen_issue "board, no plan approval, two trusted logins, clean checkout" builds
+_gen_issue "no board, dirty checkout, background stall, pre-check baseline" builds board=false dirty-branch=feat/other \
+    background-stall=true $'precheck-section=PRE-COMMIT BASELINE for main at 0a1b2c:\n- passed' trusted-logins=
+_gen_issue "board, plan approved, trusted null, resumable branch" builds plan-approved=true trusted-logins=null \
+    stale-branch=feat/1234-resume $'precheck-section=baseline line\n\n'
+_gen_issue "no board, plan approved, dirty on its own resumable branch, empty trusted list" builds board=false \
+    plan-approved=true 'trusted-logins=[]' dirty-branch=feat/1234-x stale-branch=feat/1234-x \
+    'wf-status=["Todo","Doing","Done"]'
+_gen_issue "board, dirty elsewhere and a resumable branch, non-string logins, newlines at the ends" builds \
+    dirty-branch=main stale-branch=feat/1234-y 'trusted-logins=[1,"x",null,{"a":1},true,1.50,"line\nbreak"]' \
+    $'ai-instructions=/workspace/ai\n' $'precheck-section=ends with newlines\n\n'
+_gen_issue "no board, trusted logins as an object (the tool refuses)" refuses board=false 'trusted-logins={"a":"b"}'
+_gen_issue "board, trusted logins not JSON (the tool refuses)" refuses 'trusted-logins=['
+_gen_issue "board, a JSON string as trusted logins, no statuses, odd characters" builds 'trusted-logins="me"' \
+    'wf-status=[]' "repo-full=owner/${WEIRD}" "item=9${WEIRD}" "repo-path=/w/${WEIRD}" "dirty-branch=${WEIRD}"
+_gen_issue "board, near-miss true values" builds plan-approved=TRUE background-stall=yes 'trusted-logins= ["a"] '
+_gen_issue "no board, every value empty" builds board=false item= ai-instructions= repo-path= plan-approved= \
+    trusted-logins= background-stall= repo-full= 'wf-status=[]'
+
+_gen_pr "board, clean, full flow, trusted list" builds
+_gen_pr "no board, BEHIND, dependency branch, unaddressed comments, next phase, pre-check, stall" builds board=false \
+    merge-state=BEHIND dependency-branch=true $'unaddressed-comments=> @credfeto: please fix\n\n' \
+    'next-phase=PHASE D (simplify)' "precheck-section=${PRECHECK}" background-stall=true
+_gen_pr "board, DIRTY, dirty on its own branch, trusted null" builds merge-state=DIRTY dirty-branch=feat/thing \
+    trusted-logins=null
+_gen_pr "board, CLEAN, dirty on its own branch, custom markers" builds dirty-branch=feat/thing \
+    round-marker-simplify=S: round-marker-code-review=CR: round-marker-security-review=SR: \
+    'round-marker-coverage= - back' review-result-clean-marker=OK 'review-result-findings-marker=NOT OK'
+_gen_pr "no board, BEHIND, dirty elsewhere, custom budgets" builds board=false merge-state=BEHIND dirty-branch=main \
+    max-simplify-iterations=2 simplify-thrash-limit=1 max-code-review-iterations=4 max-security-review-iterations=5 \
+    max-coverage-iterations=1 min-review-convergence-rounds=9
+_gen_pr "board, UNKNOWN, dirty elsewhere, odd characters" builds merge-state=UNKNOWN "dirty-branch=${WEIRD}" \
+    "branch=feat/${WEIRD}" "repo-path=/w/${WEIRD}" "item=7${WEIRD}" "unaddressed-comments=${WEIRD}" \
+    "next-phase=${WEIRD}" 'trusted-logins=["a","'$'\xc3\xa9\xe2\x80\x94''"]'
+_gen_pr "board, empty merge state, trusted logins as an object (the tool refuses)" refuses merge-state= \
+    'trusted-logins={"x":1}'
+_gen_pr "board, DIRTY, clean checkout, dependency branch, no statuses" builds merge-state=DIRTY dependency-branch=true \
+    'wf-status=[]' trusted-logins=
+_gen_pr "dependency prompt, board" builds dependency-pr=true dependency-branch=true
+_gen_pr "dependency prompt, no board, no trusted logins" builds board=false dependency-pr=true trusted-logins= \
+    merge-state=BEHIND dirty-branch=x
+_gen_pr "dependency prompt, trusted logins not JSON (the tool refuses)" refuses dependency-pr=true 'trusted-logins=[1,'
+
+for kind in issue-launch pr-launch; do
+    _gen_case launchPrompts "${kind}" typical builds repo-full=credfeto/credfeto-orchestrator item=252 \
+        repo-path=/workspace/repo
+    _gen_case launchPrompts "${kind}" "empty values" builds repo-full= item= repo-path=
+    _gen_case launchPrompts "${kind}" "odd characters" builds "repo-full=${WEIRD}" $'item=1\n2' \
+        $'repo-path=/w/\n'"${WEIRD}"$'\n'
+done
+
+for kind in main pr other; do
+    for precheck_status in pass fail timeout error weird; do
+        for log in "" /workspace/tmp/precheck.log; do
+            if [ "${kind}" = other ] && [ -n "${log}" ]; then
+                continue
+            fi
+            summary=$'  hook-a\n    error: x\n'
+            [ "${precheck_status}" = error ] && summary=""
+            error=""
+            if [ "${precheck_status}" = error ] || [ "${precheck_status}" = weird ]; then
+                error="the image could not be pulled"
+            fi
+            _gen_case precheckSections precheck-section "${kind} ${precheck_status}${log:+ with a log}" builds \
+                "precheck-summary-lines=${_gen_globals[6]}" "precheck-timeout-minutes=${_gen_globals[7]}" \
+                "kind=${kind}" sha=0a1b2c3d "status=${precheck_status}" "summary=${summary}" "error=${error}" \
+                "container-log=${log}"
+        done
+    done
+done
+_gen_case precheckSections precheck-section "pr fail, empty summary, odd characters" builds precheck-summary-lines=3 \
+    precheck-timeout-minutes=7 kind=pr "sha=${WEIRD}" status=fail summary= "error=${WEIRD}" "container-log=${WEIRD}"
+
+# check-length: each prompt at its own length (fits) and one under it (one over), as each locale counts it
+length_names=(ascii multibyte empty "invalid bytes" "five and six byte forms" "above U+10FFFF")
+length_bytes=('Work on issue #1 in o/r.\n' '\xc3\xa9\xe2\x80\x94\xe2\x86\x92\xe2\x98\x83\xf0\x9d\x84\x9e' ''
+    'a\xff\xc3(\xe2\x82\xed\xa0\x80b' '\xf8\x88\x80\x80\x80\xfc\x84\x80\x80\x80\x80' '\xf4\x90\x80\x80\xf7\xbf\xbf\xbf')
+for locale in C.UTF-8 C POSIX; do
+    for index in "${!length_names[@]}"; do
+        encoded=$(printf '%b' "${length_bytes[${index}]}" | base64 -w0)
+        probe=$(_gen_run_builder check-length "${locale}" 1000000 <<< "${encoded}") \
+            || _gen_fail "check-length ${length_names[${index}]}: the builder failed"
+        for delta in 0 -1; do
+            max=$((${probe%%$'\n'*} + delta))
+            [ "${max}" -ge 0 ] || continue
+            result=$(_gen_run_builder check-length "${locale}" "${max}" <<< "${encoded}") \
+                || _gen_fail "check-length ${length_names[${index}]}: the builder failed"
+            verdict=fits
+            [ "${delta}" -eq 0 ] || verdict="one over"
+            too_long=false
+            [ "${result#*$'\n'}" = rc=0 ] && too_long=true
+            jq -n --arg name "${locale}, ${length_names[${index}]}, ${verdict}" --arg locale "${locale}" \
+                --arg max "${max}" --arg promptBase64 "${encoded}" --arg length "${result%%$'\n'*}" \
+                --argjson tooLong "${too_long}" \
+                '{name: $name, locale: $locale, max: $max, promptBase64: $promptBase64, length: $length, tooLong: $tooLong}' \
+                >> "${_gen_tmp}/checkLength" || _gen_fail "check-length: cannot write the case"
+        done
+    done
+done
+
+# Writes JSON from stdin to file $1 with every character the JSON linter (eslint no-irregular-whitespace) refuses
+# written as its \u escape: the same JSON value, but a raw U+2028 in a string reads to the linter as a line break.
+# jq already escapes the control characters among them.
+_gen_write_json() {
+    local pair hex bytes script=""
+    # UTF-8 bytes in hex : code point
+    for pair in c285:0085 c2a0:00a0 e19a80:1680 e1a08e:180e e28080:2000 e28081:2001 e28082:2002 e28083:2003 \
+        e28084:2004 e28085:2005 e28086:2006 e28087:2007 e28088:2008 e28089:2009 e2808a:200a e2808b:200b \
+        e280a8:2028 e280a9:2029 e280af:202f e2819f:205f e38080:3000 efbbbf:feff; do
+        hex="${pair%%:*}"
+        bytes=""
+        while [ -n "${hex}" ]; do
+            bytes+="\\x${hex:0:2}"
+            hex="${hex:2}"
+        done
+        script+="s/${bytes}/\\\\u${pair#*:}/g;"
+    done
+    LC_ALL=C sed -e "${script}" > "$1"
+}
+
+for collection in issueClaudeMd pullRequestClaudeMd launchPrompts precheckSections checkLength; do
+    [ -s "${_gen_tmp}/${collection}" ] || _gen_fail "no ${collection} cases"
+done
+jq -n --indent 2 --slurpfile issues "${_gen_tmp}/issueClaudeMd" --slurpfile launch "${_gen_tmp}/launchPrompts" \
+    --slurpfile precheck "${_gen_tmp}/precheckSections" --slurpfile lengths "${_gen_tmp}/checkLength" \
+    '{issueClaudeMd: $issues, launchPrompts: $launch, precheckSections: $precheck, checkLength: $lengths}' \
+    | _gen_write_json "${_gen_out}/prompts-parity.json" || _gen_fail "cannot write prompts-parity.json"
+jq -n --indent 2 --slurpfile prs "${_gen_tmp}/pullRequestClaudeMd" '{pullRequestClaudeMd: $prs}' \
+    | _gen_write_json "${_gen_out}/prompts-pr-parity.json" || _gen_fail "cannot write prompts-pr-parity.json"
