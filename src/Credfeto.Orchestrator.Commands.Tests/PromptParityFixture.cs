@@ -10,7 +10,8 @@ namespace Credfeto.Orchestrator.Commands.Tests;
 
 // test/fixtures/prompts-parity.json and prompts-pr-parity.json, embedded: the golden cases
 // test/oneshot-prompts-parity.bats checks the shell version against. Each case holds the prompt kind, the name=value
-// records lib/prompts sends the tool and what the shell function prints for them
+// records lib/prompts sends the tool and what the shell function prints for them. scripts/prompts/regenerate writes
+// them from lib/prompts
 internal static class PromptParityFixture
 {
     public const string IssueClaudeMd = "issueClaudeMd";

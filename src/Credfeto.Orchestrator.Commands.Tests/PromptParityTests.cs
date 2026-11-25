@@ -7,8 +7,14 @@ using Xunit;
 
 namespace Credfeto.Orchestrator.Commands.Tests;
 
+// The .NET prompts against the golden texts lib/prompts prints. The templates and the fixtures are both generated from
+// lib/prompts by scripts/prompts/regenerate, so a case that fails after a lib/prompts wording change means they were
+// not regenerated: run it and commit what it changes
 public sealed class PromptParityTests : TestBase
 {
+    private const string RegenerateHint =
+        " (when lib/prompts was changed on purpose, run scripts/prompts/regenerate and commit what it changes)";
+
     public static Task<TheoryData<int, string>> IssueClaudeMdCasesAsync()
     {
         return PromptParityFixture.CaseNamesAsync(PromptParityFixture.IssueClaudeMd);
@@ -105,15 +111,18 @@ public sealed class PromptParityTests : TestBase
         if (parity.Refuses)
         {
             Assert.Equal(
-                expected: name + ": refused",
-                actual: name + ": " + (exitCode == ExitCodes.Failure ? "refused" : output)
+                expected: name + RegenerateHint + ": refused",
+                actual: name + RegenerateHint + ": " + (exitCode == ExitCodes.Failure ? "refused" : output)
             );
             Assert.Equal(expected: string.Empty, actual: output);
 
             return;
         }
 
-        Assert.Equal(expected: name + ": " + parity.Expected, actual: name + ": " + output);
+        Assert.Equal(
+            expected: name + RegenerateHint + ": " + parity.Expected,
+            actual: name + RegenerateHint + ": " + output
+        );
         Assert.Equal(expected: ExitCodes.Success, actual: exitCode);
     }
 

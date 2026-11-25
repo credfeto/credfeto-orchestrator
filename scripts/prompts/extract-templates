@@ -1,0 +1,432 @@
+#!/bin/bash
+# extract-templates <dir>: writes the templates of src/Credfeto.Orchestrator.Prompts/Templates (#252) to <dir>, one
+# <Name>.md per text, from the lib/prompts builders of this checkout. Run it through scripts/prompts/regenerate.
+#
+# The templates are never retyped. Each builder is run with {{placeholder}} values for its arguments and globals, and
+# with the helpers it calls replaced by functions that print a {{placeholder}} in their place, so its output is its
+# own heredoc text with named holes. The shared parts (a sentence only some variants carry, a step the checkout
+# branches share) are then cut out of those texts into templates of their own. Each cut checks that the text it cuts
+# around is there exactly once, so a structural change to a builder stops this script with the name of the cut to
+# update instead of writing a wrong template. A wording change needs no edit here.
+
+if [ "$#" -ne 1 ] || [ -z "$1" ]; then
+    printf 'usage: %s <output directory>\n' "${0##*/}" >&2
+    exit 2
+fi
+
+_tpl_out="$1"
+_tpl_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)" || exit 1
+_tpl_raw="$(mktemp -d)" || exit 1
+trap 'rm -rf -- "${_tpl_raw}"' EXIT
+mkdir -p -- "${_tpl_out}" || exit 1
+
+# The first line of every template: the loader strips it, and it keeps markdownlint off text that is not a document
+readonly _TPL_HEADER='<!-- markdownlint-disable-file -->'
+
+BASEDIR="${_tpl_root}"
+# shellcheck source=lib/globals
+source "${_tpl_root}/lib/globals"
+# shellcheck source=lib/prompts
+source "${_tpl_root}/lib/prompts"
+
+# shellcheck disable=SC2034  # read by the sourced lib/prompts builders
+{
+    REPO_FULL='{{repo_full}}'
+    ROUND_MARKER_SIMPLIFY='{{round_marker_simplify}}'
+    ROUND_MARKER_CODE_REVIEW='{{round_marker_code_review}}'
+    ROUND_MARKER_SECURITY_REVIEW='{{round_marker_security_review}}'
+    ROUND_MARKER_COVERAGE='{{round_marker_coverage}}'
+    REVIEW_RESULT_CLEAN_MARKER='{{review_result_clean_marker}}'
+    REVIEW_RESULT_FINDINGS_MARKER='{{review_result_findings_marker}}'
+    MAX_SIMPLIFY_ITERATIONS='{{max_simplify_iterations}}'
+    SIMPLIFY_THRASH_LIMIT='{{simplify_thrash_limit}}'
+    MAX_CODE_REVIEW_ITERATIONS='{{max_code_review_iterations}}'
+    MAX_SECURITY_REVIEW_ITERATIONS='{{max_security_review_iterations}}'
+    MAX_COVERAGE_ITERATIONS='{{max_coverage_iterations}}'
+    MIN_REVIEW_CONVERGENCE_ROUNDS='{{min_review_convergence_rounds}}'
+    PRECHECK_SUMMARY_LINES='{{precheck_summary_lines}}'
+    PRECHECK_TIMEOUT_MINUTES='{{precheck_timeout_minutes}}'
+    _WF_PROJECT_ID=x
+}
+
+_tpl_fail() {
+    printf 'extract-templates: %s\n' "$1" >&2
+    exit 1
+}
+
+# Runs a builder and keeps what $(...) would capture from it (its text without trailing newlines) as raw text <name>
+_tpl_emit() {
+    local name="$1" text
+    shift
+    text=$(
+        "$@"
+        printf x
+    )
+    text="${text%x}"
+    while [[ "${text}" == *$'\n' ]]; do
+        text="${text%$'\n'}"
+    done
+    printf '%s' "${text}" > "${_tpl_raw}/${name}"
+}
+
+# Saves an argument a builder passes on, for a template of its own
+_tpl_keep() {
+    printf '%s' "$2" > "${_tpl_raw}/$1"
+}
+
+_tpl_ph() {
+    printf '{{%s}}' "$1"
+}
+
+# Sets _tpl_r to raw text <name> without its trailing newlines
+_tpl_read() {
+    [ -f "${_tpl_raw}/$1" ] || _tpl_fail "no raw text $1"
+    _tpl_r=$(
+        cat -- "${_tpl_raw}/$1"
+        printf x
+    )
+    _tpl_r="${_tpl_r%x}"
+    while [[ "${_tpl_r}" == *$'\n' ]]; do
+        _tpl_r="${_tpl_r%$'\n'}"
+    done
+}
+
+# Writes template <name> with text $2, which must not end in a newline or have a line that ends in a space
+_tpl_write() {
+    local name="$1" text="$2"
+    [[ "${text}" != *$'\n' ]] || _tpl_fail "${name} ends in a newline"
+    [[ "${text}" != *$' \n'* ]] && [[ "${text}" != *' ' ]] || _tpl_fail "${name} has a line that ends in a space"
+    printf '%s\n%s\n' "${_TPL_HEADER}" "${text}" > "${_tpl_out}/${name}.md" || _tpl_fail "cannot write ${name}.md"
+}
+
+# Sets _tpl_r to $1 with its one occurrence of $2 replaced by $3; fails when $2 is not there exactly once
+_tpl_once() {
+    local text="$1" old="$2" new="$3" rest
+    [[ "${text}" == *"${old}"* ]] || _tpl_fail "${4:-cut}: '${old:0:60}' not found"
+    rest="${text#*"${old}"}"
+    [[ "${rest}" != *"${old}"* ]] || _tpl_fail "${4:-cut}: '${old:0:60}' found more than once"
+    _tpl_r="${text%%"${old}"*}${new}${rest}"
+}
+
+# Sets _tpl_r to the text of $1 between the first $2 and the next $3 after it
+_tpl_between() {
+    local text="$1" start="$2" end="$3" after
+    [[ "${text}" == *"${start}"* ]] || _tpl_fail "${4:-cut}: '${start:0:60}' not found"
+    after="${text#*"${start}"}"
+    [[ "${after}" == *"${end}"* ]] || _tpl_fail "${4:-cut}: '${end:0:60}' not found after '${start:0:60}'"
+    _tpl_r="${after%%"${end}"*}"
+}
+
+# --- run the builders
+
+# The functions defined in the subshells below replace lib/prompts helpers, so they are called by the builders
+# shellcheck disable=SC2329
+{
+    _tpl_emit BoardSetCommand _board_set_cmd '{{item_kind}}' '{{item_id}}' '{{status}}'
+    (
+        _board_set_cmd() { _tpl_ph board_set_command; }
+        _tpl_emit BoardSetClause _board_set_clause
+    )
+    (
+        _board_set_cmd() { _tpl_ph board_set_command; }
+        _WF_STATUS_ORDER=('{{statuses}}')
+        _tpl_emit WorkflowBoardSection _build_wf_section '{{item_kind}}' '{{item_id}}'
+        _tpl_emit PermissionDenialRuleWithBoard _build_permission_denial_rule '{{item_kind}}' '{{item_id}}'
+    )
+    (
+        _WF_PROJECT_ID=""
+        _tpl_emit PermissionDenialRule _build_permission_denial_rule '{{item_kind}}' '{{item_id}}'
+        _tpl_emit PlanApprovalCheckComment _build_plan_approval_check '{{item_id}}' false
+        _tpl_emit PlanApprovalInstructionComment _build_plan_approval_instruction
+    )
+    _tpl_emit GitSsh _build_git_ssh_section
+    _tpl_emit ScratchDirNote _build_scratch_dir_note
+    _tpl_emit ContainerVsGitHubNote _build_container_vs_github_note
+    _tpl_emit BackgroundStallWarning _build_background_stall_warning true
+    _tpl_emit BackgroundCommandsRule _build_background_commands_rule
+    _tpl_emit TrustedCommentersSection _build_trusted_commenters_section '[]'
+
+    # Issue helpers and the issue CLAUDE.md
+    _tpl_emit PlanApprovalCheckApproved _build_plan_approval_check '{{item_id}}' true
+    _tpl_emit PlanApprovalCheckBoard _build_plan_approval_check '{{item_id}}' false
+    _tpl_emit PlanApprovalInstructionBoard _build_plan_approval_instruction
+    _tpl_emit IssueDirtyOwnBranch _build_issue_dirty_branch_section '{{dirty_branch}}' '{{repo_path}}' '{{dirty_branch}}'
+    _tpl_emit IssueDirtyBranch _build_issue_dirty_branch_section '{{dirty_branch}}' '{{repo_path}}' ''
+    _tpl_emit IssueStaleBranch _build_issue_stale_branch_section '{{stale_branch}}' '{{repo_path}}' ''
+    (
+        _board_set_clause() { _tpl_ph board_development; }
+        _tpl_emit IssueBranchStepResume _build_issue_branch_step '{{item_id}}' '{{repo_path}}' '{{stale_branch}}'
+        _tpl_emit IssueBranchStepNew _build_issue_branch_step '{{item_id}}' '{{repo_path}}' ''
+    )
+    (
+        _build_trusted_commenters_section() { _tpl_ph trusted_commenters; }
+        _build_git_ssh_section() { _tpl_ph git_ssh; }
+        _build_scratch_dir_note() { _tpl_ph scratch_dir_note; }
+        _build_wf_section() { _tpl_ph workflow_board_section; }
+        _build_issue_dirty_branch_section() { _tpl_ph dirty_branch_section; }
+        _build_issue_stale_branch_section() { _tpl_ph stale_branch_section; }
+        _build_container_vs_github_note() { _tpl_ph container_vs_github_note; }
+        _build_background_stall_warning() { _tpl_ph background_stall_warning; }
+        _build_plan_approval_check() { _tpl_ph plan_approval_check; }
+        _board_set_clause() {
+            local status="${3,,}"
+            _tpl_ph "board_${status// /_}"
+        }
+        _build_plan_approval_instruction() { _tpl_ph plan_approval_instruction; }
+        _build_issue_branch_step() { _tpl_ph branch_step; }
+        _build_background_commands_rule() { _tpl_ph background_commands_rule; }
+        _build_permission_denial_rule() { _tpl_ph permission_denial_rule; }
+        _tpl_emit IssueClaudeMd build_issue_claude_md '{{item_id}}' '{{ai_instructions}}' '{{repo_path}}' false '' '' '' \
+            false '{{precheck_block}}'
+    )
+
+    # Pull request helpers
+    _tpl_emit PullRequestFirstCommandRule _build_pr_first_command_rule '{{pr_number}}'
+    _tpl_emit DependencyPullRequestRuleVerify _build_dependency_pr_rule verify
+    _tpl_emit DependencyPullRequestRuleFull _build_dependency_pr_rule full
+    _tpl_emit PullRequestTrustedComments _build_pr_trusted_comments_section ''
+    _tpl_emit PullRequestTrustedCommentsFound _build_pr_trusted_comments_section '{{unaddressed_comments}}'
+    _tpl_emit PullRequestNextPhase _build_pr_next_phase_section '{{next_phase}}'
+    _tpl_emit RoundCapCheckLine _build_round_cap_check_line '{{max_iter}}' '{{round_noun}}' '{{cap_condition}}' \
+        '{{post_clause}}'
+    (
+        _board_set_clause() { _tpl_ph board_next_status; }
+        _build_round_cap_check_line() {
+            _tpl_keep ReviewCapCondition "$3"
+            _tpl_keep ReviewCapPostClause "$4"
+            _tpl_ph round_cap_line
+        }
+        _tpl_emit ReviewConvergenceBlock _build_review_convergence_block '{{review_label}}' '{{next_status}}' \
+            '{{max_iter}}' '{{fix_step}}' '{{downstream_note}}' '{{min_rounds}}' '{{item_id}}'
+    )
+    _tpl_emit PlaceholderGuardRemove _build_placeholder_guard_note '{{item_id}}' remove
+    _tpl_emit PlaceholderGuardStop _build_placeholder_guard_note '{{item_id}}'
+    _tpl_emit PlaceholderDisarm _build_placeholder_disarm_note '{{item_id}}'
+
+    # Pull request CLAUDE.md bodies: every helper becomes a placeholder
+    (
+        _build_trusted_commenters_section() { _tpl_ph trusted_commenters; }
+        _build_git_ssh_section() { _tpl_ph git_ssh; }
+        _build_scratch_dir_note() { _tpl_ph scratch_dir_note; }
+        _build_wf_section() { _tpl_ph workflow_board_section; }
+        _build_container_vs_github_note() { _tpl_ph container_vs_github_note; }
+        _build_background_stall_warning() { _tpl_ph background_stall_warning; }
+        _board_set_clause() {
+            local status="${3,,}"
+            _tpl_ph "board_${status// /_}"
+        }
+        _build_background_commands_rule() { _tpl_ph background_commands_rule; }
+        _build_permission_denial_rule() { _tpl_ph permission_denial_rule; }
+        _build_pr_first_command_rule() {
+            if [ -n "${2:-}" ]; then
+                _tpl_ph first_command_rule_indented
+            else
+                _tpl_ph first_command_rule
+            fi
+        }
+        _build_dependency_pr_rule() { _tpl_ph "dependency_pr_rule_$1"; }
+        _build_pr_trusted_comments_section() { _tpl_ph trusted_comments_section; }
+        _build_pr_next_phase_section() { _tpl_ph next_phase_section; }
+        _build_review_convergence_block() {
+            _tpl_keep "fix-$1" "$4"
+            _tpl_keep "downstream-$1" "$5"
+            _tpl_ph "review_convergence_$1"
+        }
+        _build_round_cap_check_line() {
+            _tpl_keep CoverageCapCondition "$3"
+            _tpl_keep CoverageCapPostClause "$4"
+            _tpl_ph round_cap_line_coverage
+        }
+        _build_placeholder_guard_note() { _tpl_ph "placeholder_guard_${2:-stop}"; }
+        _build_placeholder_disarm_note() { _tpl_ph placeholder_disarm; }
+        _tpl_emit DependencyPullRequestClaudeMd build_pr_claude_md '{{item_id}}' '{{ai_instructions}}' CLEAN \
+            '{{branch_name}}' '{{repo_path}}' '' true '' false '' '' '{{precheck_block}}' false
+        _tpl_emit PullRequestClaudeMdRaw build_pr_claude_md '{{item_id}}' '{{ai_instructions}}' CLEAN '{{branch_name}}' \
+            '{{repo_path}}' '' false '' false '' '' '{{precheck_block}}' false
+        _tpl_emit PullRequestClaudeMdDep build_pr_claude_md '{{item_id}}' '{{ai_instructions}}' CLEAN '{{branch_name}}' \
+            '{{repo_path}}' '' false '' false '' '' '' true
+        # One full body per checkout branch: dirty branch (a = the PR's own, - = none), PR branch, merge state
+        for variant in "a b BEHIND" "a a BEHIND" "a a CLEAN" "a b CLEAN" "- b BEHIND" "- b CLEAN"; do
+            read -r dirty_name branch_name merge_state <<< "${variant}"
+            dirty=""
+            [ "${dirty_name}" = - ] || dirty='{{dirty_branch}}'
+            branch='{{branch_name}}'
+            [ "${dirty_name}" = "${branch_name}" ] && branch='{{dirty_branch}}'
+            [ "${dirty_name}" = - ] && dirty_name=none
+            build_pr_claude_md '{{item_id}}' '{{ai_instructions}}' "${merge_state}" "${branch}" '{{repo_path}}' \
+                "${dirty}" false '' false '' '' '' false > "${_tpl_raw}/checkout-${dirty_name}-${branch_name}-${merge_state}"
+        done
+    )
+    _tpl_emit IssueLaunchPrompt build_issue_prompt '{{item_id}}' unused '{{repo_path}}'
+    _tpl_emit PullRequestLaunchPrompt build_pr_prompt '{{item_id}}' unused unused unused '{{repo_path}}'
+
+    # Pre-check sections: one per kind and status
+    for kind in main pr; do
+        for precheck_status in pass fail timeout error; do
+            build_precheck_section "${kind}" '{{sha}}' "${precheck_status}" '{{summary}}' '{{error}}' '{{container_log}}' \
+                > "${_tpl_raw}/precheck-${kind}-${precheck_status}"
+        done
+    done
+}
+
+# --- cut them into templates
+
+# Texts that are a template as they are
+for name in BoardSetCommand BoardSetClause GitSsh ScratchDirNote ContainerVsGitHubNote BackgroundStallWarning \
+    BackgroundCommandsRule PlanApprovalCheckApproved PlanApprovalCheckBoard PlanApprovalCheckComment \
+    PlanApprovalInstructionBoard PlanApprovalInstructionComment IssueDirtyOwnBranch IssueDirtyBranch IssueStaleBranch \
+    PullRequestFirstCommandRule PullRequestNextPhase RoundCapCheckLine PlaceholderGuardRemove PlaceholderGuardStop \
+    PlaceholderDisarm IssueLaunchPrompt PullRequestLaunchPrompt DependencyPullRequestClaudeMd ReviewCapCondition \
+    ReviewCapPostClause CoverageCapCondition CoverageCapPostClause; do
+    _tpl_read "${name}"
+    _tpl_write "${name}" "${_tpl_r}"
+done
+for pair in CodeReviewFixStep:fix-code-review SecurityReviewFixStep:fix-security-review \
+    CodeReviewDownstreamNote:downstream-code-review SecurityReviewDownstreamNote:downstream-security-review; do
+    _tpl_read "${pair#*:}"
+    _tpl_write "${pair%%:*}" "${_tpl_r}"
+done
+_tpl_read TrustedCommentersSection
+_tpl_write TrustedCommentersHeader "${_tpl_r}"
+
+# The board section says "this issue's" or "this pull request's"
+_tpl_read WorkflowBoardSection
+noun='{{noun}}'
+section="${_tpl_r//"this pull request's"/"this {{noun}}'s"}"
+counted="${section//"{{noun}}"/}"
+[ "$(((${#section} - ${#counted}) / ${#noun}))" -eq 2 ] || _tpl_fail "WorkflowBoardSection: expected \"this pull request's\" twice"
+_tpl_write WorkflowBoardSection "${section}"
+
+# The permission denial rule has one more sentence when there is a board
+_tpl_read PermissionDenialRule
+plain="${_tpl_r}"
+_tpl_read PermissionDenialRuleWithBoard
+board="${_tpl_r}"
+retry_start=' If a Workflow board update'
+[[ "${board}" == *"${retry_start}"* ]] || _tpl_fail "PermissionDenialRule: '${retry_start}' not found"
+before="${board%%"${retry_start}"*}"
+rest="${board:${#before}}"
+[[ "${rest}" == *GraphQL.* ]] || _tpl_fail "PermissionDenialRule: the board sentence does not end in 'GraphQL.'"
+after="${rest#*GraphQL.}"
+[ "${plain}" = "${before}${after}" ] || _tpl_fail "PermissionDenialRule: the texts differ by more than the board sentence"
+_tpl_write PermissionDenialBoardRetry "${rest%"${after}"}"
+_tpl_write PermissionDenialRule "${before}{{board_retry}}${after}"
+
+# precheck_block carries its own blank line after it
+_tpl_read IssueClaudeMd
+_tpl_once "${_tpl_r}" $'{{precheck_block}}\n\nPHASE' '{{precheck_block}}PHASE' IssueClaudeMd
+_tpl_write IssueClaudeMd "${_tpl_r}"
+
+# The board note at the end of both branch steps
+_tpl_read IssueBranchStepNew
+branch_new="${_tpl_r}"
+note_start='Only once the draft pull request'
+[[ "${branch_new}" == *"${note_start}"* ]] || _tpl_fail "IssueBranchStepNew: '${note_start}' not found"
+note="${note_start}${branch_new#*"${note_start}"}"
+_tpl_once "${note}" '{{board_development}}' '{{board_development}}' IssueBranchStepBoardNote
+_tpl_write IssueBranchStepBoardNote "${note}"
+_tpl_once "${branch_new}" "${note}" '{{board_note}}' IssueBranchStepNew
+_tpl_write IssueBranchStepNew "${_tpl_r}"
+_tpl_read IssueBranchStepResume
+_tpl_once "${_tpl_r}" "${note}" '{{board_note}}' IssueBranchStepResume
+_tpl_write IssueBranchStepResume "${_tpl_r}"
+
+# The two dependency rules share their first three lines
+_tpl_read DependencyPullRequestRuleFull
+mapfile -t dep_full <<< "${_tpl_r}"
+_tpl_read DependencyPullRequestRuleVerify
+mapfile -t dep_verify <<< "${_tpl_r}"
+[ "${#dep_full[@]}" -eq 5 ] && [ "${#dep_verify[@]}" -eq 5 ] \
+    || _tpl_fail "DependencyPullRequestRule: expected five lines in each variant"
+[ "$(printf '%s\n' "${dep_full[@]:0:3}")" = "$(printf '%s\n' "${dep_verify[@]:0:3}")" ] \
+    || _tpl_fail "DependencyPullRequestRule: the variants' first three lines differ"
+_tpl_write DependencyPullRequestRule "$(printf '%s\n' "${dep_full[@]:0:3}")"$'\n{{comments_step}}\n{{then_step}}'
+_tpl_write DependencyCommentsStepFull "${dep_full[3]}"
+_tpl_write DependencyThenStepFull "${dep_full[4]}"
+_tpl_write DependencyCommentsStepVerify "${dep_verify[3]}"
+_tpl_write DependencyThenStepVerify "${dep_verify[4]}"
+
+# The trusted-comments section, then the comments when there are some
+_tpl_read PullRequestTrustedComments
+base="${_tpl_r}"
+_tpl_read PullRequestTrustedCommentsFound
+found="${_tpl_r}"
+[[ "${found}" == "${base}"$'\n'* ]] || _tpl_fail "PullRequestTrustedCommentsFound: does not start with the section"
+found="${found#"${base}"$'\n'}"
+[[ "${found}" == *$'\n{{unaddressed_comments}}' ]] \
+    || _tpl_fail "PullRequestTrustedCommentsFound: does not end with the comments"
+_tpl_write PullRequestTrustedComments "${base}"
+_tpl_write PullRequestTrustedCommentsFound "${found%$'\n{{unaddressed_comments}}'}"
+
+_tpl_read ReviewConvergenceBlock
+_tpl_once "${_tpl_r}" 'stating that {{review_label}} is not converging' 'stating that {{review_noun}} is not converging' \
+    ReviewConvergenceBlock
+_tpl_write ReviewConvergenceBlock "${_tpl_r}"
+
+# Sets _tpl_r to the checkout step of a full pull request body (raw text $1), without its two-space indent
+_tpl_checkout_step() {
+    _tpl_between "$(cat -- "${_tpl_raw}/$1")" $'Do NOT sync labels yourself.\n' $'\n  Then STOP. (If you pushed' "$1"
+    [[ "${_tpl_r}" == '  1. '* ]] || _tpl_fail "$1: the checkout step does not start with '  1. '"
+    _tpl_r="${_tpl_r:2}"
+}
+
+# The pull request body: the assign rule, the dependency rule and the checkout step become placeholders
+_tpl_read PullRequestClaudeMdRaw
+_tpl_once "${_tpl_r}" $'{{precheck_block}}\n\nPHASE' '{{precheck_block}}PHASE' PullRequestClaudeMd
+pr="${_tpl_r}"
+_tpl_between "${pr}" $'\n- NEVER apply the Blocked label without ALSO' $'\n\n{{trusted_comments_section}}' AssignRule
+[[ "${_tpl_r}" == *$'\n- Always assign'* ]] || _tpl_fail "AssignRule: '- Always assign' not found"
+assign="- Always assign${_tpl_r#*$'\n- Always assign'}"
+_tpl_write AssignRule "${assign}"
+_tpl_once "${pr}" "${assign}"$'\n\n{{trusted_comments_section}}' \
+    $'{{assign_rule}}\n\n{{dependency_rule_block}}{{trusted_comments_section}}' PullRequestClaudeMd
+pr="${_tpl_r}"
+_tpl_read PullRequestClaudeMdDep
+_tpl_between "${_tpl_r}" 'the linked issue was never approved' $'\n\n{{dependency_pr_rule_full}}' AssignRuleDependency
+dep_assign="${_tpl_r##*$'\n'}"
+[[ "${dep_assign}" == '- No assign or claim step'* ]] || _tpl_fail "AssignRuleDependency: '- No assign or claim step' not found"
+_tpl_write AssignRuleDependency "${dep_assign}"
+_tpl_checkout_step checkout-none-b-CLEAN
+_tpl_once "${pr}" "  ${_tpl_r}" '  {{checkout_step}}' PullRequestClaudeMd
+_tpl_once "${_tpl_r}" '{{review_convergence_code-review}}' '{{review_convergence_code}}' PullRequestClaudeMd
+_tpl_once "${_tpl_r}" '{{review_convergence_security-review}}' '{{review_convergence_security}}' PullRequestClaudeMd
+_tpl_write PullRequestClaudeMd "${_tpl_r}"
+
+# The checkout steps, with the rebase rule the rebasing ones end with as a template of its own
+_tpl_checkout_step checkout-none-b-BEHIND
+rule_start='To continue the rebase after fixing conflicts:'
+[[ "${_tpl_r}" == *"${rule_start}"* ]] || _tpl_fail "RebaseContinueRule: '${rule_start}' not found"
+rebase_rule="${rule_start}${_tpl_r#*"${rule_start}"}"
+rebase_rule="${rebase_rule%%$'\n'*}"
+_tpl_write RebaseContinueRule "${rebase_rule}"
+for pair in CheckoutOwnDirtyRebase:checkout-a-a-BEHIND CheckoutOwnDirty:checkout-a-a-CLEAN \
+    CheckoutDirtyRebase:checkout-a-b-BEHIND CheckoutDirty:checkout-a-b-CLEAN CheckoutRebase:checkout-none-b-BEHIND \
+    CheckoutBranch:checkout-none-b-CLEAN; do
+    name="${pair%%:*}"
+    _tpl_checkout_step "${pair#*:}"
+    if [[ "${name}" == *Rebase ]]; then
+        _tpl_once "${_tpl_r}" "${rebase_rule}" '{{rebase_continue_rule}}' "${name}"
+        _tpl_once "${_tpl_r}" BEHIND '{{merge_state}}' "${name}"
+    fi
+    _tpl_write "${name}" "${_tpl_r}"
+done
+
+# The pre-check sections, line by line: template, kind, status, line (from 0)
+_tpl_precheck_line() {
+    local -a lines
+    _tpl_read "precheck-$1-$2"
+    mapfile -t lines <<< "${_tpl_r}"
+    [ "$3" -lt "${#lines[@]}" ] || _tpl_fail "the $1 $2 pre-check section has no line $(($3 + 1))"
+    _tpl_r="${lines[$3]}"
+}
+_tpl_precheck_line main fail 2
+[ "${_tpl_r}" = '{{summary}}' ] || _tpl_fail "PrecheckLog: the summary is not the third line of a failed main pre-check"
+for entry in PrecheckMainHeader:main:pass:0 PrecheckMainPass:main:pass:1 PrecheckMainFail:main:fail:1 \
+    PrecheckLog:main:fail:3 PrecheckMainFailAfter:main:fail:4 PrecheckMainTimeout:main:timeout:1 \
+    PrecheckMainError:main:error:1 PrecheckPullRequestHeader:pr:pass:0 PrecheckPullRequestPass:pr:pass:1 \
+    PrecheckPullRequestFail:pr:fail:1 PrecheckPullRequestTimeout:pr:timeout:1 PrecheckPullRequestError:pr:error:1 \
+    PrecheckPullRequestFooter:pr:pass:2; do
+    IFS=: read -r name kind precheck_status line <<< "${entry}"
+    _tpl_precheck_line "${kind}" "${precheck_status}" "${line}"
+    _tpl_write "${name}" "${_tpl_r}"
+done

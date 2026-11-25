@@ -3,6 +3,11 @@
 # instruction text the agent container reads, including the Workflow board data block and
 # every phase/step description. Heredoc bodies here are read directly by the agent - treat
 # any edit to their wording as a behaviour change, not a refactor.
+#
+# Editing a text here? The .NET templates (src/Credfeto.Orchestrator.Prompts/Templates) and the prompt
+# parity fixtures (test/fixtures/prompts-*parity.json) are generated from this file: run
+# scripts/prompts/regenerate afterwards and commit what it changes. Never edit those by hand;
+# test/oneshot-prompts-parity.bats fails until they match this file again (#252).
 
 # Builds one prompt with Credfeto.Orchestrator.Cmd (ORCHESTRATOR_CMD) instead of the heredocs below, for the
 # build_* functions in this file when ORCHESTRATOR_DOTNET_PROMPTS=1 (#252). kind is the tool's prompt kind; the rest are
