@@ -223,7 +223,8 @@ public sealed class GitHubCommandRunnerTests : TestBase
         CommandRunner runner = new(
             fingerprints: new FingerprintCalculator(),
             files: new FakeFileContentReader(),
-            github: new GitHubReader(tools)
+            github: new GitHubReader(tools),
+            discovery: DiscoveryFakes.NotExpected(new GitHubReader(tools))
         );
         using MemoryStream stdin = new();
         await using StringWriter output = new();

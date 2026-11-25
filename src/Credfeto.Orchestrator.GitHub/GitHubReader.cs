@@ -15,6 +15,7 @@ public sealed class GitHubReader : IGitHubReader
     private const string AUTH_STATUS = "auth_status";
     private const string PR_VIEW = "pr_view";
     private const string BRANCH_COMPARE = "branch_compare";
+    private const string REPO_COLLABORATORS = "repo_collaborators";
 
     private readonly IMcpToolCaller _tools;
 
@@ -250,6 +251,32 @@ public sealed class GitHubReader : IGitHubReader
         );
 
         return result.BehindBy is { } behindBy and >= 0 ? behindBy : throw Unexpected(BRANCH_COMPARE);
+    }
+
+    public async ValueTask<IReadOnlyList<string>> RepositoryCollaboratorsAsync(
+        string repository,
+        CancellationToken cancellationToken
+    )
+    {
+        RepositoryCollaboratorsResult result = await this.CallAsync(
+            tool: REPO_COLLABORATORS,
+            arguments: new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+            {
+                ["repo"] = McpArgument.Of(repository),
+            },
+            typeInfo: GitHubJsonContext.Default.RepositoryCollaboratorsResult,
+            cancellationToken: cancellationToken
+        );
+
+        IReadOnlyList<RepositoryCollaboratorsResultEntry?> entries = result.Collaborators
+            ?? throw Unexpected(REPO_COLLABORATORS);
+
+        return
+        [
+            .. entries.Select(entry =>
+                entry is { Login.Length: > 0 } valid ? valid.Login : throw Unexpected(REPO_COLLABORATORS)
+            ),
+        ];
     }
 
     private async ValueTask<T> CallAsync<T>(

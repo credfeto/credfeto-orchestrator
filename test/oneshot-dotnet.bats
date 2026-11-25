@@ -424,3 +424,184 @@ make_orchestrator_github_reads_stub() {
     run pr_branch_behind_base org/repo '{"baseRefName":"main","headRefName":"feat/12-thing"}'
     [ "${status}" -eq 2 ]
 }
+
+# A stand-in for the tool's discovery commands: records its arguments, prints
+# ${TEST_TMP}/discovery_output when there is one, and exits with ${TEST_TMP}/discovery_rc (0 when it
+# is missing).
+make_orchestrator_discovery_stub() {
+    make_stub_multiline fake-orchestrator \
+        'printf "%s\n" "$@" > "${TEST_TMP}/cmd_args"' \
+        'printf "%s" "${ORCHESTRATOR_CFWF_MCP_URL}" > "${TEST_TMP}/cmd_url"' \
+        '[ -f "${TEST_TMP}/discovery_output" ] && cat "${TEST_TMP}/discovery_output"' \
+        'exit "$(cat "${TEST_TMP}/discovery_rc" 2> /dev/null || echo 0)"'
+    export ORCHESTRATOR_CMD=fake-orchestrator
+}
+
+@test "ORCHESTRATOR_DOTNET_DISCOVERY defaults to off (#252)" {
+    run env -u ORCHESTRATOR_DOTNET_DISCOVERY bash -c 'source "'"${REPO_ROOT}"'/oneshot"; printf "%s" "${ORCHESTRATOR_DOTNET_DISCOVERY}"'
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "0" ]
+}
+
+@test "work discovery never runs ORCHESTRATOR_CMD while ORCHESTRATOR_DOTNET_DISCOVERY is off (#252)" {
+    make_orchestrator_discovery_stub
+    ORCHESTRATOR_DOTNET_DISCOVERY=0
+    printf '{"incidents":[]}' > "${TEST_TMP}/status.json"
+    GITHUB_STATUS_URL="file://${TEST_TMP}/status.json"
+    run github_incident_open
+    [ "${status}" -eq 1 ]
+
+    _GH_ME=testuser
+    make_stub curl 'printf "{\"priorities\":[{\"id\":1,\"status\":\"Open\",\"isOnHold\":false}]}"'
+    run fetch_all_priorities
+    [ "${status}" -eq 0 ]
+    [ "${output}" = '[{"id":1,"status":"Open","isOnHold":false}]' ]
+
+    set_repo_context org/repo
+    WHITELISTED_USERS=""
+    make_stub gh 'printf "collab1\n"'
+    run get_trusted_logins
+    [ "${status}" -eq 0 ]
+    [ "$(printf '%s' "${output}" | jq -c .)" = '["collab1","copilot-pull-request-reviewer","github-advanced-security[bot]","org"]' ]
+    [ ! -f "${TEST_TMP}/cmd_args" ]
+}
+
+@test "fetch_all_priorities hands the feed URL, login and retry settings to ORCHESTRATOR_CMD discovery when switched on (#252)" {
+    make_orchestrator_discovery_stub
+    make_stub curl 'exit 1'
+    ORCHESTRATOR_DOTNET_DISCOVERY=1
+    _GH_ME='a b'
+    PRIORITIES_FETCH_RETRY_ATTEMPTS=4
+    PRIORITIES_FETCH_RETRY_DELAY_SECS=0
+    printf '[{"id":1}]\n' > "${TEST_TMP}/discovery_output"
+    run --separate-stderr fetch_all_priorities
+    [ "${status}" -eq 0 ]
+    [ "${output}" = '[{"id":1}]' ]
+    [ "$(tr '\n' '|' < "${TEST_TMP}/cmd_args")" = "discovery|priorities|--url|${PRIORITIES_URL}|--user|a b|--attempts|4|--delay-secs|0|" ]
+
+    unset _GH_ME
+    GH_USER_RETRY_ATTEMPTS=1
+    GH_USER_RETRY_DELAY_SECS=0
+    make_stub gh 'exit 1'
+    run --separate-stderr fetch_all_priorities
+    [ "${status}" -eq 0 ]
+    [ "$(tr '\n' '|' < "${TEST_TMP}/cmd_args")" = "discovery|priorities|--url|${PRIORITIES_URL}|--attempts|4|--delay-secs|0|" ]
+}
+
+@test "fetch_all_priorities maps ORCHESTRATOR_CMD discovery's failures to its own return codes and warnings (#252)" {
+    make_orchestrator_discovery_stub
+    ORCHESTRATOR_DOTNET_DISCOVERY=1
+    _GH_ME=testuser
+    PRIORITIES_FETCH_RETRY_ATTEMPTS=2
+
+    printf '3' > "${TEST_TMP}/discovery_rc"
+    run --separate-stderr fetch_all_priorities
+    [ "${status}" -eq 2 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == *"Failed to parse priorities JSON from ${PRIORITIES_URL}?user=testuser"* ]]
+
+    printf '1' > "${TEST_TMP}/discovery_rc"
+    run --separate-stderr fetch_all_priorities
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == *"Failed to fetch priorities from ${PRIORITIES_URL}?user=testuser after 2 attempt(s)"* ]]
+
+    ORCHESTRATOR_CMD=no-such-orchestrator-command
+    run -1 --separate-stderr fetch_all_priorities
+    [ -z "${output}" ]
+}
+
+@test "get_trusted_logins hands the repository, owner, whitelist, PR bot and retry settings to ORCHESTRATOR_CMD discovery when switched on (#252)" {
+    make_orchestrator_discovery_stub
+    make_stub gh 'exit 1'
+    ORCHESTRATOR_DOTNET_DISCOVERY=1
+    ORCHESTRATOR_CFWF_MCP_URL=https://mcp.example.test/mcp
+    set_repo_context org/repo
+    WHITELISTED_USERS=" friend, other"
+    PR_CREATOR_LOGIN=prpixie
+    GH_COLLABORATORS_RETRY_ATTEMPTS=5
+    GH_COLLABORATORS_RETRY_DELAY_SECS=0
+    printf '[\n  "org"\n]\n' > "${TEST_TMP}/discovery_output"
+    run get_trusted_logins
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'[\n  "org"\n]' ]
+    [ "$(tr '\n' '|' < "${TEST_TMP}/cmd_args")" = "discovery|trusted-logins|--repo|org/repo|--owner|org|--whitelist| friend, other|--creator|prpixie|--attempts|5|--delay-secs|0|" ]
+    [ "$(cat "${TEST_TMP}/cmd_url")" = "https://mcp.example.test/mcp" ]
+
+    # The list is cached for the repository context, as the shell version caches it
+    get_trusted_logins > /dev/null
+    rm "${TEST_TMP}/cmd_args"
+    run get_trusted_logins
+    [ "${output}" = $'[\n  "org"\n]' ]
+    [ ! -f "${TEST_TMP}/cmd_args" ]
+}
+
+@test "get_trusted_logins fails closed and caches nothing when ORCHESTRATOR_CMD discovery fails, prints nothing or is missing (#252)" {
+    make_orchestrator_discovery_stub
+    ORCHESTRATOR_DOTNET_DISCOVERY=1
+    set_repo_context org/repo
+
+    printf '1' > "${TEST_TMP}/discovery_rc"
+    get_trusted_logins > /dev/null 2>&1 || true
+    [ -z "${_TRUSTED_LOGINS_JSON}" ]
+    run --separate-stderr get_trusted_logins
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+
+    printf '0' > "${TEST_TMP}/discovery_rc"
+    run --separate-stderr get_trusted_logins
+    [ "${status}" -eq 1 ]
+
+    ORCHESTRATOR_CMD=no-such-orchestrator-command
+    run -1 --separate-stderr get_trusted_logins
+    [ -z "${output}" ]
+}
+
+@test "github_incident_open hands the status URL and lib/globals' lists to ORCHESTRATOR_CMD discovery when switched on (#252)" {
+    make_orchestrator_discovery_stub
+    ORCHESTRATOR_DOTNET_DISCOVERY=1
+    GITHUB_STATUS_URL=https://status.example.test/summary.json
+    GITHUB_HEALTH_COMPONENTS=("Git Operations" "Issues")
+    GITHUB_HEALTH_SERIOUS_IMPACTS=(major)
+    GITHUB_HEALTH_OUTAGE_STATUSES=(major_outage)
+    printf 'Git is down\t2026-11-04T10:00:00Z\n' > "${TEST_TMP}/discovery_output"
+    run github_incident_open
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'Git is down\t2026-11-04T10:00:00Z' ]
+    [ "$(tr '\n' '|' < "${TEST_TMP}/cmd_args")" = "discovery|github-incident|--url|https://status.example.test/summary.json|--component|Git Operations|--component|Issues|--serious-impact|major|--outage-status|major_outage|" ]
+
+    printf 'PRs slow\tt\tIssues: degraded_performance\n' > "${TEST_TMP}/discovery_output"
+    printf '3' > "${TEST_TMP}/discovery_rc"
+    run github_incident_open
+    [ "${status}" -eq 3 ]
+    [ "${output}" = $'PRs slow\tt\tIssues: degraded_performance' ]
+}
+
+@test "github_incident_open maps ORCHESTRATOR_CMD discovery's answers to its own and fails open when the tool fails (#252)" {
+    make_orchestrator_discovery_stub
+    ORCHESTRATOR_DOTNET_DISCOVERY=1
+
+    printf '4' > "${TEST_TMP}/discovery_rc"
+    run github_incident_open
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+
+    local rc
+    for rc in 1 2 5 130; do
+        printf '%s' "${rc}" > "${TEST_TMP}/discovery_rc"
+        run --separate-stderr github_incident_open
+        if [ "${status}" -ne 2 ] || [ -n "${output}" ]; then
+            printf 'tool exit %s gave rc %s, output %s\n' "${rc}" "${status}" "${output}" >&2
+            return 1
+        fi
+    done
+
+    # A serious or minor answer without its line is not trusted either
+    printf '0' > "${TEST_TMP}/discovery_rc"
+    run github_incident_open
+    [ "${status}" -eq 2 ]
+
+    ORCHESTRATOR_CMD=no-such-orchestrator-command
+    run -2 --separate-stderr github_incident_open
+    [ -z "${output}" ]
+}

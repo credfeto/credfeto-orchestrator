@@ -24,8 +24,29 @@
 # stops the fleet on its own.
 # Tabs, carriage returns and newlines in names and statuses are replaced with spaces, so the output
 # is always one line with a fixed number of tabs.
+# With ORCHESTRATOR_DOTNET_DISCOVERY=1 the read and the judgement are made by `ORCHESTRATOR_CMD
+# discovery github-incident` (#252) with the lists above, which prints the same line and exits 0, 3, 4
+# (no incident) or 1 (not read); 4 becomes 1 here, and 1 or any other failure of the tool (a missing
+# tool included) becomes 2, so the gate still fails open.
 github_incident_open() {
     local status_json result used impacts outages
+    if [ "${ORCHESTRATOR_DOTNET_DISCOVERY}" = 1 ]; then
+        local -a args=(github-incident --url "${GITHUB_STATUS_URL}")
+        local item cmd_rc=0
+        for item in "${GITHUB_HEALTH_COMPONENTS[@]}"; do args+=(--component "${item}"); done
+        for item in "${GITHUB_HEALTH_SERIOUS_IMPACTS[@]}"; do args+=(--serious-impact "${item}"); done
+        for item in "${GITHUB_HEALTH_OUTAGE_STATUSES[@]}"; do args+=(--outage-status "${item}"); done
+        result=$(_discovery_with_orchestrator_cmd "${args[@]}") || cmd_rc=$?
+        case "${cmd_rc}" in
+            0 | 3)
+                [ -n "${result}" ] || return 2
+                printf '%s\n' "${result}"
+                return "${cmd_rc}"
+                ;;
+            4) return 1 ;;
+        esac
+        return 2
+    fi
     status_json=$(curl --silent --fail --location --connect-timeout 5 --max-time 10 \
         "${GITHUB_STATUS_URL}" 2>/dev/null) || return 2
     used=$(jq -cn '$ARGS.positional' --args "${GITHUB_HEALTH_COMPONENTS[@]}") || return 2

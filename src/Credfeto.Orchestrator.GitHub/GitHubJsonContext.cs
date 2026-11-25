@@ -9,6 +9,7 @@ namespace Credfeto.Orchestrator.GitHub;
 [JsonSerializable(typeof(AuthStatusResult))]
 [JsonSerializable(typeof(PullRequestViewResult))]
 [JsonSerializable(typeof(BranchCompareResult))]
+[JsonSerializable(typeof(RepositoryCollaboratorsResult))]
 [JsonSerializable(typeof(string))]
 [JsonSerializable(typeof(bool))]
 [JsonSerializable(typeof(int))]
