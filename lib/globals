@@ -84,6 +84,10 @@ ORCHESTRATOR_DOTNET_FINGERPRINTS="${ORCHESTRATOR_DOTNET_FINGERPRINTS:-0}"
 ORCHESTRATOR_DOTNET_GITHUB="${ORCHESTRATOR_DOTNET_GITHUB:-0}"
 # shellcheck disable=SC2034  # read by lib/github after sourcing
 ORCHESTRATOR_CFWF_MCP_URL="${ORCHESTRATOR_CFWF_MCP_URL:-https://workflow-mcp.markridgwell.com/mcp}"
+# ORCHESTRATOR_DOTNET_GIT: the read-only lib/git checkout queries, which the tool answers by running
+# the same git commands (anything that changes a checkout stays in bash).
+# shellcheck disable=SC2034  # read by lib/git after sourcing
+ORCHESTRATOR_DOTNET_GIT="${ORCHESTRATOR_DOTNET_GIT:-0}"
 
 # Conservative pre-send guard against grossly oversized prompts.
 # The launch prompt is deliberately tiny ("Work on <item> in <repo>") — everything of
