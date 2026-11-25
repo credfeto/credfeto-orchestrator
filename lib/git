@@ -2,8 +2,9 @@
 # Per-repo context and git plumbing: resolving the OWNER/REPO/REPO_FULL globals, host<->
 # container path mapping, and the git operations that keep the local checkout current.
 # The read-only checkout queries (current branch, uncommitted changes, origin branch, head commit,
-# commits behind, stale issue branch) can be handed to Credfeto.Orchestrator.Cmd with
-# ORCHESTRATOR_DOTNET_GIT=1 (#252); everything that changes a checkout stays here.
+# commits behind, stale issue branch, porcelain status, changed file count, stash head, autostashes
+# beyond the keep) can be handed to Credfeto.Orchestrator.Cmd with ORCHESTRATOR_DOTNET_GIT=1 (#252);
+# everything that changes a checkout stays here.
 
 # Maps a host file path to its container-internal equivalent.
 # Paths under REPO_WORK_DIR map to CONTAINER_REPO_PATH; paths under RULES_DIR
@@ -180,6 +181,70 @@ origin_branch_exists() {
     git -C "${REPO_WORK_DIR}" rev-parse --verify -q "refs/remotes/origin/${branch}" > /dev/null 2>&1
 }
 
+# Outputs git status --porcelain for the checkout, untracked files listed as git lists them by default (a
+# directory of new files is one entry), and returns git's status; git's stderr is hidden. With
+# ORCHESTRATOR_DOTNET_GIT=1 the tool runs it (_git_tool_answers).
+checkout_porcelain_status() {
+    local git_tool_output git_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_GIT}" = 1 ] \
+        && _git_tool_answers quiet porcelain-status --repo "${REPO_WORK_DIR}"; then
+        printf '%s' "${git_tool_output}"
+        return "${git_tool_status}"
+    fi
+    git -C "${REPO_WORK_DIR}" status --porcelain --untracked-files=normal 2> /dev/null
+}
+
+# Outputs, as wc -l prints it, the number of entries git status --porcelain lists for the checkout with each
+# untracked file counted on its own (a rename is one entry), whatever git's status: 0 for a checkout git
+# cannot read. With ORCHESTRATOR_DOTNET_GIT=1 the tool counts (_git_tool_answers).
+checkout_changed_file_count() {
+    local git_tool_output git_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_GIT}" = 1 ] \
+        && _git_tool_answers quiet changed-file-count --repo "${REPO_WORK_DIR}"; then
+        printf '%s' "${git_tool_output}"
+        return "${git_tool_status}"
+    fi
+    git -C "${REPO_WORK_DIR}" status --porcelain --untracked-files=all 2> /dev/null | wc -l
+}
+
+# Outputs the commit refs/stash points at (the newest stash) and returns 0, or returns 1 with no output when
+# the checkout has no stash (128 when it cannot be read). With ORCHESTRATOR_DOTNET_GIT=1 the tool reads it
+# (_git_tool_answers).
+checkout_stash_head() {
+    local git_tool_output git_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_GIT}" = 1 ] && _git_tool_answers quiet stash-head --repo "${REPO_WORK_DIR}"; then
+        printf '%s' "${git_tool_output}"
+        return "${git_tool_status}"
+    fi
+    git -C "${REPO_WORK_DIR}" rev-parse --verify -q refs/stash 2> /dev/null
+}
+
+# Outputs the autostashes (stashes whose message starts with the prefix in $1) beyond the newest $2, one
+# "<ref><tab><subject>" line each, highest index first, which is the order prune_autostashes drops them in.
+# Stashes without the prefix do not count. With ORCHESTRATOR_DOTNET_GIT=1 the tool lists them
+# (_git_tool_answers), refusing a prefix that is not plain letters, digits, '-' and '_', a keep that is not a
+# decimal number, and a stash list that is not UTF-8 (bash then matches it by the locale), which bash then
+# answers.
+autostashes_beyond_keep() {
+    local prefix="$1" keep="$2" git_tool_output git_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_GIT}" = 1 ] \
+        && _git_tool_answers quiet autostashes-beyond-keep --repo "${REPO_WORK_DIR}" --prefix "${prefix}" --keep "${keep}"; then
+        printf '%s' "${git_tool_output}"
+        return "${git_tool_status}"
+    fi
+    local pattern="^On [^:]*: ${prefix} "
+    local ref subject seen=0 i
+    local -a excess=()
+    while IFS=$'\t' read -r ref subject; do
+        [[ "${subject}" =~ ${pattern} ]] || continue
+        seen=$((seen + 1))
+        [ "${seen}" -gt "${keep}" ] && excess+=("${ref}"$'\t'"${subject}")
+    done < <(git -C "${REPO_WORK_DIR}" stash list --format='%gd%x09%gs' 2> /dev/null)
+    for ((i = ${#excess[@]} - 1; i >= 0; i--)); do
+        printf '%s\n' "${excess[i]}"
+    done
+}
+
 # Returns 0 on success. Returns 1 for a dirty working tree — the existing "hand off to agent to
 # recover" signal (oneshot hands it over only to the item whose branch the checkout is on, see
 # dirty_branch_belongs_to_item). Returns 2 for a transient git-fetch failure specifically: unlike
@@ -312,7 +377,7 @@ autostash_dirty_checkout() {
     local label="${dirty_branch:-detached}" shown="${dirty_branch:-a detached HEAD}"
     local file_count stamp message before after
     local -a ident=()
-    file_count=$(git -C "${REPO_WORK_DIR}" status --porcelain --untracked-files=all 2> /dev/null | wc -l)
+    file_count=$(checkout_changed_file_count)
     stamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     message="${AUTOSTASH_MESSAGE_PREFIX} ${label} ${stamp}: dirty tree on unowned branch"
     # A stash is a commit: give it an identity when the host has none configured, rather than
@@ -320,12 +385,12 @@ autostash_dirty_checkout() {
     if ! git -C "${REPO_WORK_DIR}" config user.email > /dev/null 2>&1; then
         ident=(-c user.name=orchestrator -c user.email=orchestrator@localhost)
     fi
-    before=$(git -C "${REPO_WORK_DIR}" rev-parse --verify -q refs/stash 2> /dev/null)
+    before=$(checkout_stash_head)
     if ! git -C "${REPO_WORK_DIR}" "${ident[@]+"${ident[@]}"}" stash push --include-untracked -m "${message}" > /dev/null; then
         warn "Failed to stash the uncommitted changes on '${shown}' for ${REPO_FULL}"
         return 1
     fi
-    after=$(git -C "${REPO_WORK_DIR}" rev-parse --verify -q refs/stash 2> /dev/null)
+    after=$(checkout_stash_head)
     if [ -z "${after}" ] || [ "${after}" = "${before}" ]; then
         warn "Stashing the uncommitted changes on '${shown}' for ${REPO_FULL} saved nothing"
         return 1
@@ -338,19 +403,17 @@ autostash_dirty_checkout() {
 # Drops the oldest autostashes (stashes whose message starts with AUTOSTASH_MESSAGE_PREFIX) beyond
 # the newest AUTOSTASH_KEEP, with one warning each naming the stash. Stashes without the prefix are
 # never touched and do not count towards the limit. Drops the highest index first, so the indices
-# of the ones still to drop stay valid.
+# of the ones still to drop stay valid (autostashes_beyond_keep lists them in that order, and the
+# whole list is read before the first drop).
 prune_autostashes() {
-    local pattern="^On [^:]*: ${AUTOSTASH_MESSAGE_PREFIX} "
-    local ref subject seen=0 i
+    local entry ref subject
     local -a excess=()
-    while IFS=$'\t' read -r ref subject; do
-        [[ "${subject}" =~ ${pattern} ]] || continue
-        seen=$((seen + 1))
-        [ "${seen}" -gt "${AUTOSTASH_KEEP}" ] && excess+=("${ref}"$'\t'"${subject}")
-    done < <(git -C "${REPO_WORK_DIR}" stash list --format='%gd%x09%gs' 2> /dev/null)
-    for ((i = ${#excess[@]} - 1; i >= 0; i--)); do
-        ref="${excess[i]%%$'\t'*}"
-        subject="${excess[i]#*$'\t'}"
+    while IFS= read -r entry; do
+        excess+=("${entry}")
+    done < <(autostashes_beyond_keep "${AUTOSTASH_MESSAGE_PREFIX}" "${AUTOSTASH_KEEP}")
+    for entry in "${excess[@]+"${excess[@]}"}"; do
+        ref="${entry%%$'\t'*}"
+        subject="${entry#*$'\t'}"
         if git -C "${REPO_WORK_DIR}" stash drop -q "${ref}" > /dev/null 2>&1; then
             warn "Dropped old autostash ${ref} for ${REPO_FULL} (keeping the newest ${AUTOSTASH_KEEP}): ${subject#On *: }"
         else
@@ -377,7 +440,7 @@ recover_orphaned_branch() {
     # checkout -f below has no dirty-tree check of its own — warn first so a discarded branch's
     # work leaves a trace a human could search for (#1281).
     local dirty_status
-    dirty_status=$(git -C "${REPO_WORK_DIR}" status --porcelain --untracked-files=normal 2>/dev/null)
+    dirty_status=$(checkout_porcelain_status)
     if [ -n "${dirty_status}" ]; then
         warn "Branch '${current_branch}' for ${REPO_FULL} is orphaned (no longer exists on origin) AND has uncommitted changes that are about to be discarded by the recovery below — this usually means a prior session's commit never landed (e.g. its backgrounding attempt was denied by a container hook and misread as still running, #1281). Files affected:
 $(printf '%s' "${dirty_status}" | head -20)"
