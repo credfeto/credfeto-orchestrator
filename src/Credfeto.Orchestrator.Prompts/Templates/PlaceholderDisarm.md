@@ -1,0 +1,2 @@
+<!-- markdownlint-disable-file -->
+First list the PR's files (cfwf pr view --repo {{repo_full}} --pr {{item_id}} --field files): if .deleteme.now is listed and auto-merge is armed (cfwf pr view --repo {{repo_full}} --pr {{item_id}} --field auto-merge prints on), disarm it and post the one-line status comment in one command: cfwf pr take-back --repo {{repo_full}} --pr {{item_id}} --body-file - with the comment on stdin (it turns auto-merge off, converts the PR to a draft and moves its board card to Development), then STOP.

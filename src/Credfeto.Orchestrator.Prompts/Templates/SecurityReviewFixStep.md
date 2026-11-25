@@ -1,0 +1,2 @@
+<!-- markdownlint-disable-file -->
+post them as a PR comment if not already inline, fix EACH in its own commit (run_in_background: true, then wait for it to finish per the MANDATORY rule below) and push, post a one-line status comment starting with the exact text "{{round_marker_security_review}}" (e.g. "{{round_marker_security_review}} fixed N findings") — the orchestrator counts this exact prefix across the PR comment history to report which security-review round this is, so it must appear verbatim, once, on every round that fixes findings — then STOP.

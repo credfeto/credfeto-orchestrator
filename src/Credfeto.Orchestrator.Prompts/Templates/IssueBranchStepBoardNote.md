@@ -1,0 +1,2 @@
+<!-- markdownlint-disable-file -->
+Only once the draft pull request (with its placeholder CHANGELOG.md entry) has been successfully created, update the Workflow board status to "Development"{{board_development}} (if board data is present above) — do NOT advance the board before the draft PR exists, so a session that dies mid-step does not leave the board looking further along than the work actually is (#1262). Once the draft pull request exists, STOP — the pull-request workflow takes over on the next cycle to implement, review, and merge it.
