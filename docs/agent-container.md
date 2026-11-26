@@ -34,6 +34,14 @@ operation safe. The container is that something:
   [Session transcripts](#session-transcripts)), and a per-work-item directory for its CodeGraph
   index (see [The CodeGraph index](#the-codegraph-index)). Nothing else on the host filesystem is
   visible to it.
+- Its memory is capped below the host's (#2089): `--memory` and `--memory-swap` are both set to
+  the host's total memory less a reserve, the larger of 1536 MiB
+  (`ORCHESTRATOR_CONTAINER_MEMORY_RESERVE_MB`) and 10% of it, and never less than 2 GiB. A
+  memory-hungry job inside (a full test-coverage run, say) is then killed by the container's own
+  out-of-memory handling, and the host always keeps memory for itself, so the kernel's global
+  out-of-memory killer never has to pick a victim outside the container.
+  `ORCHESTRATOR_CONTAINER_MEMORY` (for example `4g`) sets the limit outright. If the host's
+  memory cannot be read, the limit stays at the old fixed 12 GB and a warning is logged.
 - The container is destroyed (`--rm`) the instant the session ends — a fresh container, with a
   fresh session, for every single invocation. Nothing an agent does inside one session can
   persist into the next except via the state directories explicitly listed above, or (the whole

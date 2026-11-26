@@ -247,6 +247,37 @@ PRECHECK_CONTAINER_LOG="${CONTAINER_SCRATCH_PATH}/pre-commit-check.log"
 # shellcheck disable=SC2034  # read by lib/podman after sourcing
 PRECHECK_START_MARKER="orchestrator-precheck: running pre-commit-check"
 
+# The agent container's memory limit (#2089), used for both --memory and --memory-swap, so the
+# container cannot get past the cap through swap. It applies to the agent and the pre-check
+# containers alike (prepare_claude_container_args in lib/podman). The limit is sized from the host,
+# so a runaway process inside the container is stopped by the container's own cgroup OOM killer
+# before the host runs out of memory and the kernel's global OOM killer picks a victim outside it:
+# limit = MemTotal - reserve, where the reserve is the larger of
+# ORCHESTRATOR_CONTAINER_MEMORY_RESERVE_MB and CONTAINER_MEMORY_RESERVE_PERCENT of MemTotal, never
+# below CONTAINER_MEMORY_FLOOR_MB. ORCHESTRATOR_CONTAINER_MEMORY (a podman size such as 4g or
+# 6144m) replaces the calculation outright and is used as given. Both are read from the
+# environment or from .env, and checked by resolve_agent_container_memory (lib/podman): an
+# invalid value is ignored with a warning. When MemTotal cannot be read, the limit is
+# CONTAINER_MEMORY_FALLBACK (the fixed limit used before #2089), with a warning.
+ORCHESTRATOR_CONTAINER_MEMORY="${ORCHESTRATOR_CONTAINER_MEMORY:-}"
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
+ORCHESTRATOR_CONTAINER_MEMORY_RESERVE_MB="${ORCHESTRATOR_CONTAINER_MEMORY_RESERVE_MB:-1536}"
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
+CONTAINER_MEMORY_RESERVE_DEFAULT_MB=1536
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
+CONTAINER_MEMORY_RESERVE_PERCENT=10
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
+CONTAINER_MEMORY_FLOOR_MB=2048
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
+CONTAINER_MEMORY_FALLBACK="12g"
+# Where MemTotal is read from. Overridable from the environment so tests can use a fake file.
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
+HOST_MEMINFO_PATH="${HOST_MEMINFO_PATH:-/proc/meminfo}"
+# The limit resolve_agent_container_memory chose for this run; empty until then. Deliberately NOT
+# seeded from the environment, so the value is always worked out (and logged) by this run.
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
+AGENT_CONTAINER_MEMORY=""
+
 # Set by setup_cgroup_leaf; passed as --cgroup-parent to every podman run call.
 # shellcheck disable=SC2034  # read by lib/podman after sourcing
 PODMAN_CGROUP_PARENT=""

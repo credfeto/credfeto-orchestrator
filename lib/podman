@@ -1270,6 +1270,9 @@ run_precommit_precheck() {
     }
     owner_token=$(load_token_for_owner "${OWNER}")
     ensure_agent_container_ready "${container_name}" "${item_type}" "${item_id}"
+    # Here, not only in the subshell's prepare_claude_container_args, so the value is kept for
+    # the agent launch after the check and logged once per run.
+    resolve_agent_container_memory
 
     (
         # The EXIT trap prepare_claude_container_args installs also stops the run's ssh-agent,
@@ -1488,6 +1491,53 @@ pull_agent_image_once() {
     fi
 }
 
+# Sets AGENT_CONTAINER_MEMORY, the --memory and --memory-swap value for the agent and pre-check
+# containers (#2089; the settings are described in lib/globals), and logs it, once per run: a
+# value already set is kept. ORCHESTRATOR_CONTAINER_MEMORY, when it is a podman size (a whole
+# number above 0 with an optional b, k, m or g), is used as given. Otherwise the limit is
+# MemTotal from HOST_MEMINFO_PATH less the larger of ORCHESTRATOR_CONTAINER_MEMORY_RESERVE_MB
+# (a value that is not a whole number falls back to CONTAINER_MEMORY_RESERVE_DEFAULT_MB) and
+# CONTAINER_MEMORY_RESERVE_PERCENT of MemTotal, in MiB, and never below CONTAINER_MEMORY_FLOOR_MB.
+# When MemTotal cannot be read it is CONTAINER_MEMORY_FALLBACK, with a warning. The log line goes
+# to stderr, as the run's other launch messages do.
+resolve_agent_container_memory() {
+    local mem_kb mem_mb reserve_mb percent_mb limit_mb
+    [ -n "${AGENT_CONTAINER_MEMORY}" ] && return 0
+
+    if [ -n "${ORCHESTRATOR_CONTAINER_MEMORY}" ]; then
+        if [[ "${ORCHESTRATOR_CONTAINER_MEMORY}" =~ ^[1-9][0-9]*[bkmgBKMG]?$ ]]; then
+            AGENT_CONTAINER_MEMORY="${ORCHESTRATOR_CONTAINER_MEMORY}"
+            info "Agent container memory limit: ${AGENT_CONTAINER_MEMORY} (set by ORCHESTRATOR_CONTAINER_MEMORY)" >&2
+            return 0
+        fi
+        warn "ORCHESTRATOR_CONTAINER_MEMORY must be a podman memory size such as 4g or 6144m; ignoring '${ORCHESTRATOR_CONTAINER_MEMORY}' and sizing the limit from the host"
+    fi
+
+    reserve_mb="${ORCHESTRATOR_CONTAINER_MEMORY_RESERVE_MB}"
+    if ! [[ "${reserve_mb}" =~ ^(0|[1-9][0-9]*)$ ]]; then
+        warn "ORCHESTRATOR_CONTAINER_MEMORY_RESERVE_MB must be a whole number of MiB; ignoring '${reserve_mb}' and using ${CONTAINER_MEMORY_RESERVE_DEFAULT_MB}"
+        reserve_mb="${CONTAINER_MEMORY_RESERVE_DEFAULT_MB}"
+    fi
+
+    mem_kb=$(awk '$1 == "MemTotal:" { print $2; exit }' "${HOST_MEMINFO_PATH}" 2> /dev/null) || mem_kb=""
+    if ! [[ "${mem_kb}" =~ ^[1-9][0-9]*$ ]]; then
+        AGENT_CONTAINER_MEMORY="${CONTAINER_MEMORY_FALLBACK}"
+        warn "Could not read MemTotal from ${HOST_MEMINFO_PATH}; using the fixed agent container memory limit ${AGENT_CONTAINER_MEMORY}"
+        info "Agent container memory limit: ${AGENT_CONTAINER_MEMORY} (fallback, host memory unknown)" >&2
+        return 0
+    fi
+
+    mem_mb=$((mem_kb / 1024))
+    percent_mb=$((mem_mb * CONTAINER_MEMORY_RESERVE_PERCENT / 100))
+    [ "${percent_mb}" -gt "${reserve_mb}" ] && reserve_mb="${percent_mb}"
+    limit_mb=$((mem_mb - reserve_mb))
+    if [ "${limit_mb}" -lt "${CONTAINER_MEMORY_FLOOR_MB}" ]; then
+        limit_mb="${CONTAINER_MEMORY_FLOOR_MB}"
+    fi
+    AGENT_CONTAINER_MEMORY="${limit_mb}m"
+    info "Agent container memory limit: ${AGENT_CONTAINER_MEMORY} (host MemTotal ${mem_mb} MiB, reserve ${reserve_mb} MiB, floor ${CONTAINER_MEMORY_FLOOR_MB} MiB)" >&2
+}
+
 # Builds PODMAN_RUN_ARGS (everything up to, but not including, the image name) for an agent
 # container launch, and creates the per-invocation host-side state it mounts: CLAUDE_MD_TMPFILE
 # (the generated CLAUDE.md), CLAUDE_SCRATCH_TMPDIR (the /workspace/tmp scratch mount), the
@@ -1560,6 +1610,8 @@ prepare_claude_container_args() {
         mkdir -p "${ORCHESTRATOR_CACHE_DIR}/global" || die "Failed to create persistent orchestrator cache directory: ${ORCHESTRATOR_CACHE_DIR}/global"
     fi
 
+    resolve_agent_container_memory
+
     # Export invocation-scoped globals so helper functions can read them.
     PODMAN_CONTAINER_NAME="${container_name}"
     PODMAN_RUN_ARGS=(
@@ -1576,8 +1628,10 @@ prepare_claude_container_args() {
         # can read the GitHub and kb token files, then drops to developer for good with setpriv.
         --user "0:0"
         --cpus="4"
-        --memory="12g"
-        --memory-swap="12g"
+        # Sized from the host (#2089, resolve_agent_container_memory). Swap equal to memory, so
+        # swap cannot take the container past the cap.
+        --memory="${AGENT_CONTAINER_MEMORY}"
+        --memory-swap="${AGENT_CONTAINER_MEMORY}"
         --pids-limit=4096
         --volume "${REPO_WORK_DIR}:${CONTAINER_REPO_PATH}:rw"
         --volume "${RULES_DIR}:${CONTAINER_RULES_PATH}:ro"
