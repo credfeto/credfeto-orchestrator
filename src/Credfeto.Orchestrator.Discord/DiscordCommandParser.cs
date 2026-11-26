@@ -99,7 +99,7 @@ public static class DiscordCommandParser
             return null;
         }
 
-        Dictionary<string, string>? options = ParseOptions(args: args, definition: definition);
+        Dictionary<string, string>? options = ParseOptions(args: args, start: 3, names: definition.Options);
 
         if (options is null)
         {
@@ -113,22 +113,27 @@ public static class DiscordCommandParser
         return new(Kind: definition.Kind, Options: options);
     }
 
-    private static Dictionary<string, string>? ParseOptions(IReadOnlyList<string> args, Definition definition)
+    // The options from args[start] on: exactly the names given, each once as --<name> <value>, in any order
+    internal static Dictionary<string, string>? ParseOptions(
+        IReadOnlyList<string> args,
+        int start,
+        IReadOnlyList<string> names
+    )
     {
-        if (args.Count != 3 + definition.Options.Count * 2)
+        if (args.Count != start + names.Count * 2)
         {
             return null;
         }
 
         Dictionary<string, string> options = [with(StringComparer.Ordinal)];
 
-        for (int index = 3; index < args.Count; index += 2)
+        for (int index = start; index < args.Count; index += 2)
         {
             string name = args[index];
 
             if (
                 !name.StartsWith(value: OPTION_PREFIX, comparisonType: StringComparison.Ordinal)
-                || !definition.Options.Contains(value: name[OPTION_PREFIX.Length..], comparer: StringComparer.Ordinal)
+                || !names.Contains(value: name[OPTION_PREFIX.Length..], comparer: StringComparer.Ordinal)
                 || !options.TryAdd(key: name[OPTION_PREFIX.Length..], value: args[index + 1])
             )
             {
