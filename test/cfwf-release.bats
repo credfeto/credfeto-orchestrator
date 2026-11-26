@@ -116,7 +116,7 @@ run_tag_view() {
     listed+="  tag view                 Print the commit a repository's tag points to (exit 9 when not found)"$'\n'
     listed+="  run list                 List a repository's Actions runs for a branch or a commit, newest first"$'\n'
     listed+="  run view                 Print an Actions run's status and jobs (exit 9 when not found)"$'\n'
-    listed+="  run log                  Print the tail of a run's failed steps' logs (exit 4 while it runs, 9 when not found)"$'\n'
+    listed+="  run log                  Print the tail of a run's failed steps' logs, or search them (exit 4 while it runs, 9 when not found)"$'\n'
     listed+="  run rerun                Rerun a pull request's run: its failed jobs, or all when a required check never ran (exit 4 while it runs, 8 when refused, 9 when not found)"$'\n'
     listed+="  task wait                Wait, in one call, for a background command to finish (exit 4 while it runs, 9 when not found)"$'\n'
     listed+="  help [command]           Show this help, or the help for one command"$'\n'
