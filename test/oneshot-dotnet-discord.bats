@@ -13,7 +13,10 @@ bats_require_minimum_version 1.5.0
 load test_helper
 load oneshot_helper
 
-DISCORD_FIXTURE="${BATS_TEST_DIRNAME}/fixtures/discord-parity.json"
+DISCORD_FIXTURES=(
+    "${BATS_TEST_DIRNAME}/fixtures/discord-parity.json"
+    "${BATS_TEST_DIRNAME}/fixtures/discord-stalled-digest-parity.json"
+)
 
 # A stand-in for the tool: appends its arguments to ${TEST_TMP}/cmd_args (one a line, then ---), writes "tool stderr"
 # to stderr, prints ${TEST_TMP}/answer and exits with ${TEST_TMP}/status (0 when absent)
@@ -32,18 +35,27 @@ _tool_answers() {
     printf '%s' "$2" > "${TEST_TMP}/status"
 }
 
-# The builders, from the fixture (test/oneshot-discord-parity.bats checks it lists every one in lib/discord)
-_discord_builders() {
-    jq -r '.functions | keys[]' "${DISCORD_FIXTURE}"
+# Every builder's kind and options, from the fixtures (test/oneshot-discord-parity.bats checks they list every one in
+# lib/discord)
+_discord_functions() {
+    jq -s 'map(.functions) | add' "${DISCORD_FIXTURES[@]}"
 }
 
-# Runs builder $1 with one argument per option, the Nth being N, a valid number and text alike
+_discord_builders() {
+    _discord_functions | jq -r 'keys[]'
+}
+
+# The argument builder $1 is given for each option: the Nth is N, a valid number and text alike, or null for an
+# option whose value is JSON
+_builder_arguments() {
+    _discord_functions | jq -r --arg f "$1" \
+        '.[$f] | (.json // []) as $json | .options | to_entries[] | if (.value | IN($json[])) then "null" else .key + 1 end'
+}
+
+# Runs builder $1 with _builder_arguments
 _call_builder() {
-    local count arg args=()
-    count=$(jq -r --arg f "$1" '.functions[$f].options | length' "${DISCORD_FIXTURE}")
-    for ((arg = 1; arg <= count; arg++)); do
-        args+=("${arg}")
-    done
+    local args=()
+    mapfile -t args < <(_builder_arguments "$1")
     "$1" "${args[@]}"
 }
 
@@ -79,8 +91,9 @@ _call_builder() {
         [ "$(_call_builder "${function}" 2> /dev/null | od -An -tx1 | tr -d ' \n')" = "7b22746f6f6c223a20227061796c6f6164227d0a0a" ]
         expected=$(
             printf 'discord\npayload\n'
-            jq -r --arg f "${function}" '.functions[$f] | .kind, (.options | to_entries[] | "--\(.value)\n\(.key + 1)")' \
-                "${DISCORD_FIXTURE}"
+            _discord_functions | jq -r --arg f "${function}" '.[$f].kind'
+            paste -d '\n' <(_discord_functions | jq -r --arg f "${function}" '.[$f].options[] | "--" + .') \
+                <(_builder_arguments "${function}")
             printf -- '---'
         )
         [ "$(sed -n '1,/^---$/p' "${TEST_TMP}/cmd_args")" = "${expected}" ]
@@ -134,4 +147,40 @@ _call_builder() {
     [ "$(grep -c 'token' "${TEST_TMP}/cmd_args")" -eq 0 ]
     grep -qx 'Rate Limited: org/repo' "${TEST_TMP}/cmd_args"
     grep -qx '<t:1764100800:t> (<t:1764100800:R>)' "${TEST_TMP}/cmd_args"
+}
+
+@test "with ORCHESTRATOR_DOTNET_DISCORD on, the session-stalled and daily digest notifiers post the tool's payload (#252)" {
+    local args_log="${TEST_TMP}/curl_args"
+    _make_discord_cmd_stub
+    _tool_answers '{"from": "the tool"}' 0
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    set_repo_context "org/repo"
+    ORCHESTRATOR_DOTNET_DISCORD=1
+    DISCORD_WEBHOOK_URL="https://discord.example.com/api/webhooks/1/secret-token"
+    DISCORD_WEBHOOK_URL_PERMISSIONS="https://discord.example.com/api/webhooks/2/other-token"
+    run notify_discord_session_stalled "PullRequest" "7" "3" "gh,git" "stopped at /home/someone/notes.txt"
+    [ "${status}" -eq 0 ]
+    run notify_discord_daily_digest "org" "2026-10-04" '{"sessions":1}' ""
+    [ "${status}" -eq 0 ]
+    [ "$(grep -c '^{"from": "the tool"}$' "${args_log}")" -eq 2 ]
+    [ "$(grep -c '^https://discord.example.com/api/webhooks/2/other-token$' "${args_log}")" -eq 2 ]
+    [ "$(grep -c 'token' "${TEST_TMP}/cmd_args")" -eq 0 ]
+    [ "$(sed -n '1,/^---$/p' "${TEST_TMP}/cmd_args")" = "$(printf '%s\n' discord payload session-stalled \
+        --repository org/repo --item 'PullRequest #7' --url https://github.com/org/repo/pull/7 --count 3 \
+        --commands gh,git --message 'stopped at /home/someone/notes.txt' ---)" ]
+    [ "$(sed -n '/^---$/,$p' "${TEST_TMP}/cmd_args" | sed 1d)" = "$(printf '%s\n' discord payload daily-digest \
+        --owner org --day 2026-10-04 --summary '{"sessions":1}' --previous null ---)" ]
+}
+
+@test "with ORCHESTRATOR_DOTNET_DISCORD on, a daily digest the tool refuses is built and posted from bash (#252)" {
+    local payload_file="${TEST_TMP}/payload.json"
+    _make_discord_cmd_stub
+    _tool_answers '' 3
+    make_stub curl "while [ \"\$#\" -gt 0 ]; do if [ \"\$1\" = -d ]; then printf '%s' \"\$2\" > '${payload_file}'; fi; shift; done"
+    ORCHESTRATOR_DOTNET_DISCORD=1
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    run --separate-stderr notify_discord_daily_digest "org" "2026-10-04" '{"sessions": 1.5, "repos": [], "top_commands": []}' "null"
+    [ "${status}" -eq 0 ]
+    [[ "${stderr}" == *"discord payload daily-digest failed (exit 3); building it in bash instead"* ]]
+    [ "$(jq -r '.embeds[0].fields[0].value' "${payload_file}")" = "1.5 (no record for the day before)" ]
 }

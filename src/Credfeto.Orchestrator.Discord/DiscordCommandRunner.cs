@@ -44,12 +44,17 @@ public static class DiscordCommandRunner
           pr-needs-approval         --title --url --repository
           permission-denials        --title --url --summary
           rate-limited              --title --url --error --reset
+          session-stalled           --repository --item --url --count --commands --message
+          daily-digest              --owner --day --summary --previous
         --color, --available, --minimum, --duration, --baseline, --behind and --attempts are the builder's --argjson
-        numbers; every other option is text.
+        numbers; daily-digest's --summary and --previous are its --argjson JSON (null, or a summary as jq -c prints
+        it); every other option is text. session-stalled masks tokens and path-like runs in --message as the jq
+        program does, before cutting it.
 
         Exit codes: 0 printed; 2 a usage error; 3 the payload cannot be built exactly as bash would build it (an
-        argument that is not UTF-8, or a number that is not a plain JSON integer), so lib/discord builds it; 125 the
-        payload could not be written.
+        argument that is not UTF-8, a number that is not a plain JSON integer, a summary that is not compact JSON or
+        that the jq program would fail on, or a message that takes too long to mask), so lib/discord builds it; 125
+        the payload could not be written.
         """;
 
     public static async ValueTask<int> RunAsync(
