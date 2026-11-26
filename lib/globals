@@ -81,6 +81,18 @@ FINGERPRINT_SCHEMA_VERSION=2
 # the GitHub health gate (github_incident_open).
 # ORCHESTRATOR_DOTNET_PREDICATES: the pure predicates and reads of lib/github-status over a pull
 # request's or Issue's JSON, including the plan-approval rule (label writes and auto-merge stay here).
+# ORCHESTRATOR_DOTNET_SELF_INSTALL: oneshot installs the tool itself (lib/self-install): the native linux-x64
+# binary, from the tool package on the NuGet feed, checked and kept under ORCHESTRATOR_CMD_INSTALL_DIR. When the
+# environment does not set ORCHESTRATOR_CMD and an installed binary is there, ORCHESTRATOR_CMD is that binary
+# (through the current link); with none installed it stays credfeto-orchestrator, as before.
+ORCHESTRATOR_CMD_INSTALL_DIR="${ORCHESTRATOR_STATE_DIR}/bin"
+ORCHESTRATOR_CMD_BINARY="Credfeto.Orchestrator.Cmd"
+# shellcheck disable=SC2034  # read by lib/self-install after sourcing
+if [ -n "${ORCHESTRATOR_CMD:-}" ]; then ORCHESTRATOR_CMD_FROM_ENVIRONMENT=1; else ORCHESTRATOR_CMD_FROM_ENVIRONMENT=0; fi
+if [ "${ORCHESTRATOR_CMD_FROM_ENVIRONMENT}" = 0 ] && [ -f "${ORCHESTRATOR_CMD_INSTALL_DIR}/current/${ORCHESTRATOR_CMD_BINARY}" ] \
+    && [ -x "${ORCHESTRATOR_CMD_INSTALL_DIR}/current/${ORCHESTRATOR_CMD_BINARY}" ]; then
+    ORCHESTRATOR_CMD="${ORCHESTRATOR_CMD_INSTALL_DIR}/current/${ORCHESTRATOR_CMD_BINARY}"
+fi
 # shellcheck disable=SC2034  # read by lib/fingerprints after sourcing
 ORCHESTRATOR_CMD="${ORCHESTRATOR_CMD:-credfeto-orchestrator}"
 # shellcheck disable=SC2034  # read by lib/fingerprints after sourcing
@@ -121,6 +133,27 @@ ORCHESTRATOR_DOTNET_GIT="${ORCHESTRATOR_DOTNET_GIT:-0}"
 # same podman commands (anything that starts, removes or pulls stays in bash).
 # shellcheck disable=SC2034  # read by lib/podman after sourcing
 ORCHESTRATOR_DOTNET_PODMAN="${ORCHESTRATOR_DOTNET_PODMAN:-0}"
+
+# ORCHESTRATOR_DOTNET_SELF_INSTALL (see ORCHESTRATOR_CMD above) and where it installs from. The feed URL is the
+# flat container (PackageBaseAddress) and the registration URL the registration base (RegistrationsBaseUrl) of a
+# NuGet v3 feed: nuget.org by default, or the NuGet mirror. The channel is prerelease (the newest version whose
+# pre-release tag is exactly -main, never a branch or pull request build) or stable (the newest with no
+# pre-release tag); ORCHESTRATOR_CMD_VERSION pins a version instead. The resolved version is cached for
+# ORCHESTRATOR_CMD_VERSION_CACHE_MINUTES, and a version that failed its checks is retried after the same time.
+# shellcheck disable=SC2034  # read by lib/self-install after sourcing
+ORCHESTRATOR_DOTNET_SELF_INSTALL="${ORCHESTRATOR_DOTNET_SELF_INSTALL:-0}"
+# shellcheck disable=SC2034  # read by lib/self-install after sourcing
+ORCHESTRATOR_CMD_PACKAGE_ID="credfeto.orchestrator.cmd.linux-x64"
+# shellcheck disable=SC2034  # read by lib/self-install after sourcing
+ORCHESTRATOR_CMD_FEED_URL="${ORCHESTRATOR_CMD_FEED_URL:-https://api.nuget.org/v3-flatcontainer}"
+# shellcheck disable=SC2034  # read by lib/self-install after sourcing
+ORCHESTRATOR_CMD_REGISTRATION_URL="${ORCHESTRATOR_CMD_REGISTRATION_URL:-https://api.nuget.org/v3/registration5-semver1}"
+# shellcheck disable=SC2034  # read by lib/self-install after sourcing
+ORCHESTRATOR_CMD_CHANNEL="${ORCHESTRATOR_CMD_CHANNEL:-prerelease}"
+# shellcheck disable=SC2034  # read by lib/self-install after sourcing
+ORCHESTRATOR_CMD_VERSION="${ORCHESTRATOR_CMD_VERSION:-}"
+# shellcheck disable=SC2034  # read by lib/self-install after sourcing
+ORCHESTRATOR_CMD_VERSION_CACHE_MINUTES="${ORCHESTRATOR_CMD_VERSION_CACHE_MINUTES:-60}"
 
 # Conservative pre-send guard against grossly oversized prompts.
 # The launch prompt is deliberately tiny ("Work on <item> in <repo>") — everything of

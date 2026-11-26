@@ -1,0 +1,302 @@
+# shellcheck shell=bash
+# oneshot's self-install of the .NET tool, Credfeto.Orchestrator.Cmd (#252 phase 10), behind
+# ORCHESTRATOR_DOTNET_SELF_INSTALL (off unless exactly 1). Once a cycle it works out which version to run, and
+# when that is not the installed one it downloads the linux-x64 tool package from the feed, checks the package's
+# SHA-512 against the hash the feed publishes, takes only the native binary out of it, and runs the binary's
+# --version (must print the version) and --self-test (must exit 0) before pointing the current link at it.
+#
+# Layout under ORCHESTRATOR_CMD_INSTALL_DIR (<state dir>/bin): one directory per version holding the binary,
+# `current` and `previous` links naming a version directory, the resolved-version cache, the record of a version
+# that failed its checks, and the install lock. lib/globals points ORCHESTRATOR_CMD at current's binary when it is
+# there and the environment does not set ORCHESTRATOR_CMD.
+#
+# Every failure (feed down, hash mismatch, a package without the binary, a failed check) warns once and keeps the
+# installed binary: self_install_orchestrator_cmd always returns 0, so the cycle carries on.
+
+# Versions are directory names here: the flat container's lower-case form, digits, letters, dots and hyphens only
+_SELF_INSTALL_VERSION_PATTERN='^[0-9a-z][0-9a-z.-]{0,63}$'
+
+# Prints the extraction tool to use, unzip or else bsdtar, or fails when neither is installed
+_self_install_zip_tool() {
+    if command -v unzip > /dev/null 2>&1; then
+        printf 'unzip'
+    elif command -v bsdtar > /dev/null 2>&1; then
+        printf 'bsdtar'
+    else
+        return 1
+    fi
+}
+
+# Fetches a feed URL to stdout. Only https (and file, for a local feed) is followed, and the feed's own redirects
+# must stay on https.
+_self_install_fetch() {
+    curl --fail --silent --show-error --location --proto '=https,file' --proto-redir '=https' \
+        --max-time "${2:-60}" "$1"
+}
+
+# Prints the version the channel wants: the newest exactly "-main" pre-release for prerelease, the newest version
+# with no pre-release tag for stable. Reads the flat container's version index for the package.
+_self_install_newest_version() {
+    local channel="$1" index pattern version
+    case "${channel}" in
+        prerelease) pattern='^[0-9]+([.][0-9]+){0,3}-main$' ;;
+        stable) pattern='^[0-9]+([.][0-9]+){0,3}$' ;;
+        *)
+            warn "Self-install: unknown ORCHESTRATOR_CMD_CHANNEL '${channel}' (expected prerelease or stable) — keeping the installed tool"
+            return 1
+            ;;
+    esac
+
+    if ! index=$(_self_install_fetch "${ORCHESTRATOR_CMD_FEED_URL%/}/${ORCHESTRATOR_CMD_PACKAGE_ID}/index.json"); then
+        warn "Self-install: could not read the version index from ${ORCHESTRATOR_CMD_FEED_URL} — keeping the installed tool"
+        return 1
+    fi
+
+    # Numeric parts compared as numbers, so 0.0.10 is newer than 0.0.9
+    version=$(jq -r --arg pattern "${pattern}" '
+        [.versions[]? | strings | ascii_downcase | select(test($pattern))]
+        | if length == 0 then empty
+          else max_by(sub("-main$"; "") | split(".") | map(tonumber))
+          end' <<< "${index}" 2> /dev/null) || version=""
+
+    if [ -z "${version}" ]; then
+        warn "Self-install: the feed lists no ${channel} version of ${ORCHESTRATOR_CMD_PACKAGE_ID} — keeping the installed tool"
+        return 1
+    fi
+    printf '%s' "${version}"
+}
+
+# Prints the version to install: ORCHESTRATOR_CMD_VERSION when pinned, else the channel's newest, taken from the
+# resolved-version cache while that is younger than ORCHESTRATOR_CMD_VERSION_CACHE_MINUTES
+_self_install_wanted_version() {
+    local dir="$1" channel="${ORCHESTRATOR_CMD_CHANNEL}" cache="$1/resolved-version" minutes cached version
+
+    if [ -n "${ORCHESTRATOR_CMD_VERSION}" ]; then
+        version="${ORCHESTRATOR_CMD_VERSION,,}"
+        if ! [[ "${version}" =~ ${_SELF_INSTALL_VERSION_PATTERN} ]]; then
+            warn "Self-install: ORCHESTRATOR_CMD_VERSION '${ORCHESTRATOR_CMD_VERSION}' is not a package version — keeping the installed tool"
+            return 1
+        fi
+        printf '%s' "${version}"
+        return 0
+    fi
+
+    minutes="${ORCHESTRATOR_CMD_VERSION_CACHE_MINUTES}"
+    [[ "${minutes}" =~ ^[1-9][0-9]{0,5}$ ]] || minutes=60
+
+    if [ -f "${cache}" ] && [ -n "$(find "${cache}" -mmin "-${minutes}" 2> /dev/null)" ]; then
+        cached=$(cat "${cache}" 2> /dev/null) || cached=""
+        if [ "${cached%% *}" = "${channel}" ] && [[ "${cached#* }" =~ ${_SELF_INSTALL_VERSION_PATTERN} ]]; then
+            printf '%s' "${cached#* }"
+            return 0
+        fi
+    fi
+
+    version=$(_self_install_newest_version "${channel}") || return 1
+    if ! [[ "${version}" =~ ${_SELF_INSTALL_VERSION_PATTERN} ]]; then
+        warn "Self-install: the feed's newest ${channel} version '${version}' is not a usable version — keeping the installed tool"
+        return 1
+    fi
+    printf '%s %s\n' "${channel}" "${version}" > "${cache}.tmp" && mv -f "${cache}.tmp" "${cache}"
+    printf '%s' "${version}"
+}
+
+# Prints the version the current link names, or nothing when there is no usable current install
+_self_install_current_version() {
+    local dir="$1" version
+    version=$(readlink "${dir}/current" 2> /dev/null) || return 0
+    if [[ "${version}" =~ ${_SELF_INSTALL_VERSION_PATTERN} ]] && [ -f "${dir}/${version}/${ORCHESTRATOR_CMD_BINARY}" ] \
+        && [ -x "${dir}/${version}/${ORCHESTRATOR_CMD_BINARY}" ]; then
+        printf '%s' "${version}"
+    fi
+}
+
+# Prints the hex SHA-512 the feed publishes for the package version: the registration leaf names the catalog entry,
+# whose packageHash is base64 (the flat container serves no .sha512 file)
+_self_install_published_sha512() {
+    local version="$1" leaf catalog_url entry hash hex
+    if ! leaf=$(_self_install_fetch "${ORCHESTRATOR_CMD_REGISTRATION_URL%/}/${ORCHESTRATOR_CMD_PACKAGE_ID}/${version}.json") \
+        || ! catalog_url=$(jq -r '.catalogEntry | if type == "object" then .["@id"] else . end | strings' <<< "${leaf}" 2> /dev/null) \
+        || [ -z "${catalog_url}" ] \
+        || ! entry=$(_self_install_fetch "${catalog_url}"); then
+        warn "Self-install: could not read the published hash of ${ORCHESTRATOR_CMD_PACKAGE_ID} ${version} — keeping the installed tool"
+        return 1
+    fi
+
+    hash=$(jq -r 'select(.packageHashAlgorithm == "SHA512") | .packageHash | strings' <<< "${entry}" 2> /dev/null) || hash=""
+    hex=""
+    if [[ "${hash}" =~ ^[A-Za-z0-9+/]{86}==$ ]]; then
+        hex=$(printf '%s' "${hash}" | base64 -d 2> /dev/null | od -An -v -tx1 | tr -d ' \n')
+    fi
+    if [ "${#hex}" -ne 128 ]; then
+        warn "Self-install: the feed publishes no SHA-512 hash for ${ORCHESTRATOR_CMD_PACKAGE_ID} ${version} — keeping the installed tool"
+        return 1
+    fi
+    printf '%s' "${hex}"
+}
+
+# Writes the package's native binary to the file in $2. The package must hold exactly one
+# tools/<tfm>/linux-x64/<binary> entry.
+_self_install_extract_binary() {
+    local package="$1" target="$2" tool entries entry count
+    if ! tool=$(_self_install_zip_tool); then
+        warn "Self-install: neither unzip nor bsdtar is installed, so the package cannot be unpacked — keeping the installed tool"
+        return 1
+    fi
+
+    if [ "${tool}" = unzip ]; then
+        entries=$(unzip -Z1 "${package}" 2> /dev/null) || entries=""
+    else
+        entries=$(bsdtar -tf "${package}" 2> /dev/null) || entries=""
+    fi
+    entries=$(grep -E "^tools/[A-Za-z0-9.]+/linux-x64/${ORCHESTRATOR_CMD_BINARY//./[.]}\$" <<< "${entries}") || entries=""
+    count=$(grep -c . <<< "${entries}")
+    if [ "${count}" -ne 1 ]; then
+        warn "Self-install: the package holds ${count} linux-x64 ${ORCHESTRATOR_CMD_BINARY} binaries, not one — keeping the installed tool"
+        return 1
+    fi
+    entry="${entries}"
+
+    if [ "${tool}" = unzip ]; then
+        unzip -p "${package}" "${entry}" > "${target}" 2> /dev/null || { rm -f "${target}"; }
+    else
+        bsdtar -xOf "${package}" "${entry}" > "${target}" 2> /dev/null || { rm -f "${target}"; }
+    fi
+    if [ ! -s "${target}" ]; then
+        warn "Self-install: could not unpack ${entry} from the package — keeping the installed tool"
+        return 1
+    fi
+    chmod 0755 "${target}"
+}
+
+# Runs the unpacked binary's --version (must print the version, ignoring +build metadata and case) and
+# --self-test (must exit 0)
+_self_install_check_binary() {
+    local binary="$1" version="$2" reported status=0 errors
+    reported=$(timeout 30 "${binary}" --version 2> /dev/null) || status=$?
+    if [ "${status}" -ne 0 ]; then
+        warn "Self-install: ${ORCHESTRATOR_CMD_BINARY} ${version} --version failed (exit ${status}) — keeping the installed tool"
+        return 1
+    fi
+    reported="${reported%%+*}"
+    if [ "${reported,,}" != "${version}" ]; then
+        warn "Self-install: ${ORCHESTRATOR_CMD_BINARY} ${version} --version printed '${reported:0:80}', not ${version} — keeping the installed tool"
+        return 1
+    fi
+
+    errors=$(timeout 120 "${binary}" --self-test 2>&1 > /dev/null) || status=$?
+    if [ "${status}" -ne 0 ]; then
+        warn "Self-install: ${ORCHESTRATOR_CMD_BINARY} ${version} --self-test failed (exit ${status}): $(head -n 1 <<< "${errors}" | cut -c1-200) — keeping the installed tool"
+        return 1
+    fi
+}
+
+# Points the named link (current or previous) at a version directory, by renaming a new link over it
+_self_install_link() {
+    local dir="$1" name="$2" version="$3"
+    ln -s "${version}" "${dir}/.${name}.$$" && mv -f -T "${dir}/.${name}.$$" "${dir}/${name}"
+}
+
+# Removes every version directory but the ones current and previous name
+_self_install_prune() {
+    local dir="$1" current previous entry name
+    current=$(readlink "${dir}/current" 2> /dev/null) || current=""
+    previous=$(readlink "${dir}/previous" 2> /dev/null) || previous=""
+    for entry in "${dir}"/*; do
+        name="${entry##*/}"
+        [ -d "${entry}" ] && [ ! -L "${entry}" ] || continue
+        [[ "${name}" =~ ${_SELF_INSTALL_VERSION_PATTERN} ]] || continue
+        [ "${name}" = "${current}" ] || [ "${name}" = "${previous}" ] || rm -rf "${entry}"
+    done
+}
+
+# Downloads, checks and unpacks one version into the scratch directory $3, then moves it into place and makes it
+# current, keeping the old current as previous
+_self_install_version_in() {
+    local dir="$1" version="$2" work="$3" id="${ORCHESTRATOR_CMD_PACKAGE_ID}" expected actual old
+    expected=$(_self_install_published_sha512 "${version}") || return 1
+
+    if ! _self_install_fetch "${ORCHESTRATOR_CMD_FEED_URL%/}/${id}/${version}/${id}.${version}.nupkg" 600 \
+        > "${work}/package.nupkg"; then
+        warn "Self-install: could not download ${id} ${version} — keeping the installed tool"
+        return 1
+    fi
+    actual=$(sha512sum < "${work}/package.nupkg" | awk '{ print $1 }')
+    if [ "${actual}" != "${expected}" ]; then
+        warn "Self-install: ${id} ${version} does not match the SHA-512 the feed publishes — keeping the installed tool"
+        return 1
+    fi
+
+    mkdir "${work}/${version}" || return 1
+    _self_install_extract_binary "${work}/package.nupkg" "${work}/${version}/${ORCHESTRATOR_CMD_BINARY}" || return 1
+    _self_install_check_binary "${work}/${version}/${ORCHESTRATOR_CMD_BINARY}" "${version}" || return 1
+
+    old=$(_self_install_current_version "${dir}")
+    if ! { rm -rf "${dir:?}/${version}" && mv "${work}/${version}" "${dir}/${version}" \
+        && _self_install_link "${dir}" current "${version}"; }; then
+        warn "Self-install: could not move ${version} into ${dir} — keeping the installed tool"
+        return 1
+    fi
+    if [ -n "${old}" ] && [ "${old}" != "${version}" ]; then
+        _self_install_link "${dir}" previous "${old}" || warn "Self-install: could not record ${old} as the previous version"
+    fi
+    _self_install_prune "${dir}"
+    info "Self-install: ${ORCHESTRATOR_CMD_BINARY} ${version} installed${old:+ (was ${old})}"
+}
+
+# The install itself, run under the install lock
+_self_install_locked() {
+    local dir="$1" version current failed minutes work status=0
+    version=$(_self_install_wanted_version "${dir}") || return 1
+    current=$(_self_install_current_version "${dir}")
+    [ "${version}" = "${current}" ] && return 0
+
+    # A version that failed its checks is not downloaded again until the cache period has passed
+    minutes="${ORCHESTRATOR_CMD_VERSION_CACHE_MINUTES}"
+    [[ "${minutes}" =~ ^[1-9][0-9]{0,5}$ ]] || minutes=60
+    failed=$(cat "${dir}/failed-version" 2> /dev/null) || failed=""
+    if [ "${failed}" = "${version}" ] && [ -n "$(find "${dir}/failed-version" -mmin "-${minutes}" 2> /dev/null)" ]; then
+        warn "Self-install: ${version} failed to install less than ${minutes} minutes ago — keeping the installed tool"
+        return 1
+    fi
+
+    if ! work=$(mktemp -d "${dir}/.download.XXXXXX"); then
+        warn "Self-install: could not create a download directory in ${dir} — keeping the installed tool"
+        return 1
+    fi
+    _self_install_version_in "${dir}" "${version}" "${work}" || status=$?
+    rm -rf "${work}"
+    if [ "${status}" -ne 0 ]; then
+        printf '%s\n' "${version}" > "${dir}/failed-version"
+        return 1
+    fi
+    rm -f "${dir}/failed-version"
+}
+
+# Installs the tool's wanted version when ORCHESTRATOR_DOTNET_SELF_INSTALL=1, then points ORCHESTRATOR_CMD at the
+# installed binary unless the environment set ORCHESTRATOR_CMD. Never fails: see the top of this file.
+self_install_orchestrator_cmd() {
+    [ "${ORCHESTRATOR_DOTNET_SELF_INSTALL}" = 1 ] || return 0
+    local dir="${ORCHESTRATOR_CMD_INSTALL_DIR}"
+
+    if ! mkdir -p "${dir}" 2> /dev/null; then
+        warn "Self-install: could not create ${dir} — keeping the installed tool"
+        return 0
+    fi
+
+    # Its own lock, so two overlapping runs never install at once; a run that finds it held leaves the install to
+    # the other one. A subshell, so the lock's fd closes with it.
+    (
+        if ! flock --exclusive --nonblock 8; then
+            info "Self-install: another run is installing the tool — skipping"
+            exit 0
+        fi
+        _self_install_locked "${dir}"
+    ) 8> "${dir}/install.lock" || true
+
+    if [ "${ORCHESTRATOR_CMD_FROM_ENVIRONMENT}" != 1 ] && [ -n "$(_self_install_current_version "${dir}")" ]; then
+        # shellcheck disable=SC2034  # read by lib/fingerprints and the other lib files after sourcing
+        ORCHESTRATOR_CMD="${dir}/current/${ORCHESTRATOR_CMD_BINARY}"
+    fi
+    return 0
+}
