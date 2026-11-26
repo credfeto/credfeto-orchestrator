@@ -86,11 +86,17 @@ public static class Program
                 .AsTask();
         }
 
-        // discord only prints the payload it builds from its arguments: it reads nothing else
+        // discord only prints the payload or text it builds from its arguments and, for the text commands, stdin
         if (DiscordCommandParser.IsVerb(args))
         {
             return DiscordCommandRunner
-                .RunAsync(args: args, output: Console.Out, error: Console.Error, cancellationToken: cancellationToken)
+                .RunAsync(
+                    args: args,
+                    input: Console.OpenStandardInput,
+                    output: Console.Out,
+                    error: Console.Error,
+                    cancellationToken: cancellationToken
+                )
                 .AsTask();
         }
 

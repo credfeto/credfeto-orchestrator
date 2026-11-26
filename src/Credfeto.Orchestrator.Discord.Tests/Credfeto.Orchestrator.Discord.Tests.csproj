@@ -37,6 +37,7 @@
     <!-- The golden cases test/oneshot-discord-parity.bats checks the shell version against -->
     <EmbeddedResource Include="../../test/fixtures/discord-parity.json" LogicalName="discord-parity.json" />
     <EmbeddedResource Include="../../test/fixtures/discord-stalled-digest-parity.json" LogicalName="discord-stalled-digest-parity.json" />
+    <EmbeddedResource Include="../../test/fixtures/discord-text-parity.json" LogicalName="discord-text-parity.json" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../Credfeto.Orchestrator.Discord/Credfeto.Orchestrator.Discord.csproj" />
