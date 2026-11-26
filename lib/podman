@@ -237,6 +237,63 @@ claude_result_indicates_background_stall() {
     match_nocase "${result_text}" "${stall_re}"
 }
 
+# Prints the permission denials recorded in the Claude JSON result in $1, one "- <tool>: <detail>" line each, as
+# handle_claude_permission_denials logs them, or nothing when the array is absent, empty or not an array. With
+# ORCHESTRATOR_DOTNET_PODMAN=1 the tool renders it (_claude_result_tool_answers).
+claude_result_permission_denials_summary() {
+    local tmpfile="$1" podman_tool_output
+    if [ "${ORCHESTRATOR_DOTNET_PODMAN}" = 1 ] && _claude_result_tool_answers denials-summary "${tmpfile}"; then
+        printf '%s' "${podman_tool_output}"
+        return 0
+    fi
+    # Every permission_denials element is coerced to an object before indexing .tool_name/
+    # .tool_input - indexing a non-object element (e.g. a bare string) is a jq runtime error,
+    # not a null, and aborts the whole $d[] iteration part-way through (code review, #1328);
+    # coercing keeps every entry visible in the summary instead of the iteration dying
+    # silently on the first malformed one. Each rendered line has embedded newlines collapsed
+    # to a single space so one denial is always exactly one summary line, and a tool_input
+    # value with neither .command nor .file_path is truncated so a single odd denial cannot
+    # blow out the log or the Discord field on its own.
+    jq -r '
+        def to_obj: if type == "object" then . else {tool_name: "malformed-denial-entry", tool_input: {raw: .}} end;
+        def trunc: if (length > 200) then .[0:200] + "...(truncated)" else . end;
+        (.permission_denials // []) as $raw
+        | ($raw | if type == "array" then . else [] end | map(to_obj)) as $d
+        | $d[]
+        | ((.tool_input // {}) as $ti |
+            if ($ti | type) == "object"
+            then ($ti.command // $ti.file_path // ($ti | tostring | trunc))
+            else ($ti | tostring | trunc)
+            end) as $detail
+        | "- \(.tool_name // "unknown"): \($detail)"
+        | gsub("[\r\n]+"; " ")
+        ' "${tmpfile}" 2>/dev/null
+}
+
+# Runs one read of a Claude JSON result (the file in $2) through Credfeto.Orchestrator.Cmd
+# (ORCHESTRATOR_DOTNET_PODMAN=1, #252) and returns 0 when the tool answered, leaving what it printed in
+# podman_tool_output (the caller declares it local). The tool runs the same jq program over the file and answers, exit
+# 0, only where it can give exactly jq's output and jq would succeed. Any other status (2 a usage error, 3 a file it
+# will not judge because jq's answer could differ from its own or jq would fail, 125 the answer could not be written,
+# 126 or 127 the tool is missing, 130 and above a signal) is no answer: this warns and returns 1, and the caller runs
+# its jq. The read changes nothing, so running it again in bash is safe. The tool's stderr goes to /dev/null, as jq's
+# does.
+_claude_result_tool_answers() {
+    local query="$1" result_file="$2" text status
+    # The tool's exit status after a dot keeps the output's own trailing newlines, which $(...) would drop
+    text=$(
+        "${ORCHESTRATOR_CMD}" podman "${query}" --result "${result_file}" < /dev/null 2> /dev/null
+        printf '.%s' "$?"
+    )
+    status=${text##*.}
+    if [ "${status}" = 0 ]; then
+        podman_tool_output=${text%.*}
+        return 0
+    fi
+    warn "${ORCHESTRATOR_CMD} podman ${query} failed (exit ${status}); running jq in bash instead"
+    return 1
+}
+
 # Parses and surfaces any permission_denials recorded in the Claude JSON result (#1328).
 # Confirmed live: a PreToolUse hook block (e.g. enforce-git-policy rejecting a bare
 # git fetch) populates this field independently of Claude Code's own permission system.
@@ -254,29 +311,8 @@ claude_result_indicates_background_stall() {
 handle_claude_permission_denials() {
     local tmpfile="$1" item_type="$2" item_id="$3"
 
-    # Every permission_denials element is coerced to an object before indexing .tool_name/
-    # .tool_input - indexing a non-object element (e.g. a bare string) is a jq runtime error,
-    # not a null, and aborts the whole $d[] iteration part-way through (code review, #1328);
-    # coercing keeps every entry visible in the summary instead of the iteration dying
-    # silently on the first malformed one. Each rendered line has embedded newlines collapsed
-    # to a single space so one denial is always exactly one summary line, and a tool_input
-    # value with neither .command nor .file_path is truncated so a single odd denial cannot
-    # blow out the log or the Discord field on its own.
     local summary
-    summary=$(jq -r '
-        def to_obj: if type == "object" then . else {tool_name: "malformed-denial-entry", tool_input: {raw: .}} end;
-        def trunc: if (length > 200) then .[0:200] + "...(truncated)" else . end;
-        (.permission_denials // []) as $raw
-        | ($raw | if type == "array" then . else [] end | map(to_obj)) as $d
-        | $d[]
-        | ((.tool_input // {}) as $ti |
-            if ($ti | type) == "object"
-            then ($ti.command // $ti.file_path // ($ti | tostring | trunc))
-            else ($ti | tostring | trunc)
-            end) as $detail
-        | "- \(.tool_name // "unknown"): \($detail)"
-        | gsub("[\r\n]+"; " ")
-        ' "${tmpfile}" 2>/dev/null)
+    summary=$(claude_result_permission_denials_summary "${tmpfile}")
     [ -n "${summary}" ] || return 0
 
     # Counting rendered lines rather than a second independent jq pass means the count can
@@ -397,9 +433,13 @@ claude_result_indicates_clean_review() {
 # leading "(", "{" or quote is then dropped from the word that is left, and only the basename of a
 # path is kept. Anything that is still not a plain short name becomes "(other)" rather than being
 # trimmed into shape, so no secret, path or argument can reach the tab-separated state line or a
-# Discord field.
+# Discord field. With ORCHESTRATOR_DOTNET_PODMAN=1 the tool reads them (_claude_result_tool_answers).
 claude_result_denied_command_names() {
-    local tmpfile="$1"
+    local tmpfile="$1" podman_tool_output
+    if [ "${ORCHESTRATOR_DOTNET_PODMAN}" = 1 ] && _claude_result_tool_answers denied-command-names "${tmpfile}"; then
+        printf '%s' "${podman_tool_output}"
+        return 0
+    fi
     jq -r '
         def options_with_value:
             {
