@@ -192,6 +192,38 @@ match_nocase() {
     return "${match_rc}"
 }
 
+# Asks Credfeto.Orchestrator.Cmd (ORCHESTRATOR_DOTNET_PODMAN=1, #252) one of the session-outcome text heuristics below
+# about the message in $2, passing the rest of the arguments (its patterns and markers) and the shell's effective
+# LC_CTYPE and LC_COLLATE, since the answer depends on them and a shell variable need not be exported. The message
+# goes on stdin as a here-string; the tool drops the one newline that adds. Returns 0 when the tool answered, with its
+# exit status (0 or 1, the heuristic's answer) in podman_tool_status and what it printed in podman_tool_output (the
+# caller declares both local). The tool answers only where it gives exactly bash's answer: a message that is ASCII, or
+# any message in the C locale, and patterns in the subset of extended regular expressions it matches, with POSIX's
+# leftmost-longest match for the negated-phrase removal. Any other status (2 a usage error, 3 a message, locale or
+# pattern it will not judge, 125 stdin or the answer could not be handled, 126 or 127 the tool is missing, 130 and
+# above a signal) is no answer: this warns and returns 1, and the caller matches in bash. Nothing is changed, so
+# matching again in bash is safe. The tool's stderr goes to /dev/null.
+_claude_text_tool_answers() {
+    local query="$1" result_text="$2" text status
+    shift 2
+    # The tool's exit status after a dot keeps the output's own trailing newlines, which $(...) would drop
+    text=$(
+        "${ORCHESTRATOR_CMD}" podman "${query}" --ctype "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" \
+            --collate "${LC_ALL:-${LC_COLLATE:-${LANG:-}}}" "$@" <<< "${result_text}" 2> /dev/null
+        printf '.%s' "$?"
+    )
+    status=${text##*.}
+    case "${status}" in
+        0 | 1)
+            podman_tool_status=${status}
+            podman_tool_output=${text%.*}
+            return 0
+            ;;
+    esac
+    warn "${ORCHESTRATOR_CMD} podman ${query} failed (exit ${status}); matching it in bash instead"
+    return 1
+}
+
 # Returns 0 (true) if the given Claude result text shows the session ended by backgrounding a
 # local check (build/test/pre-commit) and stopping its turn to "wait" for a later notification
 # instead of polling for it within the same turn (#1326/credfeto-orchestrator#1335). Confirmed
@@ -209,9 +241,10 @@ match_nocase() {
 # Takes the already-extracted result TEXT (not a tmpfile) — the caller already runs the one
 # canonical `jq -r '.result // ""'` query for logging; reusing that string here, matched with a
 # plain bash regex, avoids a second jq invocation entirely (and, in tests, avoids depending on a
-# jq stub recognising a filter it was never written to expect).
+# jq stub recognising a filter it was never written to expect). With ORCHESTRATOR_DOTNET_PODMAN=1 the tool matches
+# it (_claude_text_tool_answers).
 claude_result_indicates_background_stall() {
-    local result_text="$1"
+    local result_text="$1" podman_tool_status podman_tool_output
     local stall_re='background.*(wait|still running|pause here)'
     stall_re+='|wait(ing)?[^.]*(background|monitor|notification)'
     stall_re+='|monitor (will|task)[^.]*(notif|wake)'
@@ -234,6 +267,10 @@ claude_result_indicates_background_stall() {
     # will pick up once CI settles" case or an unrelated "I'll resume ... once ..." sentence.
     stall_re+='|I.ll (pick (this|it) up|resume|continue this)[^.]*(background|monitor|notification)'
     stall_re+='|(background|monitor|notification)[^.]*I.ll (pick (this|it) up|resume|continue this)'
+    if [ "${ORCHESTRATOR_DOTNET_PODMAN}" = 1 ] &&
+        _claude_text_tool_answers background-stall "${result_text}" --pattern "${stall_re}"; then
+        return "${podman_tool_status}"
+    fi
     match_nocase "${result_text}" "${stall_re}"
 }
 
@@ -335,9 +372,11 @@ ${summary}"
 # workflow narration that happens to mention "denied" in passing - same style and same false-
 # positive concern as claude_result_indicates_background_stall above. Gated to a fixed length cap
 # so a normal multi-paragraph implementation summary can never match regardless of wording, since
-# a genuine diagnostic refusal is always short (the session gave up almost immediately).
+# a genuine diagnostic refusal is always short (the session gave up almost immediately). The cap is tested in bash
+# (${#} counts characters or bytes by locale); with ORCHESTRATOR_DOTNET_PODMAN=1 the tool matches the rest
+# (_claude_text_tool_answers).
 claude_result_indicates_diagnostic_refusal() {
-    local result_text="$1"
+    local result_text="$1" podman_tool_status podman_tool_output
     [ "${#result_text}" -le 500 ] || return 1
 
     local refusal_re='denied by the permission system'
@@ -345,6 +384,10 @@ claude_result_indicates_diagnostic_refusal() {
     refusal_re+='|is denied'
     refusal_re+='|need you to [^.]*(confirm|allowlist)'
 
+    if [ "${ORCHESTRATOR_DOTNET_PODMAN}" = 1 ] &&
+        _claude_text_tool_answers diagnostic-refusal "${result_text}" --pattern "${refusal_re}"; then
+        return "${podman_tool_status}"
+    fi
     match_nocase "${result_text}" "${refusal_re}"
 }
 
@@ -354,13 +397,19 @@ claude_result_indicates_diagnostic_refusal() {
 # lib/globals). Negated workaround phrases ("Nothing was pushed") are removed, leftmost first and
 # each replaced by a space, before the workaround test, so they do not hide a quit. Kept separate
 # from claude_result_indicates_diagnostic_refusal so the .last-diagnostic marker it feeds keeps
-# its own, narrower rules.
+# its own, narrower rules. With ORCHESTRATOR_DOTNET_PODMAN=1 the tool judges it (_claude_text_tool_answers).
 claude_result_indicates_tool_denied_quit() {
-    local result_text="$1" mention_re give_up_re workaround_re negated_re without_negated
+    local result_text="$1" mention_re give_up_re workaround_re negated_re without_negated podman_tool_status
+    local podman_tool_output
     mention_re=$(IFS='|'; printf '%s' "${TOOL_DENIAL_MENTION_PATTERNS[*]}")
     give_up_re=$(IFS='|'; printf '%s' "${TOOL_DENIED_GIVE_UP_PATTERNS[*]}")
     workaround_re=$(IFS='|'; printf '%s' "${TOOL_DENIED_WORKAROUND_PATTERNS[*]}")
     negated_re=$(IFS='|'; printf '%s' "${TOOL_DENIED_NEGATED_WORKAROUND_PATTERNS[*]}")
+    if [ "${ORCHESTRATOR_DOTNET_PODMAN}" = 1 ] &&
+        _claude_text_tool_answers tool-denied-quit "${result_text}" --mention "${mention_re}" \
+            --give-up "${give_up_re}" --workaround "${workaround_re}" --negated "${negated_re}"; then
+        return "${podman_tool_status}"
+    fi
     if ! match_nocase "${result_text}" "${mention_re}" || ! match_nocase "${result_text}" "${give_up_re}"; then
         return 1
     fi
@@ -376,9 +425,17 @@ claude_result_indicates_tool_denied_quit() {
 # Prints CLEAN or FINDINGS when the session's final message has a line that is exactly
 # REVIEW_RESULT_CLEAN_MARKER or REVIEW_RESULT_FINDINGS_MARKER (lib/globals), ignoring surrounding
 # whitespace (a trailing CR included) and case, or nothing when it has neither (#1749). A marker
-# inside a sentence is not a marker line. FINDINGS wins over CLEAN when both appear.
+# inside a sentence is not a marker line. FINDINGS wins over CLEAN when both appear. With ORCHESTRATOR_DOTNET_PODMAN=1
+# the tool reads it (_claude_text_tool_answers).
 review_result_marker() {
-    local result_text="$1" line trimmed clean_line findings_line seen_clean=0
+    local result_text="$1" line trimmed clean_line findings_line seen_clean=0 podman_tool_status podman_tool_output
+    if [ "${ORCHESTRATOR_DOTNET_PODMAN}" = 1 ] &&
+        _claude_text_tool_answers review-result-marker "${result_text}" \
+            --clean-marker "${REVIEW_RESULT_CLEAN_MARKER}" --findings-marker "${REVIEW_RESULT_FINDINGS_MARKER}" &&
+        [ "${podman_tool_status}" = 0 ]; then
+        printf '%s' "${podman_tool_output}"
+        return 0
+    fi
     clean_line="${REVIEW_RESULT_CLEAN_MARKER,,}"
     findings_line="${REVIEW_RESULT_FINDINGS_MARKER,,}"
     while IFS= read -r line || [ -n "${line}" ]; do
@@ -402,18 +459,27 @@ review_result_marker() {
 # ("nothing was fixed") are removed, leftmost first and each replaced by a space, as
 # claude_result_indicates_tool_denied_quit does. Conservative by design: an empty message, or any
 # doubt, is not clean. Used only to advance a review board the session left unchanged
-# (pr_clean_review_board_advance, lib/github-status).
+# (pr_clean_review_board_advance, lib/github-status). With ORCHESTRATOR_DOTNET_PODMAN=1 the tool judges a message
+# that is not empty, result line included (_claude_text_tool_answers).
 claude_result_indicates_clean_review() {
-    local result_text="$1" clean_re findings_re negated_re without_negated marker
+    local result_text="$1" clean_re findings_re negated_re without_negated marker podman_tool_status
+    local podman_tool_output
     [ -n "${result_text}" ] || return 1
-    marker=$(review_result_marker "${result_text}")
+    clean_re=$(IFS='|'; printf '%s' "${CLEAN_REVIEW_PATTERNS[*]}")
+    findings_re=$(IFS='|'; printf '%s' "${REVIEW_FINDINGS_PATTERNS[*]}")
+    negated_re=$(IFS='|'; printf '%s' "${REVIEW_FINDINGS_NEGATED_PATTERNS[*]}")
+    if [ "${ORCHESTRATOR_DOTNET_PODMAN}" = 1 ] &&
+        _claude_text_tool_answers clean-review "${result_text}" --clean-marker "${REVIEW_RESULT_CLEAN_MARKER}" \
+            --findings-marker "${REVIEW_RESULT_FINDINGS_MARKER}" --clean "${clean_re}" --findings "${findings_re}" \
+            --negated "${negated_re}"; then
+        return "${podman_tool_status}"
+    fi
+    # Switched on, the tool has just declined this message, so the result line is read in bash, not asked again
+    marker=$(ORCHESTRATOR_DOTNET_PODMAN=0 review_result_marker "${result_text}")
     case "${marker}" in
         CLEAN) return 0 ;;
         FINDINGS) return 1 ;;
     esac
-    clean_re=$(IFS='|'; printf '%s' "${CLEAN_REVIEW_PATTERNS[*]}")
-    findings_re=$(IFS='|'; printf '%s' "${REVIEW_FINDINGS_PATTERNS[*]}")
-    negated_re=$(IFS='|'; printf '%s' "${REVIEW_FINDINGS_NEGATED_PATTERNS[*]}")
     match_nocase "${result_text}" "${clean_re}" || return 1
     without_negated="${result_text,,}"
     while match_nocase "${without_negated}" "${negated_re}"; do
