@@ -5123,7 +5123,7 @@
         }
       ],
       "tool": "refuses",
-      "stdout": "{\"sessions\":1,\"denials\":0,\"stalled\":0,\"quits\":0,\"repos\":[{\"repo\":\"o/a\",\"sessions\":1,\"denials\":0,\"stalled\":0}],\"top_commands\":[]}\\n",
+      "stdout": "{\"sessions\":1,\"denials\":5,\"stalled\":0,\"quits\":0,\"repos\":[{\"repo\":\"o/a\",\"sessions\":1,\"denials\":5,\"stalled\":0}],\"top_commands\":[]}\\n",
       "status": 0,
       "remaining": [
         "./owner",

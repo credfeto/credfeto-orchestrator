@@ -54,6 +54,13 @@ readonly RUN_LOG_LINES_DEFAULT=200
 readonly RUN_LOG_LINES_MAX=2000
 readonly RUN_LOG_LINE_BYTES=1000
 readonly RUN_LOG_BYTE_LIMIT=262144
+# run log --grep: the most bytes of the pattern, the most lines of context either side of a match,
+# and how many matches it prints by default and at most; run log --from-line: the highest line.
+readonly RUN_LOG_GREP_BYTES=256
+readonly RUN_LOG_CONTEXT_MAX=20
+readonly RUN_LOG_MATCHES_DEFAULT=50
+readonly RUN_LOG_MATCHES_MAX=1000
+readonly RUN_LOG_FROM_LINE_MAX=999999999
 # run view: the most jobs of a run's latest attempt it reads; more is a runtime failure.
 readonly RUN_JOB_LIMIT=1000
 # run list --workflow: the most characters of a workflow file name or name.
@@ -446,7 +453,7 @@ Commands:
   tag view                 Print the commit a repository's tag points to (exit 9 when not found)
   run list                 List a repository's Actions runs for a branch or a commit, newest first
   run view                 Print an Actions run's status and jobs (exit 9 when not found)
-  run log                  Print the tail of a run's failed steps' logs (exit 4 while it runs, 9 when not found)
+  run log                  Print the tail of a run's failed steps' logs, or search them (exit 4 while it runs, 9 when not found)
   run rerun                Rerun a pull request's run: its failed jobs, or all when a required check never ran (exit 4 while it runs, 8 when refused, 9 when not found)
   task wait                Wait, in one call, for a background command to finish (exit 4 while it runs, 9 when not found)
   help [command]           Show this help, or the help for one command
@@ -3114,17 +3121,36 @@ USAGE
 usage_run_log() {
     cat << USAGE
 Usage: cfwf run log --repo <owner/repo> --run <id> [--job <id>] [--lines <n>]
+         [--from-line <n>] [--grep <ERE> [--context <n>] [--max-matches <n>]]
 
-Prints the tail of the logs of a completed GitHub Actions run's failed steps: never a whole log, and
-never a step that passed.
+Prints the tail of the logs of a completed GitHub Actions run's failed steps, a window of them, or
+the lines of them that match a pattern: never a whole log, and never a step that passed.
 
---repo   Always required; never taken from the current directory.
---run    Always required: the run's id, digits only, above 0.
---job    Only this job of the run: its id, digits only, above 0. A job of another run is refused as
-         not found.
---lines  The most of the last lines of each failed step kept, from 1 to ${RUN_LOG_LINES_MAX} (default ${RUN_LOG_LINES_DEFAULT}).
+--repo         Always required; never taken from the current directory.
+--run          Always required: the run's id, digits only, above 0.
+--job          Only this job of the run: its id, digits only, above 0. A job of another run is
+               refused as not found.
+--lines        The most of the last lines of each failed step kept, from 1 to ${RUN_LOG_LINES_MAX} (default ${RUN_LOG_LINES_DEFAULT});
+               with --from-line, the most lines of the window.
+--from-line    Prints a window of each failed step instead of its tail: --lines lines from this line
+               on, from 1 to ${RUN_LOG_FROM_LINE_MAX}, numbered as --grep numbers them. Take the number from a
+               --grep match.
+--grep         Searches the whole log of each failed step, not only its tail, for an extended
+               regular expression (as grep -E takes it, at most ${RUN_LOG_GREP_BYTES} bytes, no control character),
+               and prints only the lines that match, each with its line number within its step. It is
+               matched, byte by byte in the C locale, against each line as cut and made printable
+               (below), before redaction and masking. A pattern awk or grep -E cannot compile is a
+               usage error. Not with --lines or --from-line.
+--context      With --grep: also print this many lines either side of each match, from 0 to ${RUN_LOG_CONTEXT_MAX}
+               (default 0).
+--max-matches  With --grep: the most matches printed, across every failed step, from 1 to ${RUN_LOG_MATCHES_MAX}
+               (default ${RUN_LOG_MATCHES_DEFAULT}). Later matches are counted, not printed, though one can still show as
+               a context line of an earlier match.
 --log, --json, --jq, --template, --paginate, --attempt and --web are not options. Only the
 latest attempt's logs are read.
+
+When the tail does not show why a step failed, search for it:
+  cfwf run log --repo <owner/repo> --run <id> --grep 'not ok|##\[error\]|FAIL' --context 5
 
 Logs exist only once a run has completed: a run, or with --job a job, that has not exits ${RUN_PENDING_EXIT}
 (pending, not a failure), before any log is read. Run it again once the run has completed.
@@ -3137,6 +3163,15 @@ then, as the last line and the only one that starts with neither == nor |:
 An empty log line is | alone. Output without the summary line is a cut-off copy. A completed run
 with no failed step prints only the summary, with every count 0; see 'cfwf run view' for its jobs.
 A line gh gives with no step is under the step UNKNOWN STEP.
+
+With --grep or --from-line, each line printed starts with its line number within its step (from 1):
+  | <n>: <text>   a match, or with --from-line a line of the window
+  | <n>- <text>   a context line of a match
+  | --            with --context, between two groups of lines that are not next to each other
+A step with no line printed has no header. With --grep the summary ends with two more counts:
+  summary jobs=<a> steps=<b> lines=<c> redacted=<d> masked=<e> matches=<f> cut=<g>
+where matches is every match found and cut those past --max-matches, not printed as matches. A
+pattern that matches nothing prints only the summary and exits 0.
 
 Log text is untrusted, so each line is changed before it is printed:
   cut         a line over ${RUN_LOG_LINE_BYTES} bytes is cut at a character boundary and ends with " [cut]"
@@ -3153,7 +3188,8 @@ Host paths, such as the runner's /home/runner/work/..., are printed as they are.
 in a comment still goes through the leak check, which refuses a /home/ path.
 
 Output over ${RUN_LOG_BYTE_LIMIT} bytes (256 KiB) is refused (exit 1) and none of it is printed, as an oversized
-diff is: use a smaller --lines, or --job for one job.
+diff is: use a smaller --lines, or --job for one job (with --grep, a smaller --context or
+--max-matches).
 
 Exit codes: 0 printed; ${RUN_PENDING_EXIT} the run or the job has not completed; ${RUN_NOT_FOUND_EXIT} the run or the job was not found
 in the repository, or the job is not a job of the run; 1 a runtime failure, such as a gh or network
@@ -9542,15 +9578,12 @@ pr_auto_merge_at() {
         "${enabled_at}" "${enabled_by}" "${last}" "${last_at}" "${last_by}"
 }
 
-# The tail stage of run log, an awk program run in the C locale on gh run view --log-failed, whose
-# lines are job, a tab, step, a tab and the text (a line with no step is UNKNOWN STEP). It keeps the
-# last keep lines of each step, in the order the steps first appear, each cut to width bytes as it
-# is stored, so its memory is bounded however long the log is, and makes them printable. It prints a
-# record for each step (H, a tab, the job, a tab, the step) followed by one for each of its lines (L,
-# a tab, the text), and exits 3 for a line that does not have two tabs. POSIX awk only, because the
-# image has mawk: no interval expressions and no gawk extensions.
+# The functions the tail and search stages of run log share: cutting a line to width bytes, making
+# it printable, and splitting a line of gh run view --log-failed, which is job, a tab, step, a tab
+# and the text (a line with no step is UNKNOWN STEP). POSIX awk only, because the image has mawk: no
+# interval expressions and no gawk extensions.
 # shellcheck disable=SC2016  # an awk program: its $ fields are awk's, not the shell's
-readonly RUN_LOG_TAIL_PROGRAM='
+readonly RUN_LOG_LINE_FUNCTIONS='
 # Run in the C locale, so every string function counts bytes. POSIX awk only (the image has mawk):
 # no interval expressions, no gawk extensions.
 function is_continuation(c) {
@@ -9624,13 +9657,15 @@ BEGIN {
     CSI = sprintf("%c", 27) "\\[[0-?]*[ -/]*[@-~]"
     steps = 0
 }
-{
+# Splits the current line into job, step and text, sets key to the step it belongs to and, the
+# first time a step is seen, adds it to order with count 0. Fails for a line without two tabs.
+function split_line(    i, rest, j) {
     i = index($0, "\t")
-    if (i == 0) { bad = 1; exit 3 }
+    if (i == 0) return 0
     job = substr($0, 1, i - 1)
     rest = substr($0, i + 1)
     j = index(rest, "\t")
-    if (j == 0) { bad = 1; exit 3 }
+    if (j == 0) return 0
     step = substr(rest, 1, j - 1)
     text = substr(rest, j + 1)
     key = job SUBSEP step
@@ -9641,6 +9676,18 @@ BEGIN {
         job_of[key] = job
         step_of[key] = step
     }
+    return 1
+}
+'
+# The tail stage of run log, an awk program run in the C locale on gh run view --log-failed. It keeps
+# the last keep lines of each step, in the order the steps first appear, each cut to width bytes as
+# it is stored, so its memory is bounded however long the log is, and makes them printable. It prints
+# a record for each step (H, a tab, the job, a tab, the step) followed by one for each of its lines
+# (L, a tab, the text), and exits 3 for a line that does not have two tabs.
+# shellcheck disable=SC2016  # an awk program: its $ fields are awk's, not the shell's
+readonly RUN_LOG_TAIL_PROGRAM="${RUN_LOG_LINE_FUNCTIONS}"'
+{
+    if (!split_line()) { bad = 1; exit 3 }
     if (length(text) > width) text = cut(text)
     buffer[key, count[key] % keep] = text
     count[key]++
@@ -9656,16 +9703,81 @@ END {
     }
 }
 '
-# The format stage of run log, an awk program run in the C locale on the tail stage records, with
-# redacted the numbers of the records that hold a token, each between commas. It prints the header
-# of each step (== job <job> step <step>), each line after "| " (or "|" for an empty one), so no log
-# text can pass for a header or the summary, and last the summary. A record holding a token is
-# replaced whole; long hex and base64 runs in the rest are masked as ***.
+# The search stage of run log, run instead of the tail stage for --grep or --from-line, in the C
+# locale on gh run view --log-failed. It numbers the lines of each step from 1 and reads every one,
+# cutting each to width bytes and making it printable before it is matched. With from 0 it keeps each
+# line matching the extended regular expression in the CFWF_RUN_LOG_GREP environment variable (ENVIRON
+# keeps its backslashes as they are, which -v would not), up to max_matches in all, with context
+# lines either side; a ring buffer of the last context lines of each step bounds its memory. With
+# from above 0 it keeps lines from to from + lines - 1 of each step. It prints, for each step with a
+# line kept, in the order the steps first appear, a header record (H, as the tail stage's) and then
+# one record for each line (M a match, C a context line or N a window line, then a tab, the line's
+# number, a tab and the text) or, with context, G and two tabs between lines that are not next to
+# each other. With --grep, a last record is T, a tab, the matches found, a tab and those past
+# max_matches. It exits 3 for a line that does not have two tabs.
+# shellcheck disable=SC2016  # an awk program: its $ fields are awk's, not the shell's
+readonly RUN_LOG_SEARCH_PROGRAM="${RUN_LOG_LINE_FUNCTIONS}"'
+function keep_line(kind, number, line) {
+    kept[key]++
+    record[key, kept[key]] = kind "\t" number "\t" line
+}
+function clean(line) {
+    if (length(line) > width) line = cut(line)
+    return printable(line)
+}
+BEGIN {
+    pattern = ENVIRON["CFWF_RUN_LOG_GREP"]
+    matches = 0
+}
+{
+    if (!split_line()) { bad = 1; exit 3 }
+    n = ++count[key]
+    if (from > 0) {
+        if (n >= from && n - from < lines) keep_line("N", n, clean(text))
+        next
+    }
+    text = clean(text)
+    found = text ~ pattern
+    if (found) matches++
+    previous = last[key] + 0
+    if (found && matches <= max_matches) {
+        start = n - context
+        if (start <= previous) start = previous + 1
+        if (context > 0 && previous > 0 && start > previous + 1) keep_line("G", "", "")
+        for (k = start; k < n; k++) keep_line("C", k, before[key, k % context])
+        keep_line("M", n, text)
+        last[key] = n
+        after[key] = context
+    } else if (after[key] > 0) {
+        keep_line("C", n, text)
+        last[key] = n
+        after[key]--
+    }
+    if (context > 0) before[key, n % context] = text
+}
+END {
+    if (bad) exit 3
+    for (s = 1; s <= steps; s++) {
+        key = order[s]
+        if (!(key in kept)) continue
+        print "H\t" printable(job_of[key]) "\t" printable(step_of[key])
+        for (k = 1; k <= kept[key]; k++) print record[key, k]
+    }
+    if (from == 0) print "T\t" matches "\t" (matches > max_matches ? matches - max_matches : 0)
+}
+'
+# The format stage of run log, an awk program run in the C locale on the tail or search stage
+# records, with redacted the numbers of the records that hold a token, each between commas. It prints
+# the header of each step (== job <job> step <step>), each line after "| " (or "|" for an empty one),
+# with its number first when it has one, so no log text can pass for a header or the summary, and
+# last the summary, with the match counts when the search stage gave them. A record holding a token
+# is replaced whole; long hex and base64 runs in the rest are masked as ***.
 # shellcheck disable=SC2016  # an awk program: its $ fields are awk's, not the shell's
 readonly RUN_LOG_FORMAT_PROGRAM='
-# Run in the C locale. POSIX awk only (the image has mawk). Reads the tail stage records (H, a
-# job and step name; L, one of its lines) and prints the output of run log. redacted holds the
-# numbers of the records that hold a token, each between commas.
+# Run in the C locale. POSIX awk only (the image has mawk). Reads the tail or search stage records
+# (H, a job and step name; L, one of its lines; M, C and N, one of its lines with its number; G, a
+# gap; T, the match counts) and prints the output of run log. redacted holds the numbers of the
+# records that hold a token, each between commas.
 # Masks every maximal run of RUN_LOG_MASK_MIN or more hex digits as ***. A 40-digit commit SHA is kept.
 function mask_hex(text,    out, run) {
     out = ""
@@ -9699,12 +9811,20 @@ BEGIN {
     BASE64_RUN = "[A-Za-z0-9+/_-]+=*"
     REDACTED_LINE = "[cfwf: line redacted: token]"
     REDACTED_NAME = "[cfwf: name redacted: token]"
-    jobs = 0; steps = 0; lines = 0; redactions = 0; masks = 0
+    jobs = 0; steps = 0; lines = 0; redactions = 0; masks = 0; searched = 0
 }
 {
     kind = substr($0, 1, 1)
     rest = substr($0, 3)
     hit = index(redacted, "," NR ",") > 0
+    if (kind == "T") {
+        i = index(rest, "\t")
+        searched = 1
+        matches = substr(rest, 1, i - 1) + 0
+        cut_off = substr(rest, i + 1) + 0
+        next
+    }
+    if (kind == "G") { print "| --"; next }
     if (kind == "H") {
         i = index(rest, "\t")
         job = substr(rest, 1, i - 1)
@@ -9722,16 +9842,24 @@ BEGIN {
         print "== job " job " step " step
         next
     }
+    prefix = "|"
+    if (kind != "L") {
+        i = index(rest, "\t")
+        prefix = "| " substr(rest, 1, i - 1) (kind == "C" ? "-" : ":")
+        rest = substr(rest, i + 1)
+    }
     lines++
     if (hit) { text = REDACTED_LINE; redactions++ }
     else {
         text = mask(rest)
         if (text != rest) masks++
     }
-    print (text == "" ? "|" : "| " text)
+    print (text == "" ? prefix : prefix " " text)
 }
 END {
-    printf "summary jobs=%d steps=%d lines=%d redacted=%d masked=%d\n", jobs, steps, lines, redactions, masks
+    printf "summary jobs=%d steps=%d lines=%d redacted=%d masked=%d", jobs, steps, lines, redactions, masks
+    if (searched) printf " matches=%d cut=%d", matches, cut_off
+    printf "\n"
 }
 '
 
@@ -9757,22 +9885,47 @@ RUN_SHA=""
 RUN_WORKFLOW=""
 RUN_LIMIT=""
 LOG_LINES=""
+LOG_FROM_LINE=""
+LOG_GREP=""
+LOG_CONTEXT=""
+LOG_MAX_MATCHES=""
 # run log: the tailed, printable log (LOG_TMP) and the formatted output (LOG_OUT_TMP), both made by
 # ensure_temp_file and removed by cleanup.
 LOG_TMP=""
 LOG_OUT_TMP=""
 
-# Refuses (exit 2) the value $2 of the option $1 unless it is a number from 1 to $3, setting the
-# variable $4 to it without leading zeros. The length is compared first, so a run of digits too long
-# for bash's integers is refused as too big rather than wrapping round.
+# Refuses (exit 2) the value $2 of the option $1 unless it is a number from $5 (1 when not given) to
+# $3, setting the variable $4 to it without leading zeros. The length is compared first, so a run of
+# digits too long for bash's integers is refused as too big rather than wrapping round.
 assign_bounded_number() {
-    local flag="$1" value="$2" max="$3" variable="$4" number
-    validate "${value}" '^[0-9]+$' "${flag}" "it must be a number from 1 to ${max}"
+    local flag="$1" value="$2" max="$3" variable="$4" min="${5:-1}" number
+    validate "${value}" '^[0-9]+$' "${flag}" "it must be a number from ${min} to ${max}"
     number=$(without_leading_zeros "${value}")
-    if [ "${#number}" -gt "${#max}" ] || [ "${number}" -lt 1 ] || [ "${number}" -gt "${max}" ]; then
-        usage_error "invalid value for ${flag}: it must be a number from 1 to ${max}"
+    if [ "${#number}" -gt "${#max}" ] || [ "${number}" -lt "${min}" ] || [ "${number}" -gt "${max}" ]; then
+        usage_error "invalid value for ${flag}: it must be a number from ${min} to ${max}"
     fi
     printf -v "${variable}" '%s' "${number}"
+}
+
+# Refuses (exit 2) the --grep value $1 unless it is a pattern of at most RUN_LOG_GREP_BYTES bytes
+# with no control character that both grep -E and awk compile, so a pattern one of them rejects is
+# a usage error before any gh call rather than a failed read half way through the log. The value is
+# never echoed: it can hold a token.
+assign_run_log_pattern() {
+    local value="$1" grep_status=0
+    local LC_ALL=C
+    assign_once LOG_GREP --grep
+    # CONTROL_PATTERN lets a tab and a newline through, as a body may hold them; a log line never
+    # does once it is printable, so a pattern holding one is refused too.
+    if [ -z "${value}" ] || holds_control_character "${value}" || [[ "${value}" == *[$'\t\n']* ]] \
+        || [ "${#value}" -gt "${RUN_LOG_GREP_BYTES}" ]; then
+        usage_error "invalid value for --grep: it must be 1 to ${RUN_LOG_GREP_BYTES} bytes with no control character"
+    fi
+    grep -qE -e "${value}" < /dev/null > /dev/null 2>&1 || grep_status=$?
+    [ "${grep_status}" -le 1 ] || usage_error "invalid value for --grep: it must be an extended regular expression grep -E compiles"
+    CFWF_RUN_LOG_GREP="${value}" LC_ALL=C awk 'BEGIN { if ("" ~ ENVIRON["CFWF_RUN_LOG_GREP"]) exit 0 }' < /dev/null > /dev/null 2>&1 \
+        || usage_error "invalid value for --grep: it must be an extended regular expression awk compiles"
+    LOG_GREP="${value}"
 }
 
 assign_run_option() {
@@ -9812,6 +9965,19 @@ assign_run_option() {
         --lines)
             assign_once LOG_LINES "${flag}"
             assign_bounded_number "${flag}" "${value}" "${RUN_LOG_LINES_MAX}" LOG_LINES
+            ;;
+        --from-line)
+            assign_once LOG_FROM_LINE "${flag}"
+            assign_bounded_number "${flag}" "${value}" "${RUN_LOG_FROM_LINE_MAX}" LOG_FROM_LINE
+            ;;
+        --grep) assign_run_log_pattern "${value}" ;;
+        --context)
+            assign_once LOG_CONTEXT "${flag}"
+            assign_bounded_number "${flag}" "${value}" "${RUN_LOG_CONTEXT_MAX}" LOG_CONTEXT 0
+            ;;
+        --max-matches)
+            assign_once LOG_MAX_MATCHES "${flag}"
+            assign_bounded_number "${flag}" "${value}" "${RUN_LOG_MATCHES_MAX}" LOG_MAX_MATCHES
             ;;
     esac
 }
@@ -10159,19 +10325,47 @@ read_run_job() {
     [ "${status}" = completed ] || run_log_pending "${status}"
 }
 
-# Prints the tail of the logs of the failed steps of the run RUN_ID of REPO (only of the job JOB_ID
-# when it is given): at most LOG_LINES lines of each step, each cut to RUN_LOG_LINE_BYTES, made
-# printable, with any line holding a token replaced whole and long hex and base64 runs masked. The
-# log is streamed from gh through the tail stage into a file, never held whole in a variable.
-# Output over RUN_LOG_BYTE_LIMIT is refused whole, as a diff over DIFF_BYTE_LIMIT is, and nothing
-# is printed until all of it has been made.
+# Refuses (exit 2) the run log options that cannot go together, whatever order they were given in:
+# --grep searches the whole log, so it takes no --lines or --from-line, and --context and
+# --max-matches only mean something with it. Sets the defaults of the rest.
+check_run_log_options() {
+    if [ -n "${LOG_GREP}" ]; then
+        [ -z "${LOG_LINES}${LOG_FROM_LINE}" ] || usage_error "--grep cannot be given with --lines or --from-line"
+        [ -n "${LOG_CONTEXT}" ] || LOG_CONTEXT=0
+        [ -n "${LOG_MAX_MATCHES}" ] || LOG_MAX_MATCHES="${RUN_LOG_MATCHES_DEFAULT}"
+    else
+        [ -z "${LOG_CONTEXT}${LOG_MAX_MATCHES}" ] || usage_error "--context and --max-matches need --grep"
+    fi
+    [ -n "${LOG_LINES}" ] || LOG_LINES="${RUN_LOG_LINES_DEFAULT}"
+}
+
+# Streams gh's --log-failed answer, on stdin, through the stage of run log the options choose: the
+# tail stage, or the search stage for --grep or --from-line.
+run_log_stage() {
+    if [ -n "${LOG_GREP}${LOG_FROM_LINE}" ]; then
+        CFWF_RUN_LOG_GREP="${LOG_GREP}" LC_ALL=C awk -v width="${RUN_LOG_LINE_BYTES}" -v from="${LOG_FROM_LINE:-0}" \
+            -v lines="${LOG_LINES}" -v context="${LOG_CONTEXT:-0}" -v max_matches="${LOG_MAX_MATCHES:-0}" \
+            "${RUN_LOG_SEARCH_PROGRAM}"
+    else
+        LC_ALL=C awk -v keep="${LOG_LINES}" -v width="${RUN_LOG_LINE_BYTES}" "${RUN_LOG_TAIL_PROGRAM}"
+    fi
+}
+
+# Prints the logs of the failed steps of the run RUN_ID of REPO (only of the job JOB_ID when it is
+# given): the tail, at most LOG_LINES lines of each step; with --from-line a window of each; or with
+# --grep the lines of each that match, with their context. Each line is cut to RUN_LOG_LINE_BYTES,
+# made printable, with any line holding a token replaced whole and long hex and base64 runs masked.
+# The log is streamed from gh through the tail or search stage into a file, never held whole in a
+# variable. Output over RUN_LOG_BYTE_LIMIT is refused whole, as a diff over DIFF_BYTE_LIMIT is, and
+# nothing is printed until all of it has been made.
 run_log() {
-    local redacted size
+    local redacted size smaller="a smaller --lines"
     local -a call statuses scan
-    parse_command_options assign_run_option "--repo --run --job --lines" "" "$@"
+    parse_command_options assign_run_option "--repo --run --job --lines --from-line --grep --context --max-matches" "" "$@"
     require REPO --repo
     require RUN_ID --run
-    [ -n "${LOG_LINES}" ] || LOG_LINES="${RUN_LOG_LINES_DEFAULT}"
+    check_run_log_options
+    [ -z "${LOG_GREP}" ] || smaller="a smaller --context or --max-matches"
     require_gh
     read_run
     [ -z "${JOB_ID}" ] || read_run_job
@@ -10185,8 +10379,7 @@ run_log() {
     ensure_temp_file GH_ERR_FILE
     ensure_temp_file LOG_TMP
     ensure_temp_file LOG_OUT_TMP
-    gh "${call[@]}" < /dev/null 2> "${GH_ERR_FILE}" | LC_ALL=C tr '\000' ' ' \
-        | LC_ALL=C awk -v keep="${LOG_LINES}" -v width="${RUN_LOG_LINE_BYTES}" "${RUN_LOG_TAIL_PROGRAM}" > "${LOG_TMP}"
+    gh "${call[@]}" < /dev/null 2> "${GH_ERR_FILE}" | LC_ALL=C tr '\000' ' ' | run_log_stage > "${LOG_TMP}"
     statuses=("${PIPESTATUS[@]}")
     GH_ERROR=$(< "${GH_ERR_FILE}")
     GH_OUTPUT=""
@@ -10211,7 +10404,7 @@ run_log() {
     size=$(LC_ALL=C wc -c < "${LOG_OUT_TMP}") || die "could not format the logs of the run ${RUN_ID} of ${REPO}"
     size="${size//[!0-9]/}"
     [ "${size}" -le "${RUN_LOG_BYTE_LIMIT}" ] \
-        || die "the failed steps' logs of the run ${RUN_ID} of ${REPO} are ${size} bytes, more than the ${RUN_LOG_BYTE_LIMIT} cfwf prints, so none is printed; use a smaller --lines, or --job for one job"
+        || die "the failed steps' logs of the run ${RUN_ID} of ${REPO} are ${size} bytes, more than the ${RUN_LOG_BYTE_LIMIT} cfwf prints, so none is printed; use ${smaller}, or --job for one job"
     cat -- "${LOG_OUT_TMP}"
 }
 
