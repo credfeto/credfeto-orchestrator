@@ -140,6 +140,50 @@ public sealed class PodmanCommandRunnerTests : TestBase
         Assert.Equal(expected: PodmanCommandRunner.Cancelled, actual: status);
     }
 
+    [Fact]
+    public async Task AResultReadPrintsWhatJqPrintsAndExitsZeroAsync()
+    {
+        using ResultFiles files = new();
+        string resultFile = await files.WriteAsync(
+            content: """{"permission_denials":[{"tool_name":"Bash","tool_input":{"command":"sudo -u root git x"}}]}"""u8.ToArray(),
+            cancellationToken: this.CancellationToken()
+        );
+
+        (int summaryStatus, string summary, string summaryError) = await this.RunAsync(
+            podman: new(),
+            args: "podman|denials-summary|--result|" + resultFile
+        );
+        (int namesStatus, string names, string namesError) = await this.RunAsync(
+            podman: new(),
+            args: "podman|denied-command-names|--result|" + resultFile
+        );
+
+        Assert.Equal(expected: (0, "- Bash: sudo -u root git x\n", ""), actual: (summaryStatus, summary, summaryError));
+        Assert.Equal(expected: (0, "git\n", ""), actual: (namesStatus, names, namesError));
+    }
+
+    [Fact]
+    public async Task AResultReadJqWouldFailOnExitsThreeAsync()
+    {
+        using ResultFiles files = new();
+        string resultFile = await files.WriteAsync(
+            content: "[]"u8.ToArray(),
+            cancellationToken: this.CancellationToken()
+        );
+
+        (int status, string output, string error) = await this.RunAsync(
+            podman: new(),
+            args: "podman|denied-command-names|--result|" + resultFile
+        );
+
+        Assert.Equal(expected: PodmanCommandRunner.Refused, actual: status);
+        Assert.Equal(expected: string.Empty, actual: output);
+        Assert.Equal(
+            expected: "credfeto-orchestrator: podman: jq cannot index array with \"permission_denials\"\n",
+            actual: error
+        );
+    }
+
     private async Task<(int Status, string Output, string Error)> RunAsync(FakePodmanRunner podman, string args)
     {
         await using MemoryStream output = new();

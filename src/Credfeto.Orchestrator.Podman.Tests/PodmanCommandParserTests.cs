@@ -11,6 +11,8 @@ public sealed class PodmanCommandParserTests : TestBase
     [InlineData("podman|container-running|--name|a name", PodmanQuery.CONTAINER_RUNNING, "a name")]
     [InlineData("podman|image-exists|--image|--image", PodmanQuery.IMAGE_EXISTS, "--image")]
     [InlineData("podman|image-exists|--image|", PodmanQuery.IMAGE_EXISTS, "")]
+    [InlineData("podman|denials-summary|--result|/tmp/r.json", PodmanQuery.DENIALS_SUMMARY, "/tmp/r.json")]
+    [InlineData("podman|denied-command-names|--result|r", PodmanQuery.DENIED_COMMAND_NAMES, "r")]
     public static void EachQueryTakesItsOneOption(string args, PodmanQuery query, string argument)
     {
         PodmanCommand? command = PodmanCommandParser.Parse(args: args.Split('|'), error: out string error);
@@ -28,6 +30,8 @@ public sealed class PodmanCommandParserTests : TestBase
     [InlineData("podman|image-sha|--name|img", "podman image-sha needs --image <value>, and nothing else")]
     [InlineData("podman|container-exists|--image|c", "podman container-exists needs --name <value>, and nothing else")]
     [InlineData("podman|container-running|--name|c|--name|d", "podman container-running needs --name <value>")]
+    [InlineData("podman|denials-summary|--name|r", "podman denials-summary needs --result <value>, and nothing else")]
+    [InlineData("podman|denied-command-names", "podman denied-command-names needs --result <value>")]
     public static void AnythingElseIsAUsageError(string args, string expected)
     {
         PodmanCommand? command = PodmanCommandParser.Parse(args: args.Split('|'), error: out string error);

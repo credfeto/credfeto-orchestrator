@@ -4,7 +4,7 @@
     <AnalysisMode>AllEnabledByDefault</AnalysisMode>
     <CodeAnalysisTreatWarningsAsErrors>true</CodeAnalysisTreatWarningsAsErrors>
     <DebuggerSupport>true</DebuggerSupport>
-    <Description>Credfeto Orchestrator podman: the read-only agent image and container queries, answered by running the podman command line</Description>
+    <Description>Credfeto Orchestrator podman: the read-only agent image and container queries, answered by running the podman command line, and the reads of the permission denials in a Claude JSON result</Description>
     <DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
     <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
@@ -36,6 +36,9 @@
     <WarnOnPackingNonPackableProject>false</WarnOnPackingNonPackableProject>
     <WarningsAsErrors />
   </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Credfeto.Orchestrator.Jq/Credfeto.Orchestrator.Jq.csproj" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="AsyncFixer" Version="2.1.0" PrivateAssets="All" ExcludeAssets="runtime" />
     <PackageReference Include="Credfeto.Exceptions.SourceGenerator" Version="0.0.13.429" PrivateAssets="All" ExcludeAssets="runtime" />
