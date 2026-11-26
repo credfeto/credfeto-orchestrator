@@ -135,7 +135,9 @@ ORCHESTRATOR_DOTNET_GIT="${ORCHESTRATOR_DOTNET_GIT:-0}"
 # agent container exists or runs, whether the image is cached), which the tool answers by running the
 # same podman commands (anything that starts, removes or pulls stays in bash), and the two reads of the
 # permission denials in a Claude JSON result (the summary and the denied command names), which it
-# answers by running the same jq programs itself.
+# answers by running the same jq programs itself, and the session-outcome text heuristics over a
+# final message (background stall, diagnostic refusal, tool-denied quit, review result line, clean
+# review), which it answers with the same patterns where it can match exactly as bash does.
 # shellcheck disable=SC2034  # read by lib/podman after sourcing
 ORCHESTRATOR_DOTNET_PODMAN="${ORCHESTRATOR_DOTNET_PODMAN:-0}"
 
