@@ -317,6 +317,7 @@ claude_result_permission_denials_summary() {
 # does.
 _claude_result_tool_answers() {
     local query="$1" result_file="$2" text status
+    orchestrator_cmd_supports podman "${query}" || return 1
     # The tool's exit status after a dot keeps the output's own trailing newlines, which $(...) would drop
     text=$(
         "${ORCHESTRATOR_CMD}" podman "${query}" --result "${result_file}" < /dev/null 2> /dev/null
@@ -779,6 +780,7 @@ stop_ssh_agent() {
 # 1, and the caller runs pkill, which is safe since SIGTERM to an agent that has already gone does nothing.
 _agents_tool_stopped() {
     local status=0
+    orchestrator_cmd_supports agent stop-ssh-agent || return 1
     "${ORCHESTRATOR_CMD}" agent stop-ssh-agent "$@" < /dev/null > /dev/null 2>&1 || status=$?
     if [ "${status}" -eq 0 ]; then
         return 0
@@ -797,6 +799,7 @@ _agents_tool_stopped() {
 _agents_tool_answers() {
     local query="$1" status=0
     shift
+    orchestrator_cmd_supports agent "${query}" || return 1
     "${ORCHESTRATOR_CMD}" agent "${query}" "$@" < /dev/null > /dev/null 2>&1 || status=$?
     case "${status}" in
         0 | 1)
@@ -1842,6 +1845,7 @@ prepare_claude_container_args() {
 _podman_tool_answers() {
     local stderr_mode="$1" query="$2" text status
     shift 2
+    orchestrator_cmd_supports podman "${query}" || return 1
     # The tool's exit status after a dot keeps the output's own trailing newlines, which $(...) would drop
     if [ "${stderr_mode}" = quiet ]; then
         text=$(

@@ -44,7 +44,7 @@ _predicate_with_orchestrator_cmd() {
 # is enough because a placeholder-only PR has one.
 pr_json_has_placeholder_file() {
     local pr_json="$1"
-    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ] && orchestrator_cmd_supports predicate pr-has-placeholder-file; then
         _predicate_with_orchestrator_cmd pr-has-placeholder-file "${pr_json}" > /dev/null 2>&1 || return 1
         return 0
     fi
@@ -81,7 +81,7 @@ pr_json_has_placeholder_file() {
 # predicate below reads as "required-ness unknown".
 annotate_pr_json_required_checks() {
     local pr_json="$1" required_names_json="${2:-}" base_requires_checks="${3:-}"
-    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ] && orchestrator_cmd_supports predicate pr-annotate-required-checks; then
         local annotated
         if annotated=$(_predicate_with_orchestrator_cmd pr-annotate-required-checks "${pr_json}" \
             --required-file "${required_names_json}" --base-requires-checks "${base_requires_checks}" 2> /dev/null && printf x); then
@@ -121,7 +121,7 @@ annotate_pr_json_required_checks() {
 # out differently for knowing which checks are required, so the lookup is not worth an API call.
 pr_json_has_only_passed_checks() {
     local pr_json="$1"
-    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ] && orchestrator_cmd_supports predicate pr-has-only-passed-checks; then
         _predicate_with_orchestrator_cmd pr-has-only-passed-checks "${pr_json}" > /dev/null 2>&1 || return 1
         return 0
     fi
@@ -211,7 +211,7 @@ set_pr_required_checks() {
 # pipeline "finished" — either can go stale after the fact and both still need a human.
 pr_json_is_terminal() {
     local pr_json="$1" review_pipeline_finished="${2:-false}"
-    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ] && orchestrator_cmd_supports predicate pr-is-terminal; then
         _predicate_with_orchestrator_cmd pr-is-terminal "${pr_json}" \
             --review-pipeline-finished "${review_pipeline_finished}" > /dev/null 2>&1 || return 1
         return 0
@@ -331,7 +331,7 @@ _jq_pr_json_with_comment_arrays() {
 # last-seen marker as if another trusted commenter had spoken. Empty excludes nothing.
 pr_json_latest_trusted_comment_timestamp() {
     local pr_json="$1" trusted_logins="${2:-null}" review_comments_json="${3:-[]}" issue_comments_json="${4:-[]}" exclude_login="${5:-}"
-    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ] && orchestrator_cmd_supports predicate pr-latest-trusted-comment-timestamp; then
         local latest
         latest=$(_predicate_with_orchestrator_cmd pr-latest-trusted-comment-timestamp "${pr_json}" \
             --trusted-file "${trusted_logins}" --review-comments-file "${review_comments_json}" \
@@ -394,7 +394,7 @@ pr_json_has_unaddressed_trusted_comment() {
 pr_json_unaddressed_trusted_comments_text() {
     local pr_json="$1" trusted_logins="${2:-null}" last_seen_timestamp="${3:-}" review_comments_json="${4:-[]}" issue_comments_json="${5:-[]}" exclude_login="${6:-}"
     local text
-    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ] && orchestrator_cmd_supports predicate pr-unaddressed-trusted-comments; then
         text=$(_predicate_with_orchestrator_cmd pr-unaddressed-trusted-comments "${pr_json}" \
             --trusted-file "${trusted_logins}" --review-comments-file "${review_comments_json}" \
             --issue-comments-file "${issue_comments_json}" --exclude-login "${exclude_login}" \
@@ -497,7 +497,7 @@ pr_merge_state_stuck_behind() {
 # required-ness is unknown, or a failure a later run superseded, never produces that claim.
 pr_json_has_failed_required_check() {
     local pr_json="$1"
-    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ] && orchestrator_cmd_supports predicate pr-has-failed-required-check; then
         _predicate_with_orchestrator_cmd pr-has-failed-required-check "${pr_json}" > /dev/null 2>&1 || return 1
         return 0
     fi
@@ -515,7 +515,7 @@ pr_json_has_failed_required_check() {
 # treats it as blocking, and pr_next_phase_for_board_status routes it the same way.
 pr_json_has_failed_check_of_unknown_requiredness() {
     local pr_json="$1"
-    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ] && orchestrator_cmd_supports predicate pr-has-failed-check-of-unknown-requiredness; then
         _predicate_with_orchestrator_cmd pr-has-failed-check-of-unknown-requiredness "${pr_json}" > /dev/null 2>&1 || return 1
         return 0
     fi
@@ -667,7 +667,7 @@ block_pr_for_idle_exhausted_failure() {
 # PR that already has auto-merge enabled (which otherwise makes pr_json_is_terminal stop early).
 pr_json_has_unaddressed_review_request() {
     local pr_json="$1"
-    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ] && orchestrator_cmd_supports predicate pr-has-unaddressed-review-request; then
         _predicate_with_orchestrator_cmd pr-has-unaddressed-review-request "${pr_json}" > /dev/null 2>&1 || return 1
         return 0
     fi
@@ -682,7 +682,7 @@ pr_json_has_unaddressed_review_request() {
 # for changes rather than the PR just sitting unapproved (#1278).
 pr_json_needs_review_approval() {
     local pr_json="$1"
-    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ] && orchestrator_cmd_supports predicate pr-needs-review-approval; then
         _predicate_with_orchestrator_cmd pr-needs-review-approval "${pr_json}" > /dev/null 2>&1 || return 1
         return 0
     fi
@@ -795,7 +795,7 @@ block_issue_for_idle_exhausted_no_plan() {
 # (see the identical check embedded into the generated CLAUDE.md, lib/prompts).
 issue_json_has_plan_comment() {
     local issue_json="$1"
-    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ] && orchestrator_cmd_supports predicate issue-has-plan-comment; then
         _predicate_with_orchestrator_cmd issue-has-plan-comment "${issue_json}" > /dev/null 2>&1 || return 1
         return 0
     fi
@@ -817,7 +817,7 @@ issue_json_has_plan_comment() {
 # replaced on every dimension, so it never accepts what either refused.
 issue_json_has_human_plan_approval() {
     local issue_json="$1" me_login="$2" trusted_logins_json="$3"
-    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ] && orchestrator_cmd_supports predicate issue-has-human-plan-approval; then
         _predicate_with_orchestrator_cmd issue-has-human-plan-approval "${issue_json}" \
             --me "${me_login}" --trusted-file "${trusted_logins_json:-null}" > /dev/null 2>&1 || return 1
         return 0
@@ -1135,7 +1135,7 @@ issue_blocked_without_plan_needs_replan() {
 # run on the PR's head commit is still running, whether or not the rollup shows it (#1860).
 pr_json_has_pending_ci_checks() {
     local pr_json="$1"
-    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ] && orchestrator_cmd_supports predicate pr-has-pending-ci-checks; then
         _predicate_with_orchestrator_cmd pr-has-pending-ci-checks "${pr_json}" > /dev/null || return 1
         return 0
     fi
@@ -1237,7 +1237,7 @@ pr_json_has_blocked_label() {
 # comment carries the marker — the normal case for every other kind of Blocked.
 pr_json_env_block_image_sha() {
     local pr_json="$1" sha
-    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ] && orchestrator_cmd_supports predicate pr-env-block-image-sha; then
         sha=$(_predicate_with_orchestrator_cmd pr-env-block-image-sha "${pr_json}" 2> /dev/null)
     else
         sha=$(printf '%s' "${pr_json}" | jq -r '
@@ -1258,7 +1258,7 @@ pr_json_env_block_image_sha() {
 # as its transcripts live in that repository's state tree.
 pr_json_lowest_closing_issue() {
     local pr_json="$1" repo_full="$2" issue
-    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_PREDICATES}" = 1 ] && orchestrator_cmd_supports predicate pr-lowest-closing-issue; then
         issue=$(_predicate_with_orchestrator_cmd pr-lowest-closing-issue "${pr_json}" --repo "${repo_full}" 2> /dev/null) \
             || return 1
         [[ "${issue}" =~ ^[0-9]+$ ]] || return 1
