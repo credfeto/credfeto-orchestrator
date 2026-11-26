@@ -98,7 +98,8 @@ ORCHESTRATOR_CMD="${ORCHESTRATOR_CMD:-credfeto-orchestrator}"
 # shellcheck disable=SC2034  # read by lib/fingerprints after sourcing
 ORCHESTRATOR_DOTNET_FINGERPRINTS="${ORCHESTRATOR_DOTNET_FINGERPRINTS:-0}"
 # ORCHESTRATOR_DOTNET_DISCORD: the lib/discord webhook payloads (build_discord_*_payload), which the tool builds
-# from the same values; posting them, the webhook URLs and the dedup markers stay in bash.
+# from the same values, and the item-status log, the no-work breakdown and truncate_for_display; posting them, the
+# webhook URLs and the dedup markers stay in bash.
 # shellcheck disable=SC2034  # read by lib/discord after sourcing
 ORCHESTRATOR_DOTNET_DISCORD="${ORCHESTRATOR_DOTNET_DISCORD:-0}"
 # shellcheck disable=SC2034  # read by lib/github and lib/fingerprints after sourcing

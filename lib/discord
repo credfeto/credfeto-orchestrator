@@ -3,7 +3,8 @@
 # priorities-unreachable, blocked-item, PR-needs-approval, Claude container error,
 # permission-denials, session-stalled, daily session digest, and rate-limited notices. Also the
 # shared item-URL builder they use, and the payload builders (build_discord_*_payload) most of
-# them post, which ORCHESTRATOR_DOTNET_DISCORD=1 hands to the .NET tool (#252).
+# them post, which ORCHESTRATOR_DOTNET_DISCORD=1 hands to the .NET tool (#252), as it does the item-status log, the
+# no-work breakdown and truncate_for_display.
 
 # Prints the webhook payload ORCHESTRATOR_CMD discord payload <kind> builds from the options that follow
 # (ORCHESTRATOR_DOTNET_DISCORD=1, #252) and returns 0. Returns 1, printing nothing, when the switch is off, and also,
@@ -28,6 +29,41 @@ _discord_payload_from_tool() {
     return 1
 }
 
+# Prints what ORCHESTRATOR_CMD discord <command> prints for the options that follow, given the caller's stdin
+# (ORCHESTRATOR_DOTNET_DISCORD=1, #252), and returns 0. Returns 1, printing nothing, when the switch is off, and also,
+# with a warning, when the tool refuses (input that is not UTF-8 or that jq might read or print differently), fails or
+# is missing: the caller then runs its own jq and bash. A caller with long input hands it over as a here-string, never
+# as an argument, so no argument size limit applies; the tool drops the one newline the here-string adds.
+_discord_text_from_tool() {
+    [ "${ORCHESTRATOR_DOTNET_DISCORD}" = 1 ] || return 1
+    local command="$1" text status
+    shift
+    # The tool's exit status after a dot, so a failing tool never trips errexit in a caller that has it on
+    text=$(
+        "${ORCHESTRATOR_CMD}" discord "${command}" "$@"
+        printf '.%s' "$?"
+    )
+    status=${text##*.}
+    if [ "${status}" = 0 ]; then
+        printf '%s' "${text%.*}"
+        return 0
+    fi
+    warn "${ORCHESTRATOR_CMD} discord ${command} failed (exit ${status}); running it in bash instead"
+    return 1
+}
+
+# How bash's ${#var} counts in the current locale, for the tool's --length-unit: "characters" when a fixed probe of
+# a 2-, a 3- and a 4-byte UTF-8 character counts 3 (a UTF-8 locale), "bytes" when it counts 9 (C or a single-byte
+# locale), and "unknown" otherwise, which the tool refuses
+_discord_length_unit() {
+    local probe=$'\xc3\xa9\xe2\x82\xac\xf0\x9f\x98\x80'
+    case "${#probe}" in
+        3) printf 'characters' ;;
+        9) printf 'bytes' ;;
+        *) printf 'unknown' ;;
+    esac
+}
+
 # Builds the GitHub URL for a work item. Arguments: item_type (Issue|PullRequest|other),
 # item_id, repo (optional, defaults to REPO_FULL). Falls back to the bare repo URL for an
 # unrecognised/empty item_type.
@@ -50,8 +86,10 @@ build_item_url() {
 # half and corrupt the result), appending a truncation notice when it was actually cut. Shared by
 # every caller that summarises command output, file content, or a session diagnostic into a
 # downstream size-limited field (a Discord embed field, a GitHub comment body).
+# With ORCHESTRATOR_DOTNET_DISCORD=1 the tool cuts it (_discord_text_from_tool).
 truncate_for_display() {
     local text="$1" max_len="${2:-900}"
+    _discord_text_from_tool truncate --max-length "${max_len}" <<< "${text}" && return 0
     printf '%s' "${text}" | jq -Rsr --argjson max_len "${max_len}" '
         if (length > $max_len) then .[0:$max_len] + "\n... (truncated; see the run log for the full list)"
         else . end
@@ -66,9 +104,11 @@ truncate_for_display() {
 # appends it to its own item_status_log array — kept a pure function, not a caller-array
 # mutator, so the data flow is an explicit argument/return at every call site rather than bash's
 # dynamic scoping (a rename of item_status_log in oneshot would otherwise silently break this
-# with no error, per #1291 review).
+# with no error, per #1291 review). With ORCHESTRATOR_DOTNET_DISCORD=1 the tool prints it (_discord_text_from_tool).
 record_item_status() {
     local item_type="$1" item_id="$2" item_repo="$3" reason="$4"
+    _discord_text_from_tool item-status --type "${item_type}" --id "${item_id}" --repo "${item_repo}" \
+        --reason "${reason}" < /dev/null && return 0
     jq -cn \
         --arg type "${item_type}" --arg id "${item_id}" --arg repo "${item_repo}" --arg reason "${reason}" \
         '{type:$type,id:$id,repo:$repo,reason:$reason}'
@@ -81,12 +121,17 @@ record_item_status() {
 # review). Guards the no-arguments case explicitly rather than piping a possibly-empty expansion
 # into jq -s — an empty `printf` still succeeds and jq -s on empty stdin already yields "[]", but
 # the explicit check avoids depending on that behaviour and keeps this readable as "nothing to do".
+# With ORCHESTRATOR_DOTNET_DISCORD=1 the tool serializes the entries (_discord_text_from_tool).
 serialize_item_status_log() {
     if [ "$#" -eq 0 ]; then
         printf '[]'
         return 0
     fi
-    printf '%s\n' "$@" | jq -s -c '.'
+    local entries
+    printf -v entries '%s\n' "$@"
+    # The here-string adds one newline, which the tool drops: it reads exactly what jq reads below
+    _discord_text_from_tool item-status-log <<< "${entries}" && return 0
+    printf '%s' "${entries}" | jq -s -c '.'
 }
 
 # Prints the work-item payload notify_discord_work_item posts, built from the values it hands to jq, in this
@@ -268,9 +313,17 @@ notify_discord_pr_waiting() {
 # skipping the build_item_url call) as soon as the budget is exhausted, rather than building
 # every line up front and discarding the tail, so a large items_json does not pay for work whose
 # result is guaranteed to be thrown away (#1291 review).
-# Outputs nothing (not even a trailing newline) when items_json is empty or "[]".
+# Outputs nothing (not even a trailing newline) when items_json is empty or "[]". With ORCHESTRATOR_DOTNET_DISCORD=1
+# the tool builds it (_discord_text_from_tool).
 _build_no_work_item_breakdown() {
     local items_json="$1"
+    # The tool counts each line's length as ${#line} below does in this shell's locale, and takes REPO_FULL as
+    # build_item_url's default repository
+    if [ "${ORCHESTRATOR_DOTNET_DISCORD}" = 1 ] \
+        && _discord_text_from_tool no-work-breakdown --default-repo "${REPO_FULL:-}" \
+            --length-unit "$(_discord_length_unit)" <<< "${items_json}"; then
+        return 0
+    fi
     # Single jq pass over items_json: the total item count is derived from counting these rows
     # rather than a separate `jq length` call (#1291 review).
     local tsv_rows
