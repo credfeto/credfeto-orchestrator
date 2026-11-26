@@ -160,11 +160,15 @@ esac
 JQSTUB
     chmod +x "${STUB_BIN}/jq"
 
+    # A 7.6 GiB host: 7782 MiB less the 1536 MiB reserve (#2089, test/oneshot-container-memory.bats).
+    HOST_MEMINFO_PATH="${TEST_TMP}/meminfo"
+    printf 'MemTotal:        7969178 kB\n' > "${HOST_MEMINFO_PATH}"
+
     invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     [ -f "${args_log}" ]
     grep -qFx -- '--cpus=4' "${args_log}"
-    grep -qFx -- '--memory=12g' "${args_log}"
-    grep -qFx -- '--memory-swap=12g' "${args_log}"
+    grep -qFx -- '--memory=6246m' "${args_log}"
+    grep -qFx -- '--memory-swap=6246m' "${args_log}"
     grep -qFx -- '--pids-limit=4096' "${args_log}"
     grep -qFx -- '--userns=keep-id:uid=1000,gid=1000' "${args_log}"
     # The entrypoint starts as root to start the token broker, then drops to developer.

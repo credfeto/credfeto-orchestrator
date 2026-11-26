@@ -736,3 +736,27 @@ setup_main_precheck_issue() {
     [ ! -f "${TEST_TMP}/precheck_calls" ]
     [ -z "$(cat "${TEST_TMP}/issue_md_precheck_arg")" ]
 }
+
+@test "the pre-check and the agent launch share one host-sized memory limit, logged once (#2089)" {
+    setup_precheck_repo
+    stub_precheck_podman
+    write_run_body \
+        'printf "\n-> orchestrator-precheck: running pre-commit-check\n"' \
+        'exit 0'
+    setup_full_agent_environment
+    HOST_MEMINFO_PATH="${TEST_TMP}/meminfo"
+    printf 'MemTotal:        7969178 kB\n' > "${HOST_MEMINFO_PATH}"
+
+    prepare_precheck_section pr "PullRequest_7" "${HEAD_SHA}" PullRequest 7 2> "${TEST_TMP}/log"
+    [ "${PRECHECK_STATUS}" = "pass" ]
+    write_run_body \
+        'printf "{\"session_id\":\"12345678-1234-1234-1234-123456789abc\",\"result\":\"done\"}\n"' \
+        'exit 0'
+    invoke_claude "prompt" "PullRequest" "7" "# mock CLAUDE.md" 2>> "${TEST_TMP}/log"
+
+    [ "$(podman_run_count)" -eq 2 ]
+    local args="${TEST_TMP}/podman_run_args"
+    [ "$(grep -cx -- '--memory=6246m' "${args}")" -eq 2 ]
+    [ "$(grep -cx -- '--memory-swap=6246m' "${args}")" -eq 2 ]
+    [ "$(grep -c 'Agent container memory limit:' "${TEST_TMP}/log")" -eq 1 ]
+}

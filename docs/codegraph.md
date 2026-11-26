@@ -93,8 +93,8 @@ CodeGraph needs. Nothing has to be done by hand.
   repository that can take minutes, which delays the start of that one session. Later sessions
   for the same item run no indexing step at start: the MCP server's catch-up on connect only reads
   what changed. The full `init` runs before `claude` starts, so it never competes with the
-  agent's own builds and tests for the container's memory limit (`--memory=12g` in
-  `lib/podman`). CodeGraph sizes its workers and memory from the container's cgroup limits
+  agent's own builds and tests for the container's memory limit (sized from the host's memory by
+  `resolve_agent_container_memory` in `lib/podman`). CodeGraph sizes its workers and memory from the container's cgroup limits
   itself, so no tuning is set.
 - **Without an index.** If `init` fails, the entrypoint prints a warning and starts `claude`
   anyway, because a missing index only makes code lookups slower. In a repository with no index,
