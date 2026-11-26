@@ -6,8 +6,9 @@ using System.Threading.Tasks;
 
 namespace Credfeto.Orchestrator.Podman;
 
-// credfeto-orchestrator podman ...: answers a read-only lib/podman query by running the same podman command, printing
-// what the shell function prints, byte for byte, and exiting with the status it returns
+// credfeto-orchestrator podman ...: answers a read-only lib/podman query by running the same podman command, or for a
+// read of a Claude JSON result the same jq program, printing what the shell function prints, byte for byte, and
+// exiting with the status it returns
 public sealed class PodmanCommandRunner
 {
     public const int Usage = 2;
@@ -26,22 +27,31 @@ public sealed class PodmanCommandRunner
     private const string USAGE = """
         Usage: credfeto-orchestrator podman image-sha|image-exists --image <image>
                credfeto-orchestrator podman container-exists|container-running --name <name>
+               credfeto-orchestrator podman denials-summary|denied-command-names --result <file>
 
         Each query runs the podman command its lib/podman function runs, prints what the function prints and exits
         with the status it returns: image-sha current_agent_image_sha (the image's IMAGE_SHA_DEVELOPMENT_AGENT),
         container-exists agent_container_exists, container-running agent_container_running and image-exists
-        agent_image_cached. podman's stderr is passed through.
+        agent_image_cached. podman's stderr is passed through. denials-summary
+        (claude_result_permission_denials_summary) and denied-command-names (claude_result_denied_command_names)
+        run no podman: they print what the function's jq program prints for the Claude JSON result in <file>.
 
-        Exit codes: 0 or 1 the answer; 2 a usage error; 3 the query cannot be answered exactly as bash would (an
-        argument or podman output that is not UTF-8, or output holding a NUL byte), so lib/podman answers it; 125
-        podman could not be run.
+        Exit codes: 0 or 1 the answer (the two result reads answer only with 0); 2 a usage error; 3 the query
+        cannot be answered exactly as bash would (an argument or podman output that is not UTF-8, or output holding
+        a NUL byte; for a result read, a file jq could read differently or would fail on), so lib/podman answers
+        it; 125 podman could not be run, or the answer could not be written.
         """;
 
     private readonly IPodmanQueries _queries;
+    private readonly IClaudeResultQueries _results;
 
     public PodmanCommandRunner(IPodmanQueries queries)
+        : this(queries: queries, results: new ClaudeResultQueries()) { }
+
+    public PodmanCommandRunner(IPodmanQueries queries, IClaudeResultQueries results)
     {
         this._queries = queries;
+        this._results = results;
     }
 
     public static PodmanCommandRunner CreateDefault()
@@ -106,6 +116,14 @@ public sealed class PodmanCommandRunner
             ),
             PodmanQuery.CONTAINER_RUNNING => this._queries.ContainerRunningAsync(
                 name: command.Argument,
+                cancellationToken: cancellationToken
+            ),
+            PodmanQuery.DENIALS_SUMMARY => this._results.DenialsSummaryAsync(
+                resultFile: command.Argument,
+                cancellationToken: cancellationToken
+            ),
+            PodmanQuery.DENIED_COMMAND_NAMES => this._results.DeniedCommandNamesAsync(
+                resultFile: command.Argument,
                 cancellationToken: cancellationToken
             ),
             _ => this._queries.ImageExistsAsync(image: command.Argument, cancellationToken: cancellationToken),
