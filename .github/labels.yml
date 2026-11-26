@@ -44,6 +44,14 @@
   color: "d8bb50"
   description: "Configuration files changes"
 
+- name: "credfeto-orchestrator-agents"
+  color: "96f7d2"
+  description: "Changes in Credfeto.Orchestrator.Agents project"
+
+- name: "credfeto-orchestrator-agents-tests"
+  color: "0e8a16"
+  description: "Changes in Credfeto.Orchestrator.Agents.Tests project"
+
 - name: "credfeto-orchestrator-cmd"
   color: "96f7d2"
   description: "Changes in Credfeto.Orchestrator.Cmd project"

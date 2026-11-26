@@ -12,6 +12,10 @@
   - any: ['CHANGELOG.md']
 "Config Change":
   - any: ['src/**/*.json', '!src/global.json']
+"credfeto-orchestrator-agents":
+  - any: ['src/Credfeto.Orchestrator.Agents/**/*']
+"credfeto-orchestrator-agents-tests":
+  - any: ['src/Credfeto.Orchestrator.Agents.Tests/**/*']
 "credfeto-orchestrator-cmd":
   - any: ['src/Credfeto.Orchestrator.Cmd/**/*']
 "credfeto-orchestrator-commands":
