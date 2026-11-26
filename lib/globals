@@ -104,8 +104,9 @@ ORCHESTRATOR_DOTNET_PREDICATES="${ORCHESTRATOR_DOTNET_PREDICATES:-0}"
 # shellcheck disable=SC2034  # read by lib/state after sourcing
 ORCHESTRATOR_DOTNET_STATE="${ORCHESTRATOR_DOTNET_STATE:-0}"
 # ORCHESTRATOR_DOTNET_AGENTS: the read-only ssh-agent query (whether the agent at SSH_AUTH_SOCK holds a key,
-# ssh_agent_key_state in lib/podman), which the tool answers over the ssh-agent protocol; loading keys, the
-# gpg-agent checks and stopping the agent stay in bash.
+# ssh_agent_key_state in lib/podman), which the tool answers over the ssh-agent protocol, and stopping the run's
+# agent (stop_ssh_agent), which the tool does by finding and signalling the processes pkill would; loading keys and
+# the gpg-agent checks stay in bash.
 # shellcheck disable=SC2034  # read by lib/podman after sourcing
 ORCHESTRATOR_DOTNET_AGENTS="${ORCHESTRATOR_DOTNET_AGENTS:-0}"
 # shellcheck disable=SC2034  # read by lib/github after sourcing
