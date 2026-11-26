@@ -5,11 +5,33 @@ using System.Text;
 
 namespace Credfeto.Orchestrator.State.Tests;
 
-// Decodes the printf %b text test/fixtures/state-parity.json holds its arguments and outputs in. Only the escapes the
-// fixture uses are taken (\\, \n, \r, \t and \xHH); any other backslash fails, so a fixture escape bash would read
-// differently cannot pass unnoticed
+// Decodes the printf %b text test/fixtures/state-parity.json and state-writes-parity.json hold their arguments and
+// outputs in. Only the escapes the fixtures use are taken (\\, \n, \r, \t and \xHH); any other backslash fails, so a
+// fixture escape bash would read differently cannot pass unnoticed. Encode writes bytes as the bats files' escape does.
 internal static class PrintfEscapes
 {
+    public static string Encode(byte[] bytes)
+    {
+        StringBuilder text = new();
+
+        foreach (byte value in bytes)
+        {
+            text.Append(
+                value switch
+                {
+                    (byte)'\n' => "\\n",
+                    (byte)'\r' => "\\r",
+                    (byte)'\t' => "\\t",
+                    (byte)'\\' => "\\\\",
+                    >= 0x20 and <= 0x7e => ((char)value).ToString(),
+                    _ => "\\x" + value.ToString(format: "x2", provider: CultureInfo.InvariantCulture),
+                }
+            );
+        }
+
+        return text.ToString();
+    }
+
     public static byte[] Decode(string text)
     {
         using MemoryStream bytes = new();

@@ -1,0 +1,6668 @@
+{
+  "cases": [
+    {
+      "name": "infra: a new file",
+      "function": "save_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7",
+        "3"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.infra-failures",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        }
+      ]
+    },
+    {
+      "name": "infra: a new file under umask 077",
+      "function": "save_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7",
+        "3"
+      ],
+      "umask": "077",
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.infra-failures",
+          "type": "f",
+          "mode": "0600",
+          "content": "3\\n"
+        }
+      ]
+    },
+    {
+      "name": "infra: a new file under umask 002",
+      "function": "save_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7",
+        "3"
+      ],
+      "umask": "002",
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.infra-failures",
+          "type": "f",
+          "mode": "0664",
+          "content": "3\\n"
+        }
+      ]
+    },
+    {
+      "name": "infra: replaces a file",
+      "function": "save_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7",
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "content": "old\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.infra-failures",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        }
+      ]
+    },
+    {
+      "name": "infra: replaces a longer file",
+      "function": "save_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7",
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "content": "a much longer old value\\nwith two lines\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.infra-failures",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        }
+      ]
+    },
+    {
+      "name": "infra: replaces a 0600 file",
+      "function": "save_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7",
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "content": "1\\n",
+          "mode": "0600"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.infra-failures",
+          "type": "f",
+          "mode": "0600",
+          "content": "3\\n"
+        }
+      ]
+    },
+    {
+      "name": "infra: replaces a 0640 file under umask 077",
+      "function": "save_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7",
+        "3"
+      ],
+      "umask": "077",
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "content": "1\\n",
+          "mode": "0640"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.infra-failures",
+          "type": "f",
+          "mode": "0640",
+          "content": "3\\n"
+        }
+      ]
+    },
+    {
+      "name": "infra: replaces a 0755 file",
+      "function": "save_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7",
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "content": "1\\n",
+          "mode": "0755"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.infra-failures",
+          "type": "f",
+          "mode": "0755",
+          "content": "3\\n"
+        }
+      ]
+    },
+    {
+      "name": "infra: a 0444 file",
+      "function": "save_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7",
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "content": "1\\n",
+          "mode": "0444"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 1,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.infra-failures",
+          "type": "f",
+          "mode": "0444",
+          "content": "1\\n"
+        }
+      ]
+    },
+    {
+      "name": "infra: no directory yet",
+      "function": "save_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7",
+        "3"
+      ],
+      "no_session_dir": true,
+      "files": [],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.infra-failures",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        }
+      ]
+    },
+    {
+      "name": "infra: a read-only directory",
+      "function": "save_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7",
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/repo",
+          "dir": true,
+          "mode": "0555"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 1,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0555"
+        }
+      ]
+    },
+    {
+      "name": "infra: a writable file in a read-only directory",
+      "function": "save_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7",
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/repo",
+          "dir": true,
+          "mode": "0555"
+        },
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "content": "1\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0555"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.infra-failures",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        }
+      ]
+    },
+    {
+      "name": "infra: a link to a file",
+      "function": "save_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7",
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/elsewhere",
+          "content": "1\\n"
+        },
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "link": "elsewhere"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.infra-failures",
+          "type": "l",
+          "target": "elsewhere"
+        },
+        {
+          "path": "./owner/repo/elsewhere",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        }
+      ]
+    },
+    {
+      "name": "infra: a dangling link",
+      "function": "save_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7",
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "link": "missing"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.infra-failures",
+          "type": "l",
+          "target": "missing"
+        },
+        {
+          "path": "./owner/repo/missing",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        }
+      ]
+    },
+    {
+      "name": "infra: a directory in its place",
+      "function": "save_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7",
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "dir": true
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 1,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.infra-failures",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "infra: a hard-linked file",
+      "function": "save_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7",
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.infra-failures",
+          "content": "1\\n"
+        },
+        {
+          "path": "owner/repo/other",
+          "hardlink": "owner/repo/PullRequest_7.infra-failures"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.infra-failures",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        },
+        {
+          "path": "./owner/repo/other",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        }
+      ]
+    },
+    {
+      "name": "infra: the directory is a link",
+      "function": "save_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7",
+        "3"
+      ],
+      "no_session_dir": true,
+      "files": [
+        {
+          "path": "owner/real",
+          "dir": true
+        },
+        {
+          "path": "owner/repo",
+          "link": "real"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/real",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/real/PullRequest_7.infra-failures",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "l",
+          "target": "real"
+        }
+      ]
+    },
+    {
+      "name": "infra: an argument that is not UTF-8",
+      "function": "save_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7",
+        "\\xff"
+      ],
+      "files": [],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.infra-failures",
+          "type": "f",
+          "mode": "0644",
+          "content": "\\xff\\n"
+        }
+      ]
+    },
+    {
+      "name": "pr invocations: a new file",
+      "function": "save_pr_invocation_counts",
+      "args": [
+        "7",
+        "3",
+        "2"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "3 2\\n"
+        }
+      ]
+    },
+    {
+      "name": "pr invocations: a new file under umask 077",
+      "function": "save_pr_invocation_counts",
+      "args": [
+        "7",
+        "3",
+        "2"
+      ],
+      "umask": "077",
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.invocations",
+          "type": "f",
+          "mode": "0600",
+          "content": "3 2\\n"
+        }
+      ]
+    },
+    {
+      "name": "pr invocations: a new file under umask 002",
+      "function": "save_pr_invocation_counts",
+      "args": [
+        "7",
+        "3",
+        "2"
+      ],
+      "umask": "002",
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.invocations",
+          "type": "f",
+          "mode": "0664",
+          "content": "3 2\\n"
+        }
+      ]
+    },
+    {
+      "name": "pr invocations: replaces a file",
+      "function": "save_pr_invocation_counts",
+      "args": [
+        "7",
+        "3",
+        "2"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": "old\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "3 2\\n"
+        }
+      ]
+    },
+    {
+      "name": "pr invocations: replaces a longer file",
+      "function": "save_pr_invocation_counts",
+      "args": [
+        "7",
+        "3",
+        "2"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": "a much longer old value\\nwith two lines\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "3 2\\n"
+        }
+      ]
+    },
+    {
+      "name": "pr invocations: replaces a 0600 file",
+      "function": "save_pr_invocation_counts",
+      "args": [
+        "7",
+        "3",
+        "2"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": "1\\n",
+          "mode": "0600"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.invocations",
+          "type": "f",
+          "mode": "0600",
+          "content": "3 2\\n"
+        }
+      ]
+    },
+    {
+      "name": "pr invocations: replaces a 0640 file under umask 077",
+      "function": "save_pr_invocation_counts",
+      "args": [
+        "7",
+        "3",
+        "2"
+      ],
+      "umask": "077",
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": "1\\n",
+          "mode": "0640"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.invocations",
+          "type": "f",
+          "mode": "0640",
+          "content": "3 2\\n"
+        }
+      ]
+    },
+    {
+      "name": "pr invocations: replaces a 0755 file",
+      "function": "save_pr_invocation_counts",
+      "args": [
+        "7",
+        "3",
+        "2"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": "1\\n",
+          "mode": "0755"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.invocations",
+          "type": "f",
+          "mode": "0755",
+          "content": "3 2\\n"
+        }
+      ]
+    },
+    {
+      "name": "pr invocations: a 0444 file",
+      "function": "save_pr_invocation_counts",
+      "args": [
+        "7",
+        "3",
+        "2"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": "1\\n",
+          "mode": "0444"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 1,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.invocations",
+          "type": "f",
+          "mode": "0444",
+          "content": "1\\n"
+        }
+      ]
+    },
+    {
+      "name": "pr invocations: no directory yet",
+      "function": "save_pr_invocation_counts",
+      "args": [
+        "7",
+        "3",
+        "2"
+      ],
+      "no_session_dir": true,
+      "files": [],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "3 2\\n"
+        }
+      ]
+    },
+    {
+      "name": "pr invocations: a read-only directory",
+      "function": "save_pr_invocation_counts",
+      "args": [
+        "7",
+        "3",
+        "2"
+      ],
+      "files": [
+        {
+          "path": "owner/repo",
+          "dir": true,
+          "mode": "0555"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 1,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0555"
+        }
+      ]
+    },
+    {
+      "name": "pr invocations: a writable file in a read-only directory",
+      "function": "save_pr_invocation_counts",
+      "args": [
+        "7",
+        "3",
+        "2"
+      ],
+      "files": [
+        {
+          "path": "owner/repo",
+          "dir": true,
+          "mode": "0555"
+        },
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": "1\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0555"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "3 2\\n"
+        }
+      ]
+    },
+    {
+      "name": "pr invocations: a link to a file",
+      "function": "save_pr_invocation_counts",
+      "args": [
+        "7",
+        "3",
+        "2"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/elsewhere",
+          "content": "1\\n"
+        },
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "link": "elsewhere"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.invocations",
+          "type": "l",
+          "target": "elsewhere"
+        },
+        {
+          "path": "./owner/repo/elsewhere",
+          "type": "f",
+          "mode": "0644",
+          "content": "3 2\\n"
+        }
+      ]
+    },
+    {
+      "name": "pr invocations: a dangling link",
+      "function": "save_pr_invocation_counts",
+      "args": [
+        "7",
+        "3",
+        "2"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "link": "missing"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.invocations",
+          "type": "l",
+          "target": "missing"
+        },
+        {
+          "path": "./owner/repo/missing",
+          "type": "f",
+          "mode": "0644",
+          "content": "3 2\\n"
+        }
+      ]
+    },
+    {
+      "name": "pr invocations: a directory in its place",
+      "function": "save_pr_invocation_counts",
+      "args": [
+        "7",
+        "3",
+        "2"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "dir": true
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 1,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.invocations",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "pr invocations: a hard-linked file",
+      "function": "save_pr_invocation_counts",
+      "args": [
+        "7",
+        "3",
+        "2"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.invocations",
+          "content": "1\\n"
+        },
+        {
+          "path": "owner/repo/other",
+          "hardlink": "owner/repo/PullRequest_7.invocations"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "3 2\\n"
+        },
+        {
+          "path": "./owner/repo/other",
+          "type": "f",
+          "mode": "0644",
+          "content": "3 2\\n"
+        }
+      ]
+    },
+    {
+      "name": "pr invocations: the directory is a link",
+      "function": "save_pr_invocation_counts",
+      "args": [
+        "7",
+        "3",
+        "2"
+      ],
+      "no_session_dir": true,
+      "files": [
+        {
+          "path": "owner/real",
+          "dir": true
+        },
+        {
+          "path": "owner/repo",
+          "link": "real"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/real",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/real/PullRequest_7.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "3 2\\n"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "l",
+          "target": "real"
+        }
+      ]
+    },
+    {
+      "name": "pr invocations: an argument that is not UTF-8",
+      "function": "save_pr_invocation_counts",
+      "args": [
+        "7",
+        "\\xff",
+        "2"
+      ],
+      "files": [],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "\\xff 2\\n"
+        }
+      ]
+    },
+    {
+      "name": "issue invocations: a new file",
+      "function": "save_issue_invocation_counts",
+      "args": [
+        "9",
+        "3",
+        "0"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "3 0\\n"
+        }
+      ]
+    },
+    {
+      "name": "issue invocations: a new file under umask 077",
+      "function": "save_issue_invocation_counts",
+      "args": [
+        "9",
+        "3",
+        "0"
+      ],
+      "umask": "077",
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.invocations",
+          "type": "f",
+          "mode": "0600",
+          "content": "3 0\\n"
+        }
+      ]
+    },
+    {
+      "name": "issue invocations: a new file under umask 002",
+      "function": "save_issue_invocation_counts",
+      "args": [
+        "9",
+        "3",
+        "0"
+      ],
+      "umask": "002",
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.invocations",
+          "type": "f",
+          "mode": "0664",
+          "content": "3 0\\n"
+        }
+      ]
+    },
+    {
+      "name": "issue invocations: replaces a file",
+      "function": "save_issue_invocation_counts",
+      "args": [
+        "9",
+        "3",
+        "0"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": "old\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "3 0\\n"
+        }
+      ]
+    },
+    {
+      "name": "issue invocations: replaces a longer file",
+      "function": "save_issue_invocation_counts",
+      "args": [
+        "9",
+        "3",
+        "0"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": "a much longer old value\\nwith two lines\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "3 0\\n"
+        }
+      ]
+    },
+    {
+      "name": "issue invocations: replaces a 0600 file",
+      "function": "save_issue_invocation_counts",
+      "args": [
+        "9",
+        "3",
+        "0"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": "1\\n",
+          "mode": "0600"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.invocations",
+          "type": "f",
+          "mode": "0600",
+          "content": "3 0\\n"
+        }
+      ]
+    },
+    {
+      "name": "issue invocations: replaces a 0640 file under umask 077",
+      "function": "save_issue_invocation_counts",
+      "args": [
+        "9",
+        "3",
+        "0"
+      ],
+      "umask": "077",
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": "1\\n",
+          "mode": "0640"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.invocations",
+          "type": "f",
+          "mode": "0640",
+          "content": "3 0\\n"
+        }
+      ]
+    },
+    {
+      "name": "issue invocations: replaces a 0755 file",
+      "function": "save_issue_invocation_counts",
+      "args": [
+        "9",
+        "3",
+        "0"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": "1\\n",
+          "mode": "0755"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.invocations",
+          "type": "f",
+          "mode": "0755",
+          "content": "3 0\\n"
+        }
+      ]
+    },
+    {
+      "name": "issue invocations: a 0444 file",
+      "function": "save_issue_invocation_counts",
+      "args": [
+        "9",
+        "3",
+        "0"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": "1\\n",
+          "mode": "0444"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 1,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.invocations",
+          "type": "f",
+          "mode": "0444",
+          "content": "1\\n"
+        }
+      ]
+    },
+    {
+      "name": "issue invocations: no directory yet",
+      "function": "save_issue_invocation_counts",
+      "args": [
+        "9",
+        "3",
+        "0"
+      ],
+      "no_session_dir": true,
+      "files": [],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "3 0\\n"
+        }
+      ]
+    },
+    {
+      "name": "issue invocations: a read-only directory",
+      "function": "save_issue_invocation_counts",
+      "args": [
+        "9",
+        "3",
+        "0"
+      ],
+      "files": [
+        {
+          "path": "owner/repo",
+          "dir": true,
+          "mode": "0555"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 1,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0555"
+        }
+      ]
+    },
+    {
+      "name": "issue invocations: a writable file in a read-only directory",
+      "function": "save_issue_invocation_counts",
+      "args": [
+        "9",
+        "3",
+        "0"
+      ],
+      "files": [
+        {
+          "path": "owner/repo",
+          "dir": true,
+          "mode": "0555"
+        },
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": "1\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0555"
+        },
+        {
+          "path": "./owner/repo/Issue_9.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "3 0\\n"
+        }
+      ]
+    },
+    {
+      "name": "issue invocations: a link to a file",
+      "function": "save_issue_invocation_counts",
+      "args": [
+        "9",
+        "3",
+        "0"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/elsewhere",
+          "content": "1\\n"
+        },
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "link": "elsewhere"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.invocations",
+          "type": "l",
+          "target": "elsewhere"
+        },
+        {
+          "path": "./owner/repo/elsewhere",
+          "type": "f",
+          "mode": "0644",
+          "content": "3 0\\n"
+        }
+      ]
+    },
+    {
+      "name": "issue invocations: a dangling link",
+      "function": "save_issue_invocation_counts",
+      "args": [
+        "9",
+        "3",
+        "0"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "link": "missing"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.invocations",
+          "type": "l",
+          "target": "missing"
+        },
+        {
+          "path": "./owner/repo/missing",
+          "type": "f",
+          "mode": "0644",
+          "content": "3 0\\n"
+        }
+      ]
+    },
+    {
+      "name": "issue invocations: a directory in its place",
+      "function": "save_issue_invocation_counts",
+      "args": [
+        "9",
+        "3",
+        "0"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "dir": true
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 1,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.invocations",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "issue invocations: a hard-linked file",
+      "function": "save_issue_invocation_counts",
+      "args": [
+        "9",
+        "3",
+        "0"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.invocations",
+          "content": "1\\n"
+        },
+        {
+          "path": "owner/repo/other",
+          "hardlink": "owner/repo/Issue_9.invocations"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "3 0\\n"
+        },
+        {
+          "path": "./owner/repo/other",
+          "type": "f",
+          "mode": "0644",
+          "content": "3 0\\n"
+        }
+      ]
+    },
+    {
+      "name": "issue invocations: the directory is a link",
+      "function": "save_issue_invocation_counts",
+      "args": [
+        "9",
+        "3",
+        "0"
+      ],
+      "no_session_dir": true,
+      "files": [
+        {
+          "path": "owner/real",
+          "dir": true
+        },
+        {
+          "path": "owner/repo",
+          "link": "real"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/real",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/real/Issue_9.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "3 0\\n"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "l",
+          "target": "real"
+        }
+      ]
+    },
+    {
+      "name": "issue invocations: an argument that is not UTF-8",
+      "function": "save_issue_invocation_counts",
+      "args": [
+        "9",
+        "\\xff",
+        "0"
+      ],
+      "files": [],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "\\xff 0\\n"
+        }
+      ]
+    },
+    {
+      "name": "env unblocks: a new file",
+      "function": "save_env_unblock_attempts",
+      "args": [
+        "7",
+        "3"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.env-unblocks",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        }
+      ]
+    },
+    {
+      "name": "env unblocks: a new file under umask 077",
+      "function": "save_env_unblock_attempts",
+      "args": [
+        "7",
+        "3"
+      ],
+      "umask": "077",
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.env-unblocks",
+          "type": "f",
+          "mode": "0600",
+          "content": "3\\n"
+        }
+      ]
+    },
+    {
+      "name": "env unblocks: a new file under umask 002",
+      "function": "save_env_unblock_attempts",
+      "args": [
+        "7",
+        "3"
+      ],
+      "umask": "002",
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.env-unblocks",
+          "type": "f",
+          "mode": "0664",
+          "content": "3\\n"
+        }
+      ]
+    },
+    {
+      "name": "env unblocks: replaces a file",
+      "function": "save_env_unblock_attempts",
+      "args": [
+        "7",
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "content": "old\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.env-unblocks",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        }
+      ]
+    },
+    {
+      "name": "env unblocks: replaces a longer file",
+      "function": "save_env_unblock_attempts",
+      "args": [
+        "7",
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "content": "a much longer old value\\nwith two lines\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.env-unblocks",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        }
+      ]
+    },
+    {
+      "name": "env unblocks: replaces a 0600 file",
+      "function": "save_env_unblock_attempts",
+      "args": [
+        "7",
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "content": "1\\n",
+          "mode": "0600"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.env-unblocks",
+          "type": "f",
+          "mode": "0600",
+          "content": "3\\n"
+        }
+      ]
+    },
+    {
+      "name": "env unblocks: replaces a 0640 file under umask 077",
+      "function": "save_env_unblock_attempts",
+      "args": [
+        "7",
+        "3"
+      ],
+      "umask": "077",
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "content": "1\\n",
+          "mode": "0640"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.env-unblocks",
+          "type": "f",
+          "mode": "0640",
+          "content": "3\\n"
+        }
+      ]
+    },
+    {
+      "name": "env unblocks: replaces a 0755 file",
+      "function": "save_env_unblock_attempts",
+      "args": [
+        "7",
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "content": "1\\n",
+          "mode": "0755"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.env-unblocks",
+          "type": "f",
+          "mode": "0755",
+          "content": "3\\n"
+        }
+      ]
+    },
+    {
+      "name": "env unblocks: a 0444 file",
+      "function": "save_env_unblock_attempts",
+      "args": [
+        "7",
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "content": "1\\n",
+          "mode": "0444"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 1,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.env-unblocks",
+          "type": "f",
+          "mode": "0444",
+          "content": "1\\n"
+        }
+      ]
+    },
+    {
+      "name": "env unblocks: no directory yet",
+      "function": "save_env_unblock_attempts",
+      "args": [
+        "7",
+        "3"
+      ],
+      "no_session_dir": true,
+      "files": [],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.env-unblocks",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        }
+      ]
+    },
+    {
+      "name": "env unblocks: a read-only directory",
+      "function": "save_env_unblock_attempts",
+      "args": [
+        "7",
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/repo",
+          "dir": true,
+          "mode": "0555"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 1,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0555"
+        }
+      ]
+    },
+    {
+      "name": "env unblocks: a writable file in a read-only directory",
+      "function": "save_env_unblock_attempts",
+      "args": [
+        "7",
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/repo",
+          "dir": true,
+          "mode": "0555"
+        },
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "content": "1\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0555"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.env-unblocks",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        }
+      ]
+    },
+    {
+      "name": "env unblocks: a link to a file",
+      "function": "save_env_unblock_attempts",
+      "args": [
+        "7",
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/elsewhere",
+          "content": "1\\n"
+        },
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "link": "elsewhere"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.env-unblocks",
+          "type": "l",
+          "target": "elsewhere"
+        },
+        {
+          "path": "./owner/repo/elsewhere",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        }
+      ]
+    },
+    {
+      "name": "env unblocks: a dangling link",
+      "function": "save_env_unblock_attempts",
+      "args": [
+        "7",
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "link": "missing"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.env-unblocks",
+          "type": "l",
+          "target": "missing"
+        },
+        {
+          "path": "./owner/repo/missing",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        }
+      ]
+    },
+    {
+      "name": "env unblocks: a directory in its place",
+      "function": "save_env_unblock_attempts",
+      "args": [
+        "7",
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "dir": true
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 1,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.env-unblocks",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "env unblocks: a hard-linked file",
+      "function": "save_env_unblock_attempts",
+      "args": [
+        "7",
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.env-unblocks",
+          "content": "1\\n"
+        },
+        {
+          "path": "owner/repo/other",
+          "hardlink": "owner/repo/PullRequest_7.env-unblocks"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.env-unblocks",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        },
+        {
+          "path": "./owner/repo/other",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        }
+      ]
+    },
+    {
+      "name": "env unblocks: the directory is a link",
+      "function": "save_env_unblock_attempts",
+      "args": [
+        "7",
+        "3"
+      ],
+      "no_session_dir": true,
+      "files": [
+        {
+          "path": "owner/real",
+          "dir": true
+        },
+        {
+          "path": "owner/repo",
+          "link": "real"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/real",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/real/PullRequest_7.env-unblocks",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "l",
+          "target": "real"
+        }
+      ]
+    },
+    {
+      "name": "env unblocks: an argument that is not UTF-8",
+      "function": "save_env_unblock_attempts",
+      "args": [
+        "7",
+        "\\xff"
+      ],
+      "files": [],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.env-unblocks",
+          "type": "f",
+          "mode": "0644",
+          "content": "\\xff\\n"
+        }
+      ]
+    },
+    {
+      "name": "rate limit: a new file",
+      "function": "save_rate_limit",
+      "args": [
+        "3"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/rate-limit",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "rate limit: a new file under umask 077",
+      "function": "save_rate_limit",
+      "args": [
+        "3"
+      ],
+      "umask": "077",
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/rate-limit",
+          "type": "f",
+          "mode": "0600",
+          "content": "3\\n"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "rate limit: a new file under umask 002",
+      "function": "save_rate_limit",
+      "args": [
+        "3"
+      ],
+      "umask": "002",
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/rate-limit",
+          "type": "f",
+          "mode": "0664",
+          "content": "3\\n"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "rate limit: replaces a file",
+      "function": "save_rate_limit",
+      "args": [
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "content": "old\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/rate-limit",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "rate limit: replaces a longer file",
+      "function": "save_rate_limit",
+      "args": [
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "content": "a much longer old value\\nwith two lines\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/rate-limit",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "rate limit: replaces a 0600 file",
+      "function": "save_rate_limit",
+      "args": [
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "content": "1\\n",
+          "mode": "0600"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/rate-limit",
+          "type": "f",
+          "mode": "0600",
+          "content": "3\\n"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "rate limit: replaces a 0640 file under umask 077",
+      "function": "save_rate_limit",
+      "args": [
+        "3"
+      ],
+      "umask": "077",
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "content": "1\\n",
+          "mode": "0640"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/rate-limit",
+          "type": "f",
+          "mode": "0640",
+          "content": "3\\n"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "rate limit: replaces a 0755 file",
+      "function": "save_rate_limit",
+      "args": [
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "content": "1\\n",
+          "mode": "0755"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/rate-limit",
+          "type": "f",
+          "mode": "0755",
+          "content": "3\\n"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "rate limit: a 0444 file",
+      "function": "save_rate_limit",
+      "args": [
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "content": "1\\n",
+          "mode": "0444"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 1,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/rate-limit",
+          "type": "f",
+          "mode": "0444",
+          "content": "1\\n"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "rate limit: no directory yet",
+      "function": "save_rate_limit",
+      "args": [
+        "3"
+      ],
+      "no_session_dir": true,
+      "files": [],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/rate-limit",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        }
+      ]
+    },
+    {
+      "name": "rate limit: a read-only directory",
+      "function": "save_rate_limit",
+      "args": [
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner",
+          "dir": true,
+          "mode": "0555"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 1,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0555"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "rate limit: a writable file in a read-only directory",
+      "function": "save_rate_limit",
+      "args": [
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner",
+          "dir": true,
+          "mode": "0555"
+        },
+        {
+          "path": "owner/rate-limit",
+          "content": "1\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0555"
+        },
+        {
+          "path": "./owner/rate-limit",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "rate limit: a link to a file",
+      "function": "save_rate_limit",
+      "args": [
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/elsewhere",
+          "content": "1\\n"
+        },
+        {
+          "path": "owner/rate-limit",
+          "link": "elsewhere"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/elsewhere",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        },
+        {
+          "path": "./owner/rate-limit",
+          "type": "l",
+          "target": "elsewhere"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "rate limit: a dangling link",
+      "function": "save_rate_limit",
+      "args": [
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "link": "missing"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/missing",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        },
+        {
+          "path": "./owner/rate-limit",
+          "type": "l",
+          "target": "missing"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "rate limit: a directory in its place",
+      "function": "save_rate_limit",
+      "args": [
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "dir": true
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 1,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/rate-limit",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "rate limit: a hard-linked file",
+      "function": "save_rate_limit",
+      "args": [
+        "3"
+      ],
+      "files": [
+        {
+          "path": "owner/rate-limit",
+          "content": "1\\n"
+        },
+        {
+          "path": "owner/other",
+          "hardlink": "owner/rate-limit"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/other",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        },
+        {
+          "path": "./owner/rate-limit",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "rate limit: the directory is a link",
+      "function": "save_rate_limit",
+      "args": [
+        "3"
+      ],
+      "no_session_dir": true,
+      "files": [
+        {
+          "path": "real",
+          "dir": true
+        },
+        {
+          "path": "owner",
+          "link": "real"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "l",
+          "target": "real"
+        },
+        {
+          "path": "./real",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./real/rate-limit",
+          "type": "f",
+          "mode": "0644",
+          "content": "3\\n"
+        }
+      ]
+    },
+    {
+      "name": "rate limit: an argument that is not UTF-8",
+      "function": "save_rate_limit",
+      "args": [
+        "\\xff"
+      ],
+      "files": [],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/rate-limit",
+          "type": "f",
+          "mode": "0644",
+          "content": "\\xff\\n"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "precheck: a new file",
+      "function": "save_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123",
+        "pass"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.precheck",
+          "type": "f",
+          "mode": "0644",
+          "content": "abc123\\npass\\n"
+        }
+      ]
+    },
+    {
+      "name": "precheck: a new file under umask 077",
+      "function": "save_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123",
+        "pass"
+      ],
+      "umask": "077",
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.precheck",
+          "type": "f",
+          "mode": "0600",
+          "content": "abc123\\npass\\n"
+        }
+      ]
+    },
+    {
+      "name": "precheck: a new file under umask 002",
+      "function": "save_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123",
+        "pass"
+      ],
+      "umask": "002",
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.precheck",
+          "type": "f",
+          "mode": "0664",
+          "content": "abc123\\npass\\n"
+        }
+      ]
+    },
+    {
+      "name": "precheck: replaces a file",
+      "function": "save_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123",
+        "pass"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": "old\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.precheck",
+          "type": "f",
+          "mode": "0644",
+          "content": "abc123\\npass\\n"
+        }
+      ]
+    },
+    {
+      "name": "precheck: replaces a longer file",
+      "function": "save_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123",
+        "pass"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": "a much longer old value\\nwith two lines\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.precheck",
+          "type": "f",
+          "mode": "0644",
+          "content": "abc123\\npass\\n"
+        }
+      ]
+    },
+    {
+      "name": "precheck: replaces a 0600 file",
+      "function": "save_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123",
+        "pass"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": "1\\n",
+          "mode": "0600"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.precheck",
+          "type": "f",
+          "mode": "0644",
+          "content": "abc123\\npass\\n"
+        }
+      ]
+    },
+    {
+      "name": "precheck: replaces a 0640 file under umask 077",
+      "function": "save_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123",
+        "pass"
+      ],
+      "umask": "077",
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": "1\\n",
+          "mode": "0640"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.precheck",
+          "type": "f",
+          "mode": "0600",
+          "content": "abc123\\npass\\n"
+        }
+      ]
+    },
+    {
+      "name": "precheck: replaces a 0755 file",
+      "function": "save_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123",
+        "pass"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": "1\\n",
+          "mode": "0755"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.precheck",
+          "type": "f",
+          "mode": "0644",
+          "content": "abc123\\npass\\n"
+        }
+      ]
+    },
+    {
+      "name": "precheck: a 0444 file",
+      "function": "save_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123",
+        "pass"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": "1\\n",
+          "mode": "0444"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.precheck",
+          "type": "f",
+          "mode": "0644",
+          "content": "abc123\\npass\\n"
+        }
+      ]
+    },
+    {
+      "name": "precheck: no directory yet",
+      "function": "save_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123",
+        "pass"
+      ],
+      "no_session_dir": true,
+      "files": [],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.precheck",
+          "type": "f",
+          "mode": "0644",
+          "content": "abc123\\npass\\n"
+        }
+      ]
+    },
+    {
+      "name": "precheck: a read-only directory",
+      "function": "save_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123",
+        "pass"
+      ],
+      "files": [
+        {
+          "path": "owner/repo",
+          "dir": true,
+          "mode": "0555"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0555"
+        }
+      ]
+    },
+    {
+      "name": "precheck: a writable file in a read-only directory",
+      "function": "save_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123",
+        "pass"
+      ],
+      "files": [
+        {
+          "path": "owner/repo",
+          "dir": true,
+          "mode": "0555"
+        },
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": "1\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0555"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.precheck",
+          "type": "f",
+          "mode": "0644",
+          "content": "1\\n"
+        }
+      ]
+    },
+    {
+      "name": "precheck: a link to a file",
+      "function": "save_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123",
+        "pass"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/elsewhere",
+          "content": "1\\n"
+        },
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "link": "elsewhere"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.precheck",
+          "type": "f",
+          "mode": "0644",
+          "content": "abc123\\npass\\n"
+        },
+        {
+          "path": "./owner/repo/elsewhere",
+          "type": "f",
+          "mode": "0644",
+          "content": "1\\n"
+        }
+      ]
+    },
+    {
+      "name": "precheck: a dangling link",
+      "function": "save_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123",
+        "pass"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "link": "missing"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.precheck",
+          "type": "f",
+          "mode": "0644",
+          "content": "abc123\\npass\\n"
+        }
+      ]
+    },
+    {
+      "name": "precheck: a directory in its place",
+      "function": "save_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123",
+        "pass"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "dir": true
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.precheck",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.precheck/PullRequest_7.precheck.tmp",
+          "type": "f",
+          "mode": "0644",
+          "content": "abc123\\npass\\n"
+        }
+      ]
+    },
+    {
+      "name": "precheck: a hard-linked file",
+      "function": "save_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123",
+        "pass"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck",
+          "content": "1\\n"
+        },
+        {
+          "path": "owner/repo/other",
+          "hardlink": "owner/repo/PullRequest_7.precheck"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.precheck",
+          "type": "f",
+          "mode": "0644",
+          "content": "abc123\\npass\\n"
+        },
+        {
+          "path": "./owner/repo/other",
+          "type": "f",
+          "mode": "0644",
+          "content": "1\\n"
+        }
+      ]
+    },
+    {
+      "name": "precheck: the directory is a link",
+      "function": "save_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123",
+        "pass"
+      ],
+      "no_session_dir": true,
+      "files": [
+        {
+          "path": "owner/real",
+          "dir": true
+        },
+        {
+          "path": "owner/repo",
+          "link": "real"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/real",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/real/PullRequest_7.precheck",
+          "type": "f",
+          "mode": "0644",
+          "content": "abc123\\npass\\n"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "l",
+          "target": "real"
+        }
+      ]
+    },
+    {
+      "name": "precheck: an argument that is not UTF-8",
+      "function": "save_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123",
+        "pa\\xffss"
+      ],
+      "files": [],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.precheck",
+          "type": "f",
+          "mode": "0644",
+          "content": "abc123\\npa\\xffss\\n"
+        }
+      ]
+    },
+    {
+      "name": "precheck: a leftover .tmp file",
+      "function": "save_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123",
+        "pass"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck.tmp",
+          "content": "stale\\n",
+          "mode": "0600"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.precheck",
+          "type": "f",
+          "mode": "0600",
+          "content": "abc123\\npass\\n"
+        }
+      ]
+    },
+    {
+      "name": "precheck: a leftover .tmp directory",
+      "function": "save_precheck_result",
+      "args": [
+        "PullRequest_7",
+        "abc123",
+        "pass"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_7.precheck.tmp",
+          "dir": true
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.precheck.tmp",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: a new file",
+      "function": "save_last_diagnostic",
+      "args": [
+        "Issue",
+        "9",
+        "denied: Bash(rm)"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.last-diagnostic",
+          "type": "f",
+          "mode": "0644",
+          "content": "denied: Bash(rm)"
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: a new file under umask 077",
+      "function": "save_last_diagnostic",
+      "args": [
+        "Issue",
+        "9",
+        "denied: Bash(rm)"
+      ],
+      "umask": "077",
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.last-diagnostic",
+          "type": "f",
+          "mode": "0600",
+          "content": "denied: Bash(rm)"
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: a new file under umask 002",
+      "function": "save_last_diagnostic",
+      "args": [
+        "Issue",
+        "9",
+        "denied: Bash(rm)"
+      ],
+      "umask": "002",
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.last-diagnostic",
+          "type": "f",
+          "mode": "0664",
+          "content": "denied: Bash(rm)"
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: replaces a file",
+      "function": "save_last_diagnostic",
+      "args": [
+        "Issue",
+        "9",
+        "denied: Bash(rm)"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.last-diagnostic",
+          "content": "old\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.last-diagnostic",
+          "type": "f",
+          "mode": "0644",
+          "content": "denied: Bash(rm)"
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: replaces a longer file",
+      "function": "save_last_diagnostic",
+      "args": [
+        "Issue",
+        "9",
+        "denied: Bash(rm)"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.last-diagnostic",
+          "content": "a much longer old value\\nwith two lines\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.last-diagnostic",
+          "type": "f",
+          "mode": "0644",
+          "content": "denied: Bash(rm)"
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: replaces a 0600 file",
+      "function": "save_last_diagnostic",
+      "args": [
+        "Issue",
+        "9",
+        "denied: Bash(rm)"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.last-diagnostic",
+          "content": "1\\n",
+          "mode": "0600"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.last-diagnostic",
+          "type": "f",
+          "mode": "0600",
+          "content": "denied: Bash(rm)"
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: replaces a 0640 file under umask 077",
+      "function": "save_last_diagnostic",
+      "args": [
+        "Issue",
+        "9",
+        "denied: Bash(rm)"
+      ],
+      "umask": "077",
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.last-diagnostic",
+          "content": "1\\n",
+          "mode": "0640"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.last-diagnostic",
+          "type": "f",
+          "mode": "0640",
+          "content": "denied: Bash(rm)"
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: replaces a 0755 file",
+      "function": "save_last_diagnostic",
+      "args": [
+        "Issue",
+        "9",
+        "denied: Bash(rm)"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.last-diagnostic",
+          "content": "1\\n",
+          "mode": "0755"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.last-diagnostic",
+          "type": "f",
+          "mode": "0755",
+          "content": "denied: Bash(rm)"
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: a 0444 file",
+      "function": "save_last_diagnostic",
+      "args": [
+        "Issue",
+        "9",
+        "denied: Bash(rm)"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.last-diagnostic",
+          "content": "1\\n",
+          "mode": "0444"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.last-diagnostic",
+          "type": "f",
+          "mode": "0444",
+          "content": "1\\n"
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: no directory yet",
+      "function": "save_last_diagnostic",
+      "args": [
+        "Issue",
+        "9",
+        "denied: Bash(rm)"
+      ],
+      "no_session_dir": true,
+      "files": [],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.last-diagnostic",
+          "type": "f",
+          "mode": "0644",
+          "content": "denied: Bash(rm)"
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: a read-only directory",
+      "function": "save_last_diagnostic",
+      "args": [
+        "Issue",
+        "9",
+        "denied: Bash(rm)"
+      ],
+      "files": [
+        {
+          "path": "owner/repo",
+          "dir": true,
+          "mode": "0555"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0555"
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: a writable file in a read-only directory",
+      "function": "save_last_diagnostic",
+      "args": [
+        "Issue",
+        "9",
+        "denied: Bash(rm)"
+      ],
+      "files": [
+        {
+          "path": "owner/repo",
+          "dir": true,
+          "mode": "0555"
+        },
+        {
+          "path": "owner/repo/Issue_9.last-diagnostic",
+          "content": "1\\n"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0555"
+        },
+        {
+          "path": "./owner/repo/Issue_9.last-diagnostic",
+          "type": "f",
+          "mode": "0644",
+          "content": "denied: Bash(rm)"
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: a link to a file",
+      "function": "save_last_diagnostic",
+      "args": [
+        "Issue",
+        "9",
+        "denied: Bash(rm)"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/elsewhere",
+          "content": "1\\n"
+        },
+        {
+          "path": "owner/repo/Issue_9.last-diagnostic",
+          "link": "elsewhere"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.last-diagnostic",
+          "type": "l",
+          "target": "elsewhere"
+        },
+        {
+          "path": "./owner/repo/elsewhere",
+          "type": "f",
+          "mode": "0644",
+          "content": "denied: Bash(rm)"
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: a dangling link",
+      "function": "save_last_diagnostic",
+      "args": [
+        "Issue",
+        "9",
+        "denied: Bash(rm)"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.last-diagnostic",
+          "link": "missing"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.last-diagnostic",
+          "type": "l",
+          "target": "missing"
+        },
+        {
+          "path": "./owner/repo/missing",
+          "type": "f",
+          "mode": "0644",
+          "content": "denied: Bash(rm)"
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: a directory in its place",
+      "function": "save_last_diagnostic",
+      "args": [
+        "Issue",
+        "9",
+        "denied: Bash(rm)"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.last-diagnostic",
+          "dir": true
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.last-diagnostic",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: a hard-linked file",
+      "function": "save_last_diagnostic",
+      "args": [
+        "Issue",
+        "9",
+        "denied: Bash(rm)"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/Issue_9.last-diagnostic",
+          "content": "1\\n"
+        },
+        {
+          "path": "owner/repo/other",
+          "hardlink": "owner/repo/Issue_9.last-diagnostic"
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.last-diagnostic",
+          "type": "f",
+          "mode": "0644",
+          "content": "denied: Bash(rm)"
+        },
+        {
+          "path": "./owner/repo/other",
+          "type": "f",
+          "mode": "0644",
+          "content": "denied: Bash(rm)"
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: the directory is a link",
+      "function": "save_last_diagnostic",
+      "args": [
+        "Issue",
+        "9",
+        "denied: Bash(rm)"
+      ],
+      "no_session_dir": true,
+      "files": [
+        {
+          "path": "owner/real",
+          "dir": true
+        },
+        {
+          "path": "owner/repo",
+          "link": "real"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/real",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/real/Issue_9.last-diagnostic",
+          "type": "f",
+          "mode": "0644",
+          "content": "denied: Bash(rm)"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "l",
+          "target": "real"
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: an argument that is not UTF-8",
+      "function": "save_last_diagnostic",
+      "args": [
+        "Issue",
+        "9",
+        "\\xff"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.last-diagnostic",
+          "type": "f",
+          "mode": "0644",
+          "content": "\\xff"
+        }
+      ]
+    },
+    {
+      "name": "infra: zero",
+      "function": "save_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7",
+        "0"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.infra-failures",
+          "type": "f",
+          "mode": "0644",
+          "content": "0\\n"
+        }
+      ]
+    },
+    {
+      "name": "infra: an empty value",
+      "function": "save_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7",
+        ""
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.infra-failures",
+          "type": "f",
+          "mode": "0644",
+          "content": "\\n"
+        }
+      ]
+    },
+    {
+      "name": "infra: leading zeros",
+      "function": "save_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7",
+        "007"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.infra-failures",
+          "type": "f",
+          "mode": "0644",
+          "content": "007\\n"
+        }
+      ]
+    },
+    {
+      "name": "infra: a negative value",
+      "function": "save_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7",
+        "-1"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.infra-failures",
+          "type": "f",
+          "mode": "0644",
+          "content": "-1\\n"
+        }
+      ]
+    },
+    {
+      "name": "infra: a space",
+      "function": "save_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7",
+        "a b"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.infra-failures",
+          "type": "f",
+          "mode": "0644",
+          "content": "a b\\n"
+        }
+      ]
+    },
+    {
+      "name": "infra: a long number",
+      "function": "save_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7",
+        "12345678901234567890123"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.infra-failures",
+          "type": "f",
+          "mode": "0644",
+          "content": "12345678901234567890123\\n"
+        }
+      ]
+    },
+    {
+      "name": "infra: UTF-8 text",
+      "function": "save_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7",
+        "\\xc3\\xa9"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.infra-failures",
+          "type": "f",
+          "mode": "0644",
+          "content": "\\xc3\\xa9\\n"
+        }
+      ]
+    },
+    {
+      "name": "infra: a newline",
+      "function": "save_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "7",
+        "1\\n2"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.infra-failures",
+          "type": "f",
+          "mode": "0644",
+          "content": "1\\n2\\n"
+        }
+      ]
+    },
+    {
+      "name": "pr invocations: zero",
+      "function": "save_pr_invocation_counts",
+      "args": [
+        "7",
+        "0",
+        "2"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "0 2\\n"
+        }
+      ]
+    },
+    {
+      "name": "pr invocations: an empty value",
+      "function": "save_pr_invocation_counts",
+      "args": [
+        "7",
+        "",
+        "2"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": " 2\\n"
+        }
+      ]
+    },
+    {
+      "name": "pr invocations: leading zeros",
+      "function": "save_pr_invocation_counts",
+      "args": [
+        "7",
+        "007",
+        "2"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "007 2\\n"
+        }
+      ]
+    },
+    {
+      "name": "pr invocations: a negative value",
+      "function": "save_pr_invocation_counts",
+      "args": [
+        "7",
+        "-1",
+        "2"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "-1 2\\n"
+        }
+      ]
+    },
+    {
+      "name": "pr invocations: a space",
+      "function": "save_pr_invocation_counts",
+      "args": [
+        "7",
+        "a b",
+        "2"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "a b 2\\n"
+        }
+      ]
+    },
+    {
+      "name": "pr invocations: a long number",
+      "function": "save_pr_invocation_counts",
+      "args": [
+        "7",
+        "12345678901234567890123",
+        "2"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "12345678901234567890123 2\\n"
+        }
+      ]
+    },
+    {
+      "name": "pr invocations: UTF-8 text",
+      "function": "save_pr_invocation_counts",
+      "args": [
+        "7",
+        "\\xc3\\xa9",
+        "2"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "\\xc3\\xa9 2\\n"
+        }
+      ]
+    },
+    {
+      "name": "pr invocations: a newline",
+      "function": "save_pr_invocation_counts",
+      "args": [
+        "7",
+        "1\\n2",
+        "2"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "1\\n2 2\\n"
+        }
+      ]
+    },
+    {
+      "name": "issue invocations: zero",
+      "function": "save_issue_invocation_counts",
+      "args": [
+        "9",
+        "0",
+        "0"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "0 0\\n"
+        }
+      ]
+    },
+    {
+      "name": "issue invocations: an empty value",
+      "function": "save_issue_invocation_counts",
+      "args": [
+        "9",
+        "",
+        "0"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": " 0\\n"
+        }
+      ]
+    },
+    {
+      "name": "issue invocations: leading zeros",
+      "function": "save_issue_invocation_counts",
+      "args": [
+        "9",
+        "007",
+        "0"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "007 0\\n"
+        }
+      ]
+    },
+    {
+      "name": "issue invocations: a negative value",
+      "function": "save_issue_invocation_counts",
+      "args": [
+        "9",
+        "-1",
+        "0"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "-1 0\\n"
+        }
+      ]
+    },
+    {
+      "name": "issue invocations: a space",
+      "function": "save_issue_invocation_counts",
+      "args": [
+        "9",
+        "a b",
+        "0"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "a b 0\\n"
+        }
+      ]
+    },
+    {
+      "name": "issue invocations: a long number",
+      "function": "save_issue_invocation_counts",
+      "args": [
+        "9",
+        "12345678901234567890123",
+        "0"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "12345678901234567890123 0\\n"
+        }
+      ]
+    },
+    {
+      "name": "issue invocations: UTF-8 text",
+      "function": "save_issue_invocation_counts",
+      "args": [
+        "9",
+        "\\xc3\\xa9",
+        "0"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "\\xc3\\xa9 0\\n"
+        }
+      ]
+    },
+    {
+      "name": "issue invocations: a newline",
+      "function": "save_issue_invocation_counts",
+      "args": [
+        "9",
+        "1\\n2",
+        "0"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "1\\n2 0\\n"
+        }
+      ]
+    },
+    {
+      "name": "env unblocks: zero",
+      "function": "save_env_unblock_attempts",
+      "args": [
+        "7",
+        "0"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.env-unblocks",
+          "type": "f",
+          "mode": "0644",
+          "content": "0\\n"
+        }
+      ]
+    },
+    {
+      "name": "env unblocks: an empty value",
+      "function": "save_env_unblock_attempts",
+      "args": [
+        "7",
+        ""
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.env-unblocks",
+          "type": "f",
+          "mode": "0644",
+          "content": "\\n"
+        }
+      ]
+    },
+    {
+      "name": "env unblocks: leading zeros",
+      "function": "save_env_unblock_attempts",
+      "args": [
+        "7",
+        "007"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.env-unblocks",
+          "type": "f",
+          "mode": "0644",
+          "content": "007\\n"
+        }
+      ]
+    },
+    {
+      "name": "env unblocks: a negative value",
+      "function": "save_env_unblock_attempts",
+      "args": [
+        "7",
+        "-1"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.env-unblocks",
+          "type": "f",
+          "mode": "0644",
+          "content": "-1\\n"
+        }
+      ]
+    },
+    {
+      "name": "env unblocks: a space",
+      "function": "save_env_unblock_attempts",
+      "args": [
+        "7",
+        "a b"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.env-unblocks",
+          "type": "f",
+          "mode": "0644",
+          "content": "a b\\n"
+        }
+      ]
+    },
+    {
+      "name": "env unblocks: a long number",
+      "function": "save_env_unblock_attempts",
+      "args": [
+        "7",
+        "12345678901234567890123"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.env-unblocks",
+          "type": "f",
+          "mode": "0644",
+          "content": "12345678901234567890123\\n"
+        }
+      ]
+    },
+    {
+      "name": "env unblocks: UTF-8 text",
+      "function": "save_env_unblock_attempts",
+      "args": [
+        "7",
+        "\\xc3\\xa9"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.env-unblocks",
+          "type": "f",
+          "mode": "0644",
+          "content": "\\xc3\\xa9\\n"
+        }
+      ]
+    },
+    {
+      "name": "env unblocks: a newline",
+      "function": "save_env_unblock_attempts",
+      "args": [
+        "7",
+        "1\\n2"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.env-unblocks",
+          "type": "f",
+          "mode": "0644",
+          "content": "1\\n2\\n"
+        }
+      ]
+    },
+    {
+      "name": "rate limit: zero",
+      "function": "save_rate_limit",
+      "args": [
+        "0"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/rate-limit",
+          "type": "f",
+          "mode": "0644",
+          "content": "0\\n"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "rate limit: an empty value",
+      "function": "save_rate_limit",
+      "args": [
+        ""
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/rate-limit",
+          "type": "f",
+          "mode": "0644",
+          "content": "\\n"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "rate limit: leading zeros",
+      "function": "save_rate_limit",
+      "args": [
+        "007"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/rate-limit",
+          "type": "f",
+          "mode": "0644",
+          "content": "007\\n"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "rate limit: a negative value",
+      "function": "save_rate_limit",
+      "args": [
+        "-1"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/rate-limit",
+          "type": "f",
+          "mode": "0644",
+          "content": "-1\\n"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "rate limit: a space",
+      "function": "save_rate_limit",
+      "args": [
+        "a b"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/rate-limit",
+          "type": "f",
+          "mode": "0644",
+          "content": "a b\\n"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "rate limit: a long number",
+      "function": "save_rate_limit",
+      "args": [
+        "12345678901234567890123"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/rate-limit",
+          "type": "f",
+          "mode": "0644",
+          "content": "12345678901234567890123\\n"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "rate limit: UTF-8 text",
+      "function": "save_rate_limit",
+      "args": [
+        "\\xc3\\xa9"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/rate-limit",
+          "type": "f",
+          "mode": "0644",
+          "content": "\\xc3\\xa9\\n"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "rate limit: a newline",
+      "function": "save_rate_limit",
+      "args": [
+        "1\\n2"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/rate-limit",
+          "type": "f",
+          "mode": "0644",
+          "content": "1\\n2\\n"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        }
+      ]
+    },
+    {
+      "name": "pr invocations: an empty idle",
+      "function": "save_pr_invocation_counts",
+      "args": [
+        "7",
+        "3",
+        ""
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": "3 \\n"
+        }
+      ]
+    },
+    {
+      "name": "issue invocations: both empty",
+      "function": "save_issue_invocation_counts",
+      "args": [
+        "9",
+        "",
+        ""
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.invocations",
+          "type": "f",
+          "mode": "0644",
+          "content": " \\n"
+        }
+      ]
+    },
+    {
+      "name": "precheck: fail",
+      "function": "save_precheck_result",
+      "args": [
+        "main",
+        "abc123",
+        "fail"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/main.precheck",
+          "type": "f",
+          "mode": "0644",
+          "content": "abc123\\nfail\\n"
+        }
+      ]
+    },
+    {
+      "name": "precheck: timeout",
+      "function": "save_precheck_result",
+      "args": [
+        "main",
+        "abc123",
+        "timeout"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/main.precheck",
+          "type": "f",
+          "mode": "0644",
+          "content": "abc123\\ntimeout\\n"
+        }
+      ]
+    },
+    {
+      "name": "precheck: an empty sha",
+      "function": "save_precheck_result",
+      "args": [
+        "main",
+        "",
+        "pass"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/main.precheck",
+          "type": "f",
+          "mode": "0644",
+          "content": "\\npass\\n"
+        }
+      ]
+    },
+    {
+      "name": "precheck: another status",
+      "function": "save_precheck_result",
+      "args": [
+        "main",
+        "abc",
+        "weird status"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/main.precheck",
+          "type": "f",
+          "mode": "0644",
+          "content": "abc\\nweird status\\n"
+        }
+      ]
+    },
+    {
+      "name": "precheck: replaces another sha's record",
+      "function": "save_precheck_result",
+      "args": [
+        "main",
+        "def456",
+        "fail"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/main.precheck",
+          "content": "abc123\\npass\\n"
+        },
+        {
+          "path": "owner/repo/main.precheck.log",
+          "content": "log\\n"
+        }
+      ],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/main.precheck",
+          "type": "f",
+          "mode": "0644",
+          "content": "def456\\nfail\\n"
+        },
+        {
+          "path": "./owner/repo/main.precheck.log",
+          "type": "f",
+          "mode": "0644",
+          "content": "log\\n"
+        }
+      ]
+    },
+    {
+      "name": "precheck: a key with a slash",
+      "function": "save_precheck_result",
+      "args": [
+        "a/b",
+        "abc",
+        "pass"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/a",
+          "dir": true
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/a",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/a/b.precheck",
+          "type": "f",
+          "mode": "0644",
+          "content": "abc\\npass\\n"
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: empty text",
+      "function": "save_last_diagnostic",
+      "args": [
+        "Issue",
+        "9",
+        ""
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.last-diagnostic",
+          "type": "f",
+          "mode": "0644",
+          "content": ""
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: a trailing newline",
+      "function": "save_last_diagnostic",
+      "args": [
+        "Issue",
+        "9",
+        "one line\\n"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.last-diagnostic",
+          "type": "f",
+          "mode": "0644",
+          "content": "one line\\n"
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: two lines",
+      "function": "save_last_diagnostic",
+      "args": [
+        "Issue",
+        "9",
+        "two\\nlines"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.last-diagnostic",
+          "type": "f",
+          "mode": "0644",
+          "content": "two\\nlines"
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: trailing blank lines",
+      "function": "save_last_diagnostic",
+      "args": [
+        "Issue",
+        "9",
+        "ends\\n\\n\\n"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.last-diagnostic",
+          "type": "f",
+          "mode": "0644",
+          "content": "ends\\n\\n\\n"
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: only a newline",
+      "function": "save_last_diagnostic",
+      "args": [
+        "Issue",
+        "9",
+        "\\n"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.last-diagnostic",
+          "type": "f",
+          "mode": "0644",
+          "content": "\\n"
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: a tab",
+      "function": "save_last_diagnostic",
+      "args": [
+        "Issue",
+        "9",
+        "tab\\there"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.last-diagnostic",
+          "type": "f",
+          "mode": "0644",
+          "content": "tab\\there"
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: bytes that are not UTF-8",
+      "function": "save_last_diagnostic",
+      "args": [
+        "Issue",
+        "9",
+        "\\xff\\xfe not UTF-8"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.last-diagnostic",
+          "type": "f",
+          "mode": "0644",
+          "content": "\\xff\\xfe not UTF-8"
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: UTF-8 text",
+      "function": "save_last_diagnostic",
+      "args": [
+        "Issue",
+        "9",
+        "caf\\xc3\\xa9"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.last-diagnostic",
+          "type": "f",
+          "mode": "0644",
+          "content": "caf\\xc3\\xa9"
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: a backslash and format characters",
+      "function": "save_last_diagnostic",
+      "args": [
+        "Issue",
+        "9",
+        "back\\\\slash %s %d"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.last-diagnostic",
+          "type": "f",
+          "mode": "0644",
+          "content": "back\\\\slash %s %d"
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: a carriage return",
+      "function": "save_last_diagnostic",
+      "args": [
+        "Issue",
+        "9",
+        "\\r\\n"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.last-diagnostic",
+          "type": "f",
+          "mode": "0644",
+          "content": "\\r\\n"
+        }
+      ]
+    },
+    {
+      "name": "last diagnostic: a PullRequest",
+      "function": "save_last_diagnostic",
+      "args": [
+        "PullRequest",
+        "7",
+        "x"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_7.last-diagnostic",
+          "type": "f",
+          "mode": "0644",
+          "content": "x"
+        }
+      ]
+    },
+    {
+      "name": "infra: an Issue",
+      "function": "save_infra_failure_count",
+      "args": [
+        "Issue",
+        "9",
+        "1"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/Issue_9.infra-failures",
+          "type": "f",
+          "mode": "0644",
+          "content": "1\\n"
+        }
+      ]
+    },
+    {
+      "name": "infra: an id with a slash",
+      "function": "save_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "a/7",
+        "1"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/PullRequest_a",
+          "dir": true
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_a",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_a/7.infra-failures",
+          "type": "f",
+          "mode": "0644",
+          "content": "1\\n"
+        }
+      ]
+    },
+    {
+      "name": "infra: an empty id",
+      "function": "save_infra_failure_count",
+      "args": [
+        "PullRequest",
+        "",
+        "1"
+      ],
+      "files": [],
+      "tool": "answers",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/PullRequest_.infra-failures",
+          "type": "f",
+          "mode": "0644",
+          "content": "1\\n"
+        }
+      ]
+    },
+    {
+      "name": "infra: a type with a slash",
+      "function": "save_infra_failure_count",
+      "args": [
+        "x/PullRequest",
+        "7",
+        "1"
+      ],
+      "files": [
+        {
+          "path": "owner/repo/x",
+          "dir": true
+        }
+      ],
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/x",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo/x/PullRequest_7.infra-failures",
+          "type": "f",
+          "mode": "0644",
+          "content": "1\\n"
+        }
+      ]
+    },
+    {
+      "name": "rate limit: an empty owner",
+      "function": "save_rate_limit",
+      "args": [
+        "5"
+      ],
+      "files": [],
+      "tool": "answers",
+      "globals": {
+        "OWNER": ""
+      },
+      "stdout": "",
+      "status": 0,
+      "left": [
+        {
+          "path": "./owner",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./owner/repo",
+          "type": "d",
+          "mode": "0755"
+        },
+        {
+          "path": "./rate-limit",
+          "type": "f",
+          "mode": "0644",
+          "content": "5\\n"
+        }
+      ]
+    }
+  ]
+}

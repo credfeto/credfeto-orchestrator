@@ -1,5 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <!-- The LibraryImport stubs for umask(2), link(2) and mkfifo(3) (TestNatives) are generated as unsafe code -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AnalysisLevel>latest</AnalysisLevel>
     <AnalysisMode>AllEnabledByDefault</AnalysisMode>
     <CodeAnalysisTreatWarningsAsErrors>true</CodeAnalysisTreatWarningsAsErrors>
@@ -36,6 +38,8 @@
   <ItemGroup>
     <!-- The golden cases test/oneshot-state-parity.bats checks the shell version against -->
     <EmbeddedResource Include="../../test/fixtures/state-parity.json" LogicalName="state-parity.json" />
+    <!-- The golden cases test/oneshot-state-writes-parity.bats checks the shell version against -->
+    <EmbeddedResource Include="../../test/fixtures/state-writes-parity.json" LogicalName="state-writes-parity.json" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../Credfeto.Orchestrator.State/Credfeto.Orchestrator.State.csproj" />
