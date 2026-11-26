@@ -95,11 +95,12 @@ declare -gA _WF_OPTION_IDS
     [[ "${output}" == *"Read AI instructions from /resolved/.ai-instructions"* ]]
 }
 
-@test "build_issue_claude_md posts the plan with cfwf comment add from a quoted heredoc" {
+@test "build_issue_claude_md posts the plan with cfwf issue post-plan from a quoted heredoc (#2092)" {
     run build_issue_claude_md 42 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"cfwf comment add --repo "*" --issue 42 --body-file - <<'PLAN'"* ]]
-    [[ "${output}" == *"no --body, no Write, no temp file"* ]]
+    [[ "${output}" == *"cfwf issue post-plan --repo ${REPO_FULL} --issue 42 --body-file - <<'PLAN'"* ]]
+    [[ "${output}" == *"no cfwf comment add, no --body, no Write, no temp file"* ]]
+    [[ "${output}" != *"cfwf comment add --repo"* ]]
 }
 
 @test "build_issue_claude_md plan template is plain ASCII" {
@@ -111,11 +112,17 @@ declare -gA _WF_OPTION_IDS
     [ "${status}" -eq 1 ]
 }
 
-@test "build_issue_claude_md only blocks the issue once the plan is confirmed posted" {
+@test "build_issue_claude_md leaves Blocked and the Planning move to post-plan, and stops unlabelled when it is refused (#2092)" {
     run build_issue_claude_md 42 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Only once the plan is confirmed posted"* ]]
-    [[ "${output}" == *"If the plan could NOT be posted, do NOT add Blocked and do NOT move the board"* ]]
+    [[ "${output}" == *"Once cfwf issue post-plan exits 0"* ]]
+    [[ "${output}" == *"Do NOT add Blocked or move the board yourself; post-plan has already done both."* ]]
+    [[ "${output}" == *"If it exits 8 (refused, nothing written)"* ]]
+    [[ "${output}" == *"If the plan still could NOT be posted, do NOT add Blocked and do NOT move the board"* ]]
+    [[ "${output}" == *"the plan IS posted: do NOT post it again"* ]]
+    # The only Blocked command left is the unanswered-question one in step 3.
+    count=$(printf '%s\n' "${output}" | grep -c -- "cfwf label add --repo ${REPO_FULL} --issue 42 --label Blocked")
+    [ "${count}" -eq 1 ]
 }
 
 @test "build_issue_claude_md references AI instructions for CLI and label rules" {
@@ -1032,11 +1039,12 @@ declare -gA _WF_OPTION_IDS
 
 # --- cfwf board commands in the generated prompts (#1650) ----------------------
 
-@test "build_issue_claude_md gives the cfwf command where it moves the board to Planning and to Development (#1650)" {
+@test "build_issue_claude_md gives the cfwf command where it moves the board to Development, and leaves Planning to post-plan (#1650, #2092)" {
     _WF_PROJECT_ID="PVT_test123"
     run build_issue_claude_md 42 "/resolved/.ai-instructions" "" "false"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *'update the Workflow board status to "Planning" with `cfwf workflow-status --set --repo '"${REPO_FULL}"' --issue 42 --status "Planning"`'* ]]
+    [[ "${output}" != *'--status "Planning"'* ]]
+    [[ "${output}" == *"the plan is posted, the issue is Blocked and the board is at Planning: STOP"* ]]
     [[ "${output}" == *'update the Workflow board status to "Development" with `cfwf workflow-status --set --repo '"${REPO_FULL}"' --issue 42 --status "Development"`'* ]]
 }
 
