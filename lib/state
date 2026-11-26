@@ -29,6 +29,21 @@ _state_tool_answers() {
     return 1
 }
 
+# Asks ORCHESTRATOR_CMD state <write> to write a lib/state file (ORCHESTRATOR_DOTNET_STATE=1, #252), passing the
+# remaining arguments; stdin passes through, and only save-last-diagnostic reads it. Returns 0 when the tool wrote the
+# file (exit 0). Otherwise (the tool refused, failed or is missing) warns and returns 1, and the caller writes the file
+# in bash: the tool only ever replaces a file by renaming a complete copy over it, so a refused or failed write left the
+# file as it was, and writing it again in bash is always safe.
+_state_tool_wrote() {
+    local write="$1" status
+    shift
+    "${ORCHESTRATOR_CMD}" state "${write}" "$@"
+    status=$?
+    [ "${status}" = 0 ] && return 0
+    warn "${ORCHESTRATOR_CMD} state ${write} failed (exit ${status}); writing it in bash instead"
+    return 1
+}
+
 # Shared invocation-guard file path for the runaway backstop, keyed by item type + id. The PR
 # and Issue guards below store different shapes (PRs also track an idle counter — see
 # load/save_pr_invocation_counts vs. the Issue-only total) so their load/save logic stays
@@ -68,9 +83,14 @@ load_infra_failure_count() {
     return 0
 }
 
-# Persists the consecutive-infra-failure count for an item.
+# Persists the consecutive-infra-failure count for an item. With ORCHESTRATOR_DOTNET_STATE=1 the tool writes it
+# (_state_tool_wrote).
 save_infra_failure_count() {
     local item_type="$1" item_id="$2" count="$3" guard_file
+    if [ "${ORCHESTRATOR_DOTNET_STATE}" = 1 ] && _state_tool_wrote save-infra-failures \
+        --session-dir "${SESSION_BASE_DIR}" --type "${item_type}" --id "${item_id}" --count "${count}" < /dev/null; then
+        return 0
+    fi
     guard_file=$(infra_failure_guard_file_path "${item_type}" "${item_id}")
     mkdir -p "${SESSION_BASE_DIR}" || die "Failed to create session directory: ${SESSION_BASE_DIR}"
     printf '%s\n' "${count}" > "${guard_file}" \
@@ -212,9 +232,15 @@ load_pr_invocation_counts() {
     return 0
 }
 
-# Persists the "<total> <idle>" counters for a PR.
+# Persists the "<total> <idle>" counters for a PR. With ORCHESTRATOR_DOTNET_STATE=1 the tool writes them
+# (_state_tool_wrote).
 save_pr_invocation_counts() {
     local item_id="$1" total="$2" idle="$3" guard_file
+    if [ "${ORCHESTRATOR_DOTNET_STATE}" = 1 ] && _state_tool_wrote save-invocations \
+        --session-dir "${SESSION_BASE_DIR}" --type PullRequest --id "${item_id}" --total "${total}" --idle "${idle}" \
+        < /dev/null; then
+        return 0
+    fi
     guard_file=$(pr_invocation_guard_file_path "${item_id}")
     mkdir -p "${SESSION_BASE_DIR}" || die "Failed to create session directory: ${SESSION_BASE_DIR}"
     printf '%s %s\n' "${total}" "${idle}" > "${guard_file}" \
@@ -354,8 +380,14 @@ load_env_unblock_attempts() {
     return 0
 }
 
+# Persists how many times Blocked was auto-cleared on this PR. With ORCHESTRATOR_DOTNET_STATE=1 the tool writes it
+# (_state_tool_wrote).
 save_env_unblock_attempts() {
     local item_id="$1" total="$2" guard_file
+    if [ "${ORCHESTRATOR_DOTNET_STATE}" = 1 ] && _state_tool_wrote save-env-unblock-attempts \
+        --session-dir "${SESSION_BASE_DIR}" --id "${item_id}" --total "${total}" < /dev/null; then
+        return 0
+    fi
     guard_file=$(env_unblock_attempts_file_path "${item_id}")
     mkdir -p "${SESSION_BASE_DIR}" || die "Failed to create session directory: ${SESSION_BASE_DIR}"
     printf '%s\n' "${total}" > "${guard_file}" \
@@ -468,9 +500,15 @@ load_issue_invocation_counts() {
     return 0
 }
 
-# Persists the "<total> <idle>" counters for an Issue.
+# Persists the "<total> <idle>" counters for an Issue. With ORCHESTRATOR_DOTNET_STATE=1 the tool writes them
+# (_state_tool_wrote).
 save_issue_invocation_counts() {
     local item_id="$1" total="$2" idle="$3" guard_file
+    if [ "${ORCHESTRATOR_DOTNET_STATE}" = 1 ] && _state_tool_wrote save-invocations \
+        --session-dir "${SESSION_BASE_DIR}" --type Issue --id "${item_id}" --total "${total}" --idle "${idle}" \
+        < /dev/null; then
+        return 0
+    fi
     guard_file=$(issue_invocation_guard_file_path "${item_id}")
     mkdir -p "${SESSION_BASE_DIR}" || die "Failed to create session directory: ${SESSION_BASE_DIR}"
     printf '%s %s\n' "${total}" "${idle}" > "${guard_file}" \
@@ -564,10 +602,15 @@ pull_duration_exceeds_baseline() {
     printf '%s\n' "${baseline_secs}"
 }
 
-# Saves a rate-limit reset unix timestamp for the current owner.
+# Saves a rate-limit reset unix timestamp for the current owner. With ORCHESTRATOR_DOTNET_STATE=1 the tool writes it
+# (_state_tool_wrote).
 save_rate_limit() {
     local reset_unix="$1"
     local rate_limit_file
+    if [ "${ORCHESTRATOR_DOTNET_STATE}" = 1 ] && _state_tool_wrote save-rate-limit \
+        --state-dir "${ORCHESTRATOR_STATE_DIR}" --owner "${OWNER}" --reset "${reset_unix}" < /dev/null; then
+        return 0
+    fi
     rate_limit_file=$(owner_rate_limit_file)
     mkdir -p "$(dirname "${rate_limit_file}")" \
         || die "Failed to create rate-limit directory for owner ${OWNER}"
@@ -837,9 +880,15 @@ last_diagnostic_marker_file_path() {
 }
 
 # Persists this session's diagnostic text for this item. Best-effort: a failure to write only
-# means a later Blocked comment misses the extra diagnostic detail, not that anything else breaks.
+# means a later Blocked comment misses the extra diagnostic detail, not that anything else breaks. With
+# ORCHESTRATOR_DOTNET_STATE=1 the tool writes it (_state_tool_wrote), given the text on stdin as a here-string, which
+# adds the one newline the tool drops (a pipe could break on a tool that is missing or refuses before reading it).
 save_last_diagnostic() {
     local item_type="$1" item_id="$2" diagnostic_text="$3"
+    if [ "${ORCHESTRATOR_DOTNET_STATE}" = 1 ] && _state_tool_wrote save-last-diagnostic \
+        --session-dir "${SESSION_BASE_DIR}" --type "${item_type}" --id "${item_id}" <<< "${diagnostic_text}"; then
+        return 0
+    fi
     mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null
     printf '%s' "${diagnostic_text}" > "$(last_diagnostic_marker_file_path "${item_type}" "${item_id}")" 2>/dev/null \
         || warn "Failed to write last-diagnostic marker for ${item_type} #${item_id} — a later Blocked comment will not include it"
@@ -898,9 +947,13 @@ load_precheck_result() {
 
 # Records sha's status for key. Written to a temporary file and renamed, so a reader never sees
 # half a record. Best-effort: a failed write only means the next session on this SHA runs the
-# check again.
+# check again. With ORCHESTRATOR_DOTNET_STATE=1 the tool writes it (_state_tool_wrote).
 save_precheck_result() {
     local key="$1" sha="$2" status="$3" file
+    if [ "${ORCHESTRATOR_DOTNET_STATE}" = 1 ] && _state_tool_wrote save-precheck-result \
+        --session-dir "${SESSION_BASE_DIR}" --key "${key}" --sha "${sha}" --status "${status}" < /dev/null; then
+        return 0
+    fi
     file=$(precheck_cache_file_path "${key}")
     mkdir -p "${SESSION_BASE_DIR}" 2> /dev/null
     if ! { printf '%s\n%s\n' "${sha}" "${status}" > "${file}.tmp" && mv -f "${file}.tmp" "${file}"; } 2> /dev/null; then
