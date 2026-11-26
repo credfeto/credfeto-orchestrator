@@ -661,6 +661,45 @@ stop_ssh_agent() {
     pkill -u "$(id -un)" -f "ssh-agent -a ${SSH_AUTH_SOCK}" 2>/dev/null || true
 }
 
+# Asks Credfeto.Orchestrator.Cmd one read-only ssh-agent question (ORCHESTRATOR_DOTNET_AGENTS=1, #252) and returns 0
+# when the tool answered, leaving the status the shell function returns in agents_tool_status (the caller declares it
+# local). The tool prints nothing, and its stderr goes to /dev/null, as ssh-add's does in the bash version. It exits
+# with ssh-add -l's own status, 0 or 1, or 4 where ssh-add exits 2 (nothing answers at the socket), since its 2 is a
+# usage error. Any other status (2 a usage error, 3 an agent reply it cannot judge exactly as ssh-add would, 126 or
+# 127 the tool is missing, 130 and above a signal) is no answer: this warns and returns 1, and the caller runs
+# ssh-add. Listing the agent's keys changes nothing, so asking again with ssh-add is safe.
+_agents_tool_answers() {
+    local query="$1" status=0
+    shift
+    "${ORCHESTRATOR_CMD}" agent "${query}" "$@" < /dev/null > /dev/null 2>&1 || status=$?
+    case "${status}" in
+        0 | 1)
+            agents_tool_status=${status}
+            return 0
+            ;;
+        4)
+            agents_tool_status=2
+            return 0
+            ;;
+    esac
+    warn "${ORCHESTRATOR_CMD} agent ${query} failed (exit ${status}); asking ssh-add in bash instead"
+    return 1
+}
+
+# Returns ssh-add -l's status for the agent at SSH_AUTH_SOCK and prints nothing: 0 when it holds a key ssh-add can
+# read, 1 when it holds none or its reply is an error or one ssh-add rejects, 2 when there is nothing to connect to
+# (SSH_AUTH_SOCK unset or empty, no such socket, nobody listening), or whatever else ssh-add exits with (127 when it
+# is missing). preload_ssh_keys asks it. With ORCHESTRATOR_DOTNET_AGENTS=1 and SSH_AUTH_SOCK set, the tool asks the
+# agent for its keys itself, over the ssh-agent protocol (_agents_tool_answers).
+ssh_agent_key_state() {
+    local agents_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_AGENTS}" = 1 ] && [ -n "${SSH_AUTH_SOCK:-}" ] \
+        && _agents_tool_answers ssh-key-state --socket "${SSH_AUTH_SOCK}"; then
+        return "${agents_tool_status}"
+    fi
+    ssh-add -l > /dev/null 2>&1
+}
+
 # Loads default SSH keys into the agent if SSH_AUTH_SOCK is set and the agent
 # currently holds no keys.  Silent when keys are already loaded (avoids
 # redundant re-adds across timer firings) or when SSH_AUTH_SOCK is entirely
@@ -671,7 +710,7 @@ stop_ssh_agent() {
 preload_ssh_keys() {
     [ -S "${SSH_AUTH_SOCK:-}" ] || return 0
     local ssh_keys_status=0
-    ssh-add -l >/dev/null 2>&1 || ssh_keys_status=$?
+    ssh_agent_key_state || ssh_keys_status=$?
     case "${ssh_keys_status}" in
         0) return 0 ;;  # already loaded
         1) ;;           # agent reachable but empty — fall through to load keys
