@@ -5,7 +5,8 @@
 
 # ORCHESTRATOR_DOTNET_AGENTS (#252): off by default; when on, ssh_agent_key_state asks ORCHESTRATOR_CMD agent
 # ssh-key-state, takes its answer when it gives one (exit 0, 1, or 4 for ssh-add's 2) and runs ssh-add, with a
-# warning, when it does not. test/oneshot-agents-parity.bats checks what both sides return.
+# warning, when it does not; stop_ssh_agent asks ORCHESTRATOR_CMD agent stop-ssh-agent and runs pkill, with a warning,
+# unless it exits 0. test/oneshot-agents-parity.bats and test/oneshot-agents-stop-parity.bats check what both sides do.
 
 bats_require_minimum_version 1.5.0
 
@@ -170,4 +171,92 @@ ${TEST_TMP}/a dir/--socket
     [[ "${output}" == *"cannot connect to the agent"* ]]
     grep -q "ssh_agent_down" "${discord_log}"
     [ "$(cat "${TEST_TMP}/ssh_add_args")" = "-q" ]
+}
+
+# A pkill that logs its arguments to ${TEST_TMP}/pkill_args, writes to both streams, and exits 1 (nothing matched)
+make_pkill_stub() {
+    make_stub pkill 'printf "%s\n" "$*" >> "${TEST_TMP}/pkill_args"
+        printf "pkill output\n"
+        printf "pkill stderr\n" >&2
+        exit 1'
+}
+
+# Runs stop_ssh_agent and prints what it wrote to stdout, then its status after a dot
+_stop_agent() {
+    stop_ssh_agent
+    printf '.%s' "$?"
+}
+
+@test "stop_ssh_agent never runs ORCHESTRATOR_CMD while ORCHESTRATOR_DOTNET_AGENTS is off (#252)" {
+    make_agents_cmd_stub
+    make_pkill_stub
+    ORCHESTRATOR_DOTNET_AGENTS=0
+    export SSH_AUTH_SOCK="${TEST_TMP}/agent.sock"
+    run --separate-stderr _stop_agent
+    [ "${output}" = "pkill output
+.0" ]
+    [ -z "${stderr}" ]
+    [ ! -f "${TEST_TMP}/cmd_args" ]
+    [ "$(cat "${TEST_TMP}/pkill_args")" = "-u $(id -un) -f ssh-agent -a ${TEST_TMP}/agent.sock" ]
+}
+
+@test "stop_ssh_agent hands the socket and user to ORCHESTRATOR_CMD agent stop-ssh-agent when switched on (#252)" {
+    make_agents_cmd_stub
+    make_pkill_stub
+    ORCHESTRATOR_DOTNET_AGENTS=1
+    export SSH_AUTH_SOCK="${TEST_TMP}/a dir/--user"
+    run --separate-stderr _stop_agent
+    [ "${output}" = ".0" ]
+    [ -z "${stderr}" ]
+    [ "$(cat "${TEST_TMP}/cmd_args")" = "agent
+stop-ssh-agent
+--socket
+${TEST_TMP}/a dir/--user
+--user
+$(id -un)
+---" ]
+    [ ! -f "${TEST_TMP}/pkill_args" ]
+}
+
+@test "stop_ssh_agent warns and runs pkill when the tool does not stop the agent (#252)" {
+    make_agents_cmd_stub
+    make_pkill_stub
+    ORCHESTRATOR_DOTNET_AGENTS=1
+    export SSH_AUTH_SOCK="${TEST_TMP}/agent.sock"
+    local tool_status
+    for tool_status in 1 2 3 4 125 126 130; do
+        _tool_exits "${tool_status}"
+        run --separate-stderr _stop_agent
+        [ "${output}" = "pkill output
+.0" ]
+        [ "${stderr}" = "! fake-orchestrator agent stop-ssh-agent failed (exit ${tool_status}); running pkill in bash instead" ]
+    done
+    [ "$(grep -c -x -e "-u $(id -un) -f ssh-agent -a ${TEST_TMP}/agent.sock" "${TEST_TMP}/pkill_args")" -eq 7 ]
+}
+
+@test "stop_ssh_agent runs pkill when ORCHESTRATOR_CMD is missing (#252)" {
+    make_pkill_stub
+    ORCHESTRATOR_DOTNET_AGENTS=1
+    ORCHESTRATOR_CMD="${TEST_TMP}/no-such-tool"
+    export SSH_AUTH_SOCK="${TEST_TMP}/agent.sock"
+    run --separate-stderr _stop_agent
+    [ "${output}" = "pkill output
+.0" ]
+    [[ "${stderr}" == *"no-such-tool agent stop-ssh-agent failed (exit 127); running pkill in bash instead" ]]
+    [ "$(cat "${TEST_TMP}/pkill_args")" = "-u $(id -un) -f ssh-agent -a ${TEST_TMP}/agent.sock" ]
+}
+
+@test "stop_ssh_agent does nothing for an unset or empty SSH_AUTH_SOCK when switched on (#252)" {
+    make_agents_cmd_stub
+    make_pkill_stub
+    ORCHESTRATOR_DOTNET_AGENTS=1
+    unset SSH_AUTH_SOCK
+    run --separate-stderr _stop_agent
+    [ "${output}" = ".0" ]
+    export SSH_AUTH_SOCK=""
+    run --separate-stderr _stop_agent
+    [ "${output}" = ".0" ]
+    [ -z "${stderr}" ]
+    [ ! -f "${TEST_TMP}/cmd_args" ]
+    [ ! -f "${TEST_TMP}/pkill_args" ]
 }
