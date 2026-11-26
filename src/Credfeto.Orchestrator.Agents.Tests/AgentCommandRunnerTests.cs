@@ -69,11 +69,10 @@ public sealed class AgentCommandRunnerTests : TestBase
         await cancelled.CancelAsync();
         await using StringWriter error = new();
 
-        int status = await new AgentCommandRunner(new FakeSshAgentKeyState()).RunAsync(
-            args: ["agent", "ssh-key-state", "--socket", "s"],
-            error: error,
-            cancellationToken: cancelled.Token
-        );
+        int status = await new AgentCommandRunner(
+            keys: new FakeSshAgentKeyState(),
+            stopper: new FakeSshAgentStopper()
+        ).RunAsync(args: ["agent", "ssh-key-state", "--socket", "s"], error: error, cancellationToken: cancelled.Token);
 
         Assert.Equal(expected: AgentCommandRunner.Cancelled, actual: status);
     }
@@ -95,11 +94,74 @@ public sealed class AgentCommandRunnerTests : TestBase
         Assert.Equal(expected: AgentCommandRunner.Unreachable, actual: status);
     }
 
-    private async Task<(int Status, string Error)> RunAsync(FakeSshAgentKeyState keys, string args)
+    [Fact]
+    public async Task StopAsksTheStopperAndExitsZeroAsync()
+    {
+        FakeSshAgentStopper stopper = new();
+        FakeSshAgentKeyState keys = new();
+
+        (int status, string error) = await this.RunAsync(
+            keys: keys,
+            args: "agent|stop-ssh-agent|--socket|/run/a.sock|--user|me",
+            stopper: stopper
+        );
+
+        Assert.Equal(expected: 0, actual: status);
+        Assert.Equal(expected: string.Empty, actual: error);
+        Assert.Equal(expected: ["/run/a.sock me"], actual: stopper.Asked);
+        Assert.Empty(keys.Asked);
+    }
+
+    [Fact]
+    public async Task ARefusedStopExitsThreeAsync()
+    {
+        FakeSshAgentStopper stopper = new()
+        {
+            Failure = new AgentRefusedException("the user name is not in the passwd file"),
+        };
+
+        (int status, string error) = await this.RunAsync(
+            keys: new FakeSshAgentKeyState(),
+            args: "agent|stop-ssh-agent|--socket|s|--user|u",
+            stopper: stopper
+        );
+
+        Assert.Equal(expected: AgentCommandRunner.Refused, actual: status);
+        Assert.Equal(
+            expected: "credfeto-orchestrator: agent: the user name is not in the passwd file\n",
+            actual: error
+        );
+    }
+
+    [Fact]
+    public async Task AStopWithoutItsUserIsAUsageErrorAsync()
+    {
+        FakeSshAgentStopper stopper = new();
+
+        (int status, string error) = await this.RunAsync(
+            keys: new FakeSshAgentKeyState(),
+            args: "agent|stop-ssh-agent|--socket|s",
+            stopper: stopper
+        );
+
+        Assert.Equal(expected: AgentCommandRunner.Usage, actual: status);
+        Assert.Contains(
+            expectedSubstring: "credfeto-orchestrator agent stop-ssh-agent --socket <path> --user <name>",
+            actualString: error,
+            comparisonType: StringComparison.Ordinal
+        );
+        Assert.Empty(stopper.Asked);
+    }
+
+    private async Task<(int Status, string Error)> RunAsync(
+        FakeSshAgentKeyState keys,
+        string args,
+        FakeSshAgentStopper? stopper = null
+    )
     {
         await using StringWriter error = new();
 
-        int status = await new AgentCommandRunner(keys).RunAsync(
+        int status = await new AgentCommandRunner(keys: keys, stopper: stopper ?? new FakeSshAgentStopper()).RunAsync(
             args: args.Split('|'),
             error: error,
             cancellationToken: this.CancellationToken()

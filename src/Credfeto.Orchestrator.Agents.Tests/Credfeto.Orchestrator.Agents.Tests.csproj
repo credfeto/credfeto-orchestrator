@@ -36,6 +36,8 @@
   <ItemGroup>
     <!-- The golden cases test/oneshot-agents-parity.bats checks the shell version against -->
     <EmbeddedResource Include="../../test/fixtures/agents-parity.json" LogicalName="agents-parity.json" />
+    <!-- The golden cases test/oneshot-agents-stop-parity.bats checks the shell version against -->
+    <EmbeddedResource Include="../../test/fixtures/agents-stop-parity.json" LogicalName="agents-stop-parity.json" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../Credfeto.Orchestrator.Agents/Credfeto.Orchestrator.Agents.csproj" />
