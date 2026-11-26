@@ -6,6 +6,7 @@ namespace Credfeto.Orchestrator.Podman;
 // podman image-sha|image-exists --image <image>
 // podman container-exists|container-running --name <name>
 // podman denials-summary|denied-command-names --result <file>
+// (the text queries, which take several options, are parsed by PodmanTextCommandParser)
 // The option is required and may be empty, as the lib/podman function's argument may be
 public static class PodmanCommandParser
 {
@@ -16,7 +17,8 @@ public static class PodmanCommandParser
     private const string RESULT = "--result";
 
     private const string QUERIES =
-        "image-sha, container-exists, container-running, image-exists, denials-summary or denied-command-names";
+        "image-sha, container-exists, container-running, image-exists, denials-summary, denied-command-names, "
+        + "background-stall, diagnostic-refusal, tool-denied-quit, review-result-marker or clean-review";
 
     public static bool IsVerb(IReadOnlyList<string> args)
     {
