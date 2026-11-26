@@ -11,6 +11,7 @@ using Credfeto.Orchestrator.Discord;
 using Credfeto.Orchestrator.Discovery;
 using Credfeto.Orchestrator.Fingerprints;
 using Credfeto.Orchestrator.GitHub;
+using Credfeto.Orchestrator.Install;
 using Credfeto.Orchestrator.Podman;
 using Credfeto.Orchestrator.State;
 
@@ -76,6 +77,15 @@ public static class Program
 
     private static Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
     {
+        // --version and --self-test answer from the tool itself: oneshot's self-install asks them before using a binary
+        if (SelfCommandParser.IsVerb(args))
+        {
+            return SelfCommandRunner
+                .CreateDefault(ToolVersion.Of(typeof(Program).Assembly))
+                .RunAsync(args: args, output: Console.Out, error: Console.Error, cancellationToken: cancellationToken)
+                .AsTask();
+        }
+
         // discord only prints the payload it builds from its arguments: it reads nothing else
         if (DiscordCommandParser.IsVerb(args))
         {

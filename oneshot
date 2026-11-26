@@ -72,6 +72,9 @@ source "${ONESHOT_DIR}/lib/discord" \
 # shellcheck source=lib/podman disable=SC1091
 source "${ONESHOT_DIR}/lib/podman" \
     || { printf 'oneshot: FATAL: failed to source %s/lib/podman\n' "${ONESHOT_DIR}" >&2; exit 1; }
+# shellcheck source=lib/self-install disable=SC1091
+source "${ONESHOT_DIR}/lib/self-install" \
+    || { printf 'oneshot: FATAL: failed to source %s/lib/self-install\n' "${ONESHOT_DIR}" >&2; exit 1; }
 
 # read_token_if_safe and load_token_for_owner are declared in lib/core.
 # host_to_container_path and set_repo_context are declared in lib/git.
@@ -239,6 +242,10 @@ main() {
         notify_discord_self_update_stale "${owner_filter}" "${head_sha}" "${behind_count}"
         exit 1
     fi
+
+    # The .NET tool's self-install (#252, lib/self-install; off unless ORCHESTRATOR_DOTNET_SELF_INSTALL=1), before
+    # anything runs ORCHESTRATOR_CMD. It never stops the tick: a failure warns and keeps the installed binary.
+    self_install_orchestrator_cmd
 
     validate_config "${owner_filter}"
     if [ -n "${GIT_SIGNING_KEY}" ]; then
