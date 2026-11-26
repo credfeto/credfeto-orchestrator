@@ -344,7 +344,9 @@ _assert_kept_with_warning() {
     _self_install_setup
     _install_good_first
     _feed_versions 1.0.0.1-main 1.0.0.2-main
-    _feed_package 1.0.0.2-main good "$(printf 'x%.0s' {1..86})=="
+    # A well-formed hash (64 zero bytes) that is not the package's: strict base64 decoders refuse non-zero
+    # padding bits, so the fake must be canonical base64
+    _feed_package 1.0.0.2-main good "$(printf 'A%.0s' {1..86})=="
     run --separate-stderr _install
     _assert_kept_with_warning "1.0.0.2-main does not match the SHA-512 the feed publishes"
     [ ! -e "${INSTALL_DIR}/1.0.0.2-main" ]
