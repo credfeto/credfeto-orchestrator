@@ -1101,6 +1101,45 @@ notify_discord_permission_denials() {
     _discord_send_and_record "${payload}" "${state_file}" "${now}" "${webhook_url}"
 }
 
+# Prints the session-stalled payload notify_discord_session_stalled posts, built from the values it hands to jq, in
+# this order: repository, item, url, count, commands, message (already redacted). The jq program masks tokens and
+# anything path-like in the message before cutting it. With ORCHESTRATOR_DOTNET_DISCORD=1 the tool builds it
+# (_discord_payload_from_tool).
+build_discord_session_stalled_payload() {
+    local repo="$1" item="$2" url="$3" count="$4" commands="$5" message="$6"
+    _discord_payload_from_tool session-stalled \
+        --repository "${repo}" \
+        --item "${item}" \
+        --url "${url}" \
+        --count "${count}" \
+        --commands "${commands}" \
+        --message "${message}" && return 0
+    jq --null-input \
+        --argjson color 15105570 \
+        --arg repo "${repo}" \
+        --arg item "${item}" \
+        --arg url "${url}" \
+        --arg count "${count}" \
+        --arg commands "${commands}" \
+        --arg message "${message}" \
+        '
+        # GitHub tokens and long hex runs first, then any whitespace-delimited run with a "/" in
+        # it (paths and URLs, and a base64 value that happens to hold one), then any other long
+        # token-like run; only then cut to 240 characters, so the cut can never leave an unmasked
+        # fragment of a value behind.
+        def masked:
+            gsub("(gh[pousr]_|github_pat_)[A-Za-z0-9_]+"; "[token]")
+            | gsub("[0-9a-fA-F]{32,}"; "[token]")
+            | gsub("[^\\s]*/[^\\s]*"; "[path]")
+            | gsub("[A-Za-z0-9+=_-]{40,}"; "[token]");
+        {embeds:[{title:("Session stalled: " + $repo)[0:240],url:$url,color:$color,fields:[
+            {name:"Item",value:$item,inline:true},
+            {name:"Denials",value:$count,inline:true},
+            {name:"Denied commands",value:(if $commands == "" then "none" else ($commands | split(",") | join(", ") | .[0:1000]) end),inline:false},
+            {name:"Final message",value:(if $message == "" then "(empty)" else ($message | masked | .[0:240]) end),inline:false}
+        ]}]}'
+}
+
 # Sends a Discord embed notification for a session that stalled (see session_outcome_is_stalled
 # in lib/state): it quit believing a tool was denied, or hit denials and made no progress.
 # Arguments: item_type (Issue|PullRequest|empty), item_id (numeric|empty), denial_count,
@@ -1131,49 +1170,30 @@ notify_discord_session_stalled() {
     redacted_message=$(printf '%s' "${final_message}" | redact_secrets) \
         || { warn "Discord: failed to redact session-stalled message"; return 0; }
 
-    payload=$(jq --null-input \
-        --argjson color 15105570 \
-        --arg repo "${REPO_FULL}" \
-        --arg item "${item_type} #${item_id}" \
-        --arg url "${url}" \
-        --arg count "${denial_count}" \
-        --arg commands "${command_names}" \
-        --arg message "${redacted_message}" \
-        '
-        # GitHub tokens and long hex runs first, then any whitespace-delimited run with a "/" in
-        # it (paths and URLs, and a base64 value that happens to hold one), then any other long
-        # token-like run; only then cut to 240 characters, so the cut can never leave an unmasked
-        # fragment of a value behind.
-        def masked:
-            gsub("(gh[pousr]_|github_pat_)[A-Za-z0-9_]+"; "[token]")
-            | gsub("[0-9a-fA-F]{32,}"; "[token]")
-            | gsub("[^\\s]*/[^\\s]*"; "[path]")
-            | gsub("[A-Za-z0-9+=_-]{40,}"; "[token]");
-        {embeds:[{title:("Session stalled: " + $repo)[0:240],url:$url,color:$color,fields:[
-            {name:"Item",value:$item,inline:true},
-            {name:"Denials",value:$count,inline:true},
-            {name:"Denied commands",value:(if $commands == "" then "none" else ($commands | split(",") | join(", ") | .[0:1000]) end),inline:false},
-            {name:"Final message",value:(if $message == "" then "(empty)" else ($message | masked | .[0:240]) end),inline:false}
-        ]}]}') \
+    payload=$(build_discord_session_stalled_payload \
+        "${REPO_FULL}" \
+        "${item_type} #${item_id}" \
+        "${url}" \
+        "${denial_count}" \
+        "${command_names}" \
+        "${redacted_message}") \
         || { warn "Discord: failed to build session-stalled payload"; return 0; }
 
     _discord_send_and_record "${payload}" "${state_file}" "${now}" "${webhook_url}"
 }
 
-# Sends the daily session digest for one owner (send_daily_digest_if_due in lib/state).
-# Arguments: owner, day (the YYYY-MM-DD the digest covers), summary and previous (JSON from
-# summarise_session_denials_day for that day and the day before; either may be null when no file
-# was recorded). Routed like the permission-denials alert. Returns 0 when there is nothing to do
-# (no webhook) or the post succeeded, and 1 when building or posting failed, so the caller only
-# advances its once-a-day marker once the digest has really gone.
-notify_discord_daily_digest() {
-    local webhook_url
-    _discord_webhook_for permissions
-    webhook_url="${DISCORD_RESOLVED_WEBHOOK_URL}"
-    [ -n "${webhook_url}" ] || return 0
-    local owner="$1" day="$2" summary="${3:-null}" previous="${4:-null}" payload
-
-    payload=$(jq --null-input \
+# Prints the daily digest payload notify_discord_daily_digest posts, built from the values it hands to jq, in this
+# order: owner, day, summary and previous (the --argjson JSON: summarise_session_denials_day's summary of the day and
+# of the day before, or null). Fails, as jq does, on JSON it cannot read or summaries it cannot add up. With
+# ORCHESTRATOR_DOTNET_DISCORD=1 the tool builds it (_discord_payload_from_tool).
+build_discord_daily_digest_payload() {
+    local owner="$1" day="$2" summary="$3" previous="$4"
+    _discord_payload_from_tool daily-digest \
+        --owner "${owner}" \
+        --day "${day}" \
+        --summary "${summary}" \
+        --previous "${previous}" && return 0
+    jq --null-input \
         --arg owner "${owner}" \
         --arg day "${day}" \
         --argjson s "${summary}" \
@@ -1199,7 +1219,23 @@ notify_discord_daily_digest() {
                 {name: "Top denied commands", value: ([$c.top_commands[] | "\(.name) (\(.count))"]
                     | if length == 0 then "none" else (join(", ") | .[0:1000]) end), inline: false}
             ]}]}
-        ') \
+        '
+}
+
+# Sends the daily session digest for one owner (send_daily_digest_if_due in lib/state).
+# Arguments: owner, day (the YYYY-MM-DD the digest covers), summary and previous (JSON from
+# summarise_session_denials_day for that day and the day before; either may be null when no file
+# was recorded). Routed like the permission-denials alert. Returns 0 when there is nothing to do
+# (no webhook) or the post succeeded, and 1 when building or posting failed, so the caller only
+# advances its once-a-day marker once the digest has really gone.
+notify_discord_daily_digest() {
+    local webhook_url
+    _discord_webhook_for permissions
+    webhook_url="${DISCORD_RESOLVED_WEBHOOK_URL}"
+    [ -n "${webhook_url}" ] || return 0
+    local owner="$1" day="$2" summary="${3:-null}" previous="${4:-null}" payload
+
+    payload=$(build_discord_daily_digest_payload "${owner}" "${day}" "${summary}" "${previous}") \
         || { warn "Discord: failed to build daily digest payload"; return 1; }
 
     if ! curl --silent --fail --max-time 5 \
