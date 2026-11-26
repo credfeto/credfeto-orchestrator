@@ -36,6 +36,12 @@ public static class DiscordCommandParser
     public const string Reason = "reason";
     public const string Summary = "summary";
     public const string Reset = "reset";
+    public const string Item = "item";
+    public const string Count = "count";
+    public const string Commands = "commands";
+    public const string Owner = "owner";
+    public const string Day = "day";
+    public const string Previous = "previous";
 
     private const string OPTION_PREFIX = "--";
 
@@ -63,6 +69,11 @@ public static class DiscordCommandParser
         ["pr-needs-approval"] = new(DiscordPayloadKind.PR_NEEDS_APPROVAL, [Title, Link, Repository]),
         ["permission-denials"] = new(DiscordPayloadKind.PERMISSION_DENIALS, [Title, Link, Summary]),
         ["rate-limited"] = new(DiscordPayloadKind.RATE_LIMITED, [Title, Link, Error, Reset]),
+        ["session-stalled"] = new(
+            DiscordPayloadKind.SESSION_STALLED,
+            [Repository, Item, Link, Count, Commands, Message]
+        ),
+        ["daily-digest"] = new(DiscordPayloadKind.DAILY_DIGEST, [Owner, Day, Summary, Previous]),
     };
 
     public static string KindNames => string.Join(separator: ", ", values: Kinds.Keys);

@@ -8,30 +8,41 @@ using Xunit;
 
 namespace Credfeto.Orchestrator.Discord.Tests;
 
-// test/fixtures/discord-parity.json, embedded: the golden cases test/oneshot-discord-parity.bats checks the shell
-// version against
+// test/fixtures/discord-parity.json and discord-stalled-digest-parity.json, embedded: the golden cases
+// test/oneshot-discord-parity.bats checks the shell version against
 internal static class DiscordParityFixture
 {
-    private const string RESOURCE_NAME = "discord-parity.json";
+    private static readonly string[] ResourceNames = ["discord-parity.json", "discord-stalled-digest-parity.json"];
 
-    public static async Task<TheoryData<int, string>> CaseNamesAsync()
+    public static async Task<TheoryData<string, int, string>> CaseNamesAsync()
     {
-        using JsonDocument document = await LoadAsync(CancellationToken.None);
-        TheoryData<int, string> cases = [];
-        int index = 0;
+        TheoryData<string, int, string> cases = [];
 
-        foreach (JsonElement item in document.RootElement.GetProperty("cases").EnumerateArray())
+        foreach (string resourceName in ResourceNames)
         {
-            cases.Add(p1: index, p2: Text(item: item, name: "name"));
-            index++;
+            using JsonDocument document = await LoadAsync(
+                resourceName: resourceName,
+                cancellationToken: CancellationToken.None
+            );
+            int index = 0;
+
+            foreach (JsonElement item in document.RootElement.GetProperty("cases").EnumerateArray())
+            {
+                cases.Add(p1: resourceName, p2: index, p3: Text(item: item, name: "name"));
+                index++;
+            }
         }
 
         return cases;
     }
 
-    public static async Task<DiscordParityCase> CaseAsync(int index, CancellationToken cancellationToken)
+    public static async Task<DiscordParityCase> CaseAsync(
+        string resourceName,
+        int index,
+        CancellationToken cancellationToken
+    )
     {
-        using JsonDocument document = await LoadAsync(cancellationToken);
+        using JsonDocument document = await LoadAsync(resourceName: resourceName, cancellationToken: cancellationToken);
         JsonElement item = document.RootElement.GetProperty("cases")[index];
         JsonElement function = document
             .RootElement.GetProperty("functions")
@@ -57,10 +68,10 @@ internal static class DiscordParityFixture
         return value.GetString() ?? string.Empty;
     }
 
-    private static async Task<JsonDocument> LoadAsync(CancellationToken cancellationToken)
+    private static async Task<JsonDocument> LoadAsync(string resourceName, CancellationToken cancellationToken)
     {
-        await using Stream stream = typeof(DiscordParityFixture).Assembly.GetManifestResourceStream(RESOURCE_NAME)
-            ?? throw new InvalidOperationException("Missing embedded resource " + RESOURCE_NAME);
+        await using Stream stream = typeof(DiscordParityFixture).Assembly.GetManifestResourceStream(resourceName)
+            ?? throw new InvalidOperationException("Missing embedded resource " + resourceName);
 
         return await JsonDocument.ParseAsync(utf8Json: stream, cancellationToken: cancellationToken);
     }

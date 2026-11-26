@@ -27,6 +27,18 @@ public sealed class DiscordCommandParserTests : TestBase
         "reset",
         "r"
     )]
+    [InlineData(
+        "discord|payload|session-stalled|--repository|o/r|--item|i|--url|u|--count|1|--commands|c|--message|m",
+        DiscordPayloadKind.SESSION_STALLED,
+        "message",
+        "m"
+    )]
+    [InlineData(
+        "discord|payload|daily-digest|--owner|o|--day|d|--summary|null|--previous|{}",
+        DiscordPayloadKind.DAILY_DIGEST,
+        "previous",
+        "{}"
+    )]
     public static void EachKindTakesItsOptions(string args, DiscordPayloadKind kind, string option, string value)
     {
         DiscordCommand? command = DiscordCommandParser.Parse(args: args.Split('|'), error: out string error);
@@ -42,7 +54,7 @@ public sealed class DiscordCommandParserTests : TestBase
     [InlineData("discord|payload", "expected: discord payload <kind> --<option> <value> ...")]
     [InlineData("discord|send|host-health", "expected: discord payload <kind> --<option> <value> ...")]
     [InlineData("state|payload|host-health", "expected: discord payload <kind> --<option> <value> ...")]
-    [InlineData("discord|payload|session-stalled", "unknown discord payload 'session-stalled'")]
+    [InlineData("discord|payload|session-ended", "unknown discord payload 'session-ended'")]
     [InlineData("discord|payload|host-health", "discord payload host-health needs --title <value> --message <value>")]
     [InlineData("discord|payload|host-health|--title|t", "discord payload host-health needs --title <value>")]
     [InlineData("discord|payload|host-health|--title|t|--message", "discord payload host-health needs --title")]

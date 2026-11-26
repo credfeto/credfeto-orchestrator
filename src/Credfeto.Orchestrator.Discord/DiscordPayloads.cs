@@ -58,6 +58,8 @@ public static class DiscordPayloads
             DiscordPayloadKind.PR_NEEDS_APPROVAL => PrNeedsApproval(options),
             DiscordPayloadKind.PERMISSION_DENIALS => PermissionDenials(options),
             DiscordPayloadKind.RATE_LIMITED => RateLimited(options),
+            DiscordPayloadKind.SESSION_STALLED => SessionStalledPayload.Build(options),
+            DiscordPayloadKind.DAILY_DIGEST => DailyDigestPayload.Build(options),
             _ => throw new ArgumentOutOfRangeException(nameof(command), command.Kind, "Unknown Discord payload"),
         };
     }
@@ -325,7 +327,7 @@ public static class DiscordPayloads
     }
 
     // The one embed of the payload
-    private static JqValue Embed(params JqProperty[] properties)
+    internal static JqValue Embed(params JqProperty[] properties)
     {
         return JqValue.FromObject([
             Property(name: "embeds", value: JqValue.FromArray([JqValue.FromObject(properties)])),
@@ -333,7 +335,7 @@ public static class DiscordPayloads
     }
 
     // One embed field: name, value and whether it is inline
-    private static JqValue Field(string name, JqValue value, bool inline)
+    internal static JqValue Field(string name, JqValue value, bool inline)
     {
         return JqValue.FromObject([
             Property(name: "name", value: JqValue.FromString(name)),
@@ -342,12 +344,12 @@ public static class DiscordPayloads
         ]);
     }
 
-    private static JqProperty Property(string name, JqValue value)
+    internal static JqProperty Property(string name, JqValue value)
     {
         return new(Name: name, Value: value);
     }
 
-    private static JqValue Text(IReadOnlyDictionary<string, string> options, string name)
+    internal static JqValue Text(IReadOnlyDictionary<string, string> options, string name)
     {
         return JqValue.FromString(options[name]);
     }
@@ -378,7 +380,7 @@ public static class DiscordPayloads
     }
 
     // Digits with no leading zero, and no minus before a lone zero, which jq prints as written
-    private static bool IsPlainInteger(ReadOnlySpan<char> digits, bool negative)
+    internal static bool IsPlainInteger(ReadOnlySpan<char> digits, bool negative)
     {
         if (digits.Length == 0 || digits.Length > MAX_DIGITS || !IsAsciiDigits(digits))
         {

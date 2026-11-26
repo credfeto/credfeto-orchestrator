@@ -20,17 +20,18 @@ public sealed class DiscordParityTests : TestBase
         throwOnInvalidBytes: false
     );
 
-    public static Task<TheoryData<int, string>> CasesAsync()
+    public static Task<TheoryData<string, int, string>> CasesAsync()
     {
         return DiscordParityFixture.CaseNamesAsync();
     }
 
     [Theory]
     [MemberData(nameof(CasesAsync))]
-    public async Task ThePayloadMatchesTheShellFunctionAsync(int index, string name)
+    public async Task ThePayloadMatchesTheShellFunctionAsync(string fixture, int index, string name)
     {
         CancellationToken cancellationToken = this.CancellationToken();
         DiscordParityCase parity = await DiscordParityFixture.CaseAsync(
+            resourceName: fixture,
             index: index,
             cancellationToken: cancellationToken
         );

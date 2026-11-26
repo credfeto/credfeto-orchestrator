@@ -17,4 +17,6 @@ public enum DiscordPayloadKind
     PR_NEEDS_APPROVAL,
     PERMISSION_DENIALS,
     RATE_LIMITED,
+    SESSION_STALLED,
+    DAILY_DIGEST,
 }
