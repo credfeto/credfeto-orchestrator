@@ -656,9 +656,29 @@ prune_codegraph_indexes() {
 # Scoped to the agent bound to SSH_AUTH_SOCK's own socket (mirroring the service unit's
 # ExecStartPre pkill in lib/systemd-units) — an unscoped 'pkill ssh-agent' matches any process with that
 # name system-wide, including an unrelated interactive login agent (#1122).
+# With ORCHESTRATOR_DOTNET_AGENTS=1 the tool finds and signals the same processes itself (_agents_tool_stopped).
 stop_ssh_agent() {
     [ -n "${SSH_AUTH_SOCK:-}" ] || return 0
+    if [ "${ORCHESTRATOR_DOTNET_AGENTS}" = 1 ] \
+        && _agents_tool_stopped --socket "${SSH_AUTH_SOCK}" --user "$(id -un)"; then
+        return 0
+    fi
     pkill -u "$(id -un)" -f "ssh-agent -a ${SSH_AUTH_SOCK}" 2>/dev/null || true
+}
+
+# Asks Credfeto.Orchestrator.Cmd to stop the run's ssh-agent (ORCHESTRATOR_DOTNET_AGENTS=1, #252) and returns 0 when it
+# did: it sends SIGTERM to every process stop_ssh_agent's pkill would signal, prints nothing, and exits 0 whether or
+# not there were any. Any other status (2 a usage error, 3 it cannot tell exactly which processes pkill would signal,
+# so it signalled none, 126 or 127 the tool is missing, 130 and above a signal) is no answer: this warns and returns
+# 1, and the caller runs pkill, which is safe since SIGTERM to an agent that has already gone does nothing.
+_agents_tool_stopped() {
+    local status=0
+    "${ORCHESTRATOR_CMD}" agent stop-ssh-agent "$@" < /dev/null > /dev/null 2>&1 || status=$?
+    if [ "${status}" -eq 0 ]; then
+        return 0
+    fi
+    warn "${ORCHESTRATOR_CMD} agent stop-ssh-agent failed (exit ${status}); running pkill in bash instead"
+    return 1
 }
 
 # Asks Credfeto.Orchestrator.Cmd one read-only ssh-agent question (ORCHESTRATOR_DOTNET_AGENTS=1, #252) and returns 0
