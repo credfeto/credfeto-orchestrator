@@ -1,5 +1,3 @@
-using System;
-using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
@@ -80,11 +78,8 @@ internal static class PodmanParityFixture
         return value.GetString() ?? string.Empty;
     }
 
-    private static async Task<JsonDocument> LoadAsync(CancellationToken cancellationToken)
+    private static Task<JsonDocument> LoadAsync(CancellationToken cancellationToken)
     {
-        await using Stream stream = typeof(PodmanParityFixture).Assembly.GetManifestResourceStream(RESOURCE_NAME)
-            ?? throw new InvalidOperationException("Missing embedded resource " + RESOURCE_NAME);
-
-        return await JsonDocument.ParseAsync(utf8Json: stream, cancellationToken: cancellationToken);
+        return EmbeddedFixture.LoadAsync(resourceName: RESOURCE_NAME, cancellationToken: cancellationToken);
     }
 }

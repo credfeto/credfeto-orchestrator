@@ -36,6 +36,8 @@
   <ItemGroup>
     <!-- The golden cases test/oneshot-podman-parity.bats checks the shell version against -->
     <EmbeddedResource Include="../../test/fixtures/podman-parity.json" LogicalName="podman-parity.json" />
+    <!-- The golden cases test/oneshot-podman-result-parity.bats checks the shell version against -->
+    <EmbeddedResource Include="../../test/fixtures/podman-result-parity.json" LogicalName="podman-result-parity.json" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../Credfeto.Orchestrator.Podman/Credfeto.Orchestrator.Podman.csproj" />

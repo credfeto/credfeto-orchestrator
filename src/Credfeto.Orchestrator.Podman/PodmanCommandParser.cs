@@ -5,6 +5,7 @@ namespace Credfeto.Orchestrator.Podman;
 
 // podman image-sha|image-exists --image <image>
 // podman container-exists|container-running --name <name>
+// podman denials-summary|denied-command-names --result <file>
 // The option is required and may be empty, as the lib/podman function's argument may be
 public static class PodmanCommandParser
 {
@@ -12,8 +13,10 @@ public static class PodmanCommandParser
 
     private const string IMAGE = "--image";
     private const string NAME = "--name";
+    private const string RESULT = "--result";
 
-    private const string QUERIES = "image-sha, container-exists, container-running or image-exists";
+    private const string QUERIES =
+        "image-sha, container-exists, container-running, image-exists, denials-summary or denied-command-names";
 
     public static bool IsVerb(IReadOnlyList<string> args)
     {
@@ -38,7 +41,7 @@ public static class PodmanCommandParser
             return null;
         }
 
-        string option = query is PodmanQuery.IMAGE_SHA or PodmanQuery.IMAGE_EXISTS ? IMAGE : NAME;
+        string option = OptionFor(query.Value);
 
         if (args.Count != 4 || !StringComparer.Ordinal.Equals(x: args[2], y: option))
         {
@@ -52,6 +55,16 @@ public static class PodmanCommandParser
         return new(Query: query.Value, Argument: args[3]);
     }
 
+    private static string OptionFor(PodmanQuery query)
+    {
+        return query switch
+        {
+            PodmanQuery.IMAGE_SHA or PodmanQuery.IMAGE_EXISTS => IMAGE,
+            PodmanQuery.DENIALS_SUMMARY or PodmanQuery.DENIED_COMMAND_NAMES => RESULT,
+            _ => NAME,
+        };
+    }
+
     private static PodmanQuery? ParseQuery(string query)
     {
         return query switch
@@ -60,6 +73,8 @@ public static class PodmanCommandParser
             "container-exists" => PodmanQuery.CONTAINER_EXISTS,
             "container-running" => PodmanQuery.CONTAINER_RUNNING,
             "image-exists" => PodmanQuery.IMAGE_EXISTS,
+            "denials-summary" => PodmanQuery.DENIALS_SUMMARY,
+            "denied-command-names" => PodmanQuery.DENIED_COMMAND_NAMES,
             _ => null,
         };
     }
