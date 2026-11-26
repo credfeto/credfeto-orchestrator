@@ -89,7 +89,7 @@ public static class Program
             return RunGitAsync(args: args, cancellationToken: cancellationToken);
         }
 
-        // agent only asks the ssh-agent at a socket for its keys: it prints nothing
+        // agent asks the ssh-agent at a socket for its keys, or stops the run's ssh-agent: it prints nothing
         if (AgentCommandParser.IsVerb(args))
         {
             return AgentCommandRunner
