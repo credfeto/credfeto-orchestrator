@@ -1194,7 +1194,7 @@ summarise_session_denials_day() {
     fi
     jq -R -s -c '
         [split("\n")[] | select(length > 0) | split("\t") | select(length >= 8)
-            | {repo: .[1], denials: ((.[4] | tonumber?) // 0), stalled: (.[5] == "1"), quit: (.[6] == "1"),
+            | {repo: .[1], denials: ((.[4] | sub("^ +"; "") | tonumber?) // 0), stalled: (.[5] == "1"), quit: (.[6] == "1"),
                commands: (if .[7] == "-" then [] else (.[7] | split(",")) end)}] as $s
         | {sessions: ($s | length),
            denials: ([$s[].denials] | add // 0),
