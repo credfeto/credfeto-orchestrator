@@ -39,6 +39,10 @@
     "webstorm": {
       "url": "http://127.0.0.1:64542/stream",
       "type": "http"
+    },
+    "datagrip": {
+      "url": "http://127.0.0.1:64402/stream",
+      "type": "http"
     }
   }
 }
