@@ -184,6 +184,98 @@ public sealed class PodmanCommandRunnerTests : TestBase
         );
     }
 
+    [Theory]
+    [InlineData("Bash is denied, so I cannot continue.\n", 0)]
+    [InlineData("Bash is denied, so I cannot continue. I pushed it.\n", 1)]
+    public async Task ATextQueryReadsTheMessageOnStdinAndExitsWithTheAnswerAsync(string message, int expected)
+    {
+        (int status, string output, string error) = await this.RunTextAsync(
+            input: message,
+            args: "podman|tool-denied-quit|--ctype|C.UTF-8|--collate|C.UTF-8|--mention|bash is denied"
+                + "|--give-up|cannot continue|--workaround|pushed|--negated|not pushed"
+        );
+
+        Assert.Equal(expected: (expected, "", ""), actual: (status, output, error));
+    }
+
+    [Fact]
+    public async Task TheMarkerQueryPrintsTheMarkerAsync()
+    {
+        (int status, string output, string error) = await this.RunTextAsync(
+            input: "done\n REVIEW RESULT: CLEAN\n",
+            args: "podman|review-result-marker|--ctype|C|--collate|C|--clean-marker|REVIEW RESULT: CLEAN"
+                + "|--findings-marker|REVIEW RESULT: FINDINGS"
+        );
+
+        Assert.Equal(expected: (0, "CLEAN", ""), actual: (status, output, error));
+    }
+
+    [Fact]
+    public async Task ARefusedTextQueryExitsThreeAsync()
+    {
+        (int status, string output, string error) = await this.RunTextAsync(
+            input: "x\n",
+            args: "podman|background-stall|--ctype|tr_TR.UTF-8|--collate|C|--pattern|x"
+        );
+
+        Assert.Equal(expected: PodmanCommandRunner.Refused, actual: status);
+        Assert.Equal(expected: string.Empty, actual: output);
+        Assert.Equal(
+            expected: "credfeto-orchestrator: podman: the locale is not one whose matching the tool knows\n",
+            actual: error
+        );
+    }
+
+    [Fact]
+    public async Task ATextQueryUsageErrorPrintsTheUsageAsync()
+    {
+        (int status, string _, string error) = await this.RunTextAsync(
+            input: "x\n",
+            args: "podman|background-stall|--pattern|x"
+        );
+
+        Assert.Equal(expected: PodmanCommandRunner.Usage, actual: status);
+        Assert.StartsWith(
+            expectedStartString: "credfeto-orchestrator: podman background-stall needs --ctype <value> --collate <value>",
+            actualString: error,
+            comparisonType: StringComparison.Ordinal
+        );
+    }
+
+    [Fact]
+    public async Task AStdinThatCannotBeReadExits125Async()
+    {
+        await using MemoryStream output = new();
+        await using StringWriter error = new();
+
+        int status = await new PodmanCommandRunner(
+            queries: new PodmanQueries(new FakePodmanRunner()),
+            results: new ClaudeResultQueries(),
+            input: () => new FailingInputStream()
+        ).RunAsync(
+            args: ["podman", "background-stall", "--ctype", "C", "--collate", "C", "--pattern", "x"],
+            output: output,
+            error: error,
+            cancellationToken: this.CancellationToken()
+        );
+
+        Assert.Equal(expected: PodmanCommandRunner.Failed, actual: status);
+    }
+
+    private async Task<(int Status, string Output, string Error)> RunTextAsync(string input, string args)
+    {
+        await using MemoryStream output = new();
+        await using StringWriter error = new();
+
+        int status = await new PodmanCommandRunner(
+            queries: new PodmanQueries(new FakePodmanRunner()),
+            results: new ClaudeResultQueries(),
+            input: () => new MemoryStream(Encoding.UTF8.GetBytes(input))
+        ).RunAsync(args: args.Split('|'), output: output, error: error, cancellationToken: this.CancellationToken());
+
+        return (status, Encoding.UTF8.GetString(output.ToArray()), error.ToString());
+    }
+
     private async Task<(int Status, string Output, string Error)> RunAsync(FakePodmanRunner podman, string args)
     {
         await using MemoryStream output = new();
