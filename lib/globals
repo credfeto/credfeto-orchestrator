@@ -132,7 +132,9 @@ ORCHESTRATOR_DOTNET_GIT="${ORCHESTRATOR_DOTNET_GIT:-0}"
 
 # ORCHESTRATOR_DOTNET_PODMAN: the read-only lib/podman queries (the agent image's IMAGE_SHA, whether the
 # agent container exists or runs, whether the image is cached), which the tool answers by running the
-# same podman commands (anything that starts, removes or pulls stays in bash).
+# same podman commands (anything that starts, removes or pulls stays in bash), and the two reads of the
+# permission denials in a Claude JSON result (the summary and the denied command names), which it
+# answers by running the same jq programs itself.
 # shellcheck disable=SC2034  # read by lib/podman after sourcing
 ORCHESTRATOR_DOTNET_PODMAN="${ORCHESTRATOR_DOTNET_PODMAN:-0}"
 

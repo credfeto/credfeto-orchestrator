@@ -212,3 +212,91 @@ image-exists
     [ "${status}" -ne 0 ]
     [[ "${stderr}" == *"no cached local image is available"* ]]
 }
+
+# A Claude JSON result with one Bash denial, which the bash jq summarises as "- Bash: git status" and names as "git"
+_write_denials_result() {
+    printf '%s' '{"result":"done","permission_denials":[{"tool_name":"Bash","tool_input":{"command":"git status"}}]}' \
+        > "${TEST_TMP}/result.json"
+}
+
+@test "the Claude result reads never run ORCHESTRATOR_CMD while ORCHESTRATOR_DOTNET_PODMAN is off (#252)" {
+    make_podman_cmd_stub
+    _write_denials_result
+    ORCHESTRATOR_DOTNET_PODMAN=0
+    [ "$(claude_result_permission_denials_summary "${TEST_TMP}/result.json")" = "- Bash: git status" ]
+    [ "$(claude_result_denied_command_names "${TEST_TMP}/result.json")" = git ]
+    [ ! -f "${TEST_TMP}/cmd_args" ]
+}
+
+@test "each Claude result read hands its query and the result file to ORCHESTRATOR_CMD podman when switched on (#252)" {
+    make_podman_cmd_stub
+    _write_denials_result
+    ORCHESTRATOR_DOTNET_PODMAN=1
+    _tool_answers "" 0
+    claude_result_permission_denials_summary "${TEST_TMP}/result.json" > /dev/null
+    claude_result_denied_command_names "a file" > /dev/null
+    [ "$(cat "${TEST_TMP}/cmd_args")" = "podman
+denials-summary
+--result
+${TEST_TMP}/result.json
+---
+podman
+denied-command-names
+--result
+a file
+---" ]
+}
+
+@test "a Claude result read prints the tool's answer byte for byte, trailing newlines kept, and hides its stderr (#252)" {
+    make_podman_cmd_stub
+    _write_denials_result
+    ORCHESTRATOR_DOTNET_PODMAN=1
+    local text
+    _tool_answers $'- Tool: answer\n\n' 0
+    text=$(
+        claude_result_permission_denials_summary "${TEST_TMP}/result.json"
+        printf '.%s' "$?"
+    )
+    [ "${text}" = $'- Tool: answer\n\n.0' ]
+    _tool_answers $'tool-name\n' 0
+    run --separate-stderr claude_result_denied_command_names "${TEST_TMP}/result.json"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = tool-name ]
+    [ "${stderr}" = "" ]
+}
+
+@test "a Claude result read runs its jq, with a warning, when ORCHESTRATOR_CMD refuses, fails or is missing (#252)" {
+    make_podman_cmd_stub
+    _write_denials_result
+    ORCHESTRATOR_DOTNET_PODMAN=1
+    local exit_code
+    for exit_code in 1 2 3 125 130 143; do
+        _tool_answers "wrong" "${exit_code}"
+        run --separate-stderr claude_result_permission_denials_summary "${TEST_TMP}/result.json"
+        [ "${status}" -eq 0 ]
+        [ "${output}" = "- Bash: git status" ]
+        [[ "${stderr}" == *"fake-orchestrator podman denials-summary failed (exit ${exit_code}); running jq in bash instead"* ]]
+        run --separate-stderr claude_result_denied_command_names "${TEST_TMP}/result.json"
+        [ "${status}" -eq 0 ]
+        [ "${output}" = git ]
+        [[ "${stderr}" == *"fake-orchestrator podman denied-command-names failed (exit ${exit_code}); running jq in bash instead"* ]]
+    done
+    ORCHESTRATOR_CMD="${TEST_TMP}/no-such-tool"
+    run --separate-stderr claude_result_denied_command_names "${TEST_TMP}/result.json"
+    [ "${output}" = git ]
+    [[ "${stderr}" == *"no-such-tool podman denied-command-names failed (exit 127); running jq in bash instead"* ]]
+}
+
+@test "handle_claude_permission_denials logs, counts and notifies the tool's summary when switched on (#252)" {
+    make_podman_cmd_stub
+    _write_denials_result
+    local notify_log="${TEST_TMP}/notify.log"
+    notify_discord_permission_denials() { printf '%s\n' "$*" >> "${notify_log}"; }
+    ORCHESTRATOR_DOTNET_PODMAN=1
+    _tool_answers $'- Tool: one\n- Tool: two\n' 0
+    run --separate-stderr handle_claude_permission_denials "${TEST_TMP}/result.json" Issue 42
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'- Tool: one\n- Tool: two' ]
+    [[ "${stderr}" == *"Claude reported 2 permission denial(s)"* ]]
+    [ "$(cat "${notify_log}")" = $'Issue 42 - Tool: one\n- Tool: two 2' ]
+}

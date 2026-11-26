@@ -1,0 +1,2004 @@
+{
+  "cases": [
+    {
+      "name": "permission_denials absent",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"is_error\":false,\"result\":\"done\"}",
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "permission_denials absent",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"is_error\":false,\"result\":\"done\"}",
+      "tool": "answers",
+      "stdout": "\\n",
+      "status": 0
+    },
+    {
+      "name": "permission_denials empty",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[]}",
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "permission_denials empty",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[]}",
+      "tool": "answers",
+      "stdout": "\\n",
+      "status": 0
+    },
+    {
+      "name": "permission_denials null",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"result\":\"x\",\"permission_denials\":null}",
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "permission_denials null",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"result\":\"x\",\"permission_denials\":null}",
+      "tool": "answers",
+      "stdout": "\\n",
+      "status": 0
+    },
+    {
+      "name": "permission_denials false",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"result\":\"x\",\"permission_denials\":false}",
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "permission_denials false",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"result\":\"x\",\"permission_denials\":false}",
+      "tool": "answers",
+      "stdout": "\\n",
+      "status": 0
+    },
+    {
+      "name": "permission_denials an object",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":{\"tool_name\":\"Bash\"}}",
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "permission_denials an object",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":{\"tool_name\":\"Bash\"}}",
+      "tool": "answers",
+      "stdout": "\\n",
+      "status": 0
+    },
+    {
+      "name": "permission_denials a string",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":\"Bash\"}",
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "permission_denials a string",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":\"Bash\"}",
+      "tool": "answers",
+      "stdout": "\\n",
+      "status": 0
+    },
+    {
+      "name": "permission_denials a number",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":3}",
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "permission_denials a number",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":3}",
+      "tool": "answers",
+      "stdout": "\\n",
+      "status": 0
+    },
+    {
+      "name": "top-level null",
+      "function": "claude_result_permission_denials_summary",
+      "result": "null",
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "top-level null",
+      "function": "claude_result_denied_command_names",
+      "result": "null",
+      "tool": "answers",
+      "stdout": "\\n",
+      "status": 0
+    },
+    {
+      "name": "top-level array",
+      "function": "claude_result_permission_denials_summary",
+      "result": "[{\"permission_denials\":[]}]",
+      "tool": "refuses",
+      "stdout": "",
+      "status": 5
+    },
+    {
+      "name": "top-level array",
+      "function": "claude_result_denied_command_names",
+      "result": "[{\"permission_denials\":[]}]",
+      "tool": "refuses",
+      "stdout": "",
+      "status": 5
+    },
+    {
+      "name": "top-level string",
+      "function": "claude_result_permission_denials_summary",
+      "result": "\"text\"",
+      "tool": "refuses",
+      "stdout": "",
+      "status": 5
+    },
+    {
+      "name": "top-level string",
+      "function": "claude_result_denied_command_names",
+      "result": "\"text\"",
+      "tool": "refuses",
+      "stdout": "",
+      "status": 5
+    },
+    {
+      "name": "top-level number",
+      "function": "claude_result_permission_denials_summary",
+      "result": "42",
+      "tool": "refuses",
+      "stdout": "",
+      "status": 5
+    },
+    {
+      "name": "top-level number",
+      "function": "claude_result_denied_command_names",
+      "result": "42",
+      "tool": "refuses",
+      "stdout": "",
+      "status": 5
+    },
+    {
+      "name": "top-level true",
+      "function": "claude_result_permission_denials_summary",
+      "result": "true",
+      "tool": "refuses",
+      "stdout": "",
+      "status": 5
+    },
+    {
+      "name": "top-level true",
+      "function": "claude_result_denied_command_names",
+      "result": "true",
+      "tool": "refuses",
+      "stdout": "",
+      "status": 5
+    },
+    {
+      "name": "top-level false",
+      "function": "claude_result_permission_denials_summary",
+      "result": "false",
+      "tool": "refuses",
+      "stdout": "",
+      "status": 5
+    },
+    {
+      "name": "top-level false",
+      "function": "claude_result_denied_command_names",
+      "result": "false",
+      "tool": "refuses",
+      "stdout": "",
+      "status": 5
+    },
+    {
+      "name": "empty file",
+      "function": "claude_result_permission_denials_summary",
+      "result": "",
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "empty file",
+      "function": "claude_result_denied_command_names",
+      "result": "",
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "whitespace only",
+      "function": "claude_result_permission_denials_summary",
+      "result": " \\n\\t\\r\\n",
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "whitespace only",
+      "function": "claude_result_denied_command_names",
+      "result": " \\n\\t\\r\\n",
+      "tool": "answers",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "two JSON texts",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git status\"}}]}\\n{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"gh pr view\"}}]}",
+      "tool": "refuses",
+      "stdout": "- Bash: git status\\n- Bash: gh pr view\\n",
+      "status": 0
+    },
+    {
+      "name": "two JSON texts",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git status\"}}]}\\n{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"gh pr view\"}}]}",
+      "tool": "refuses",
+      "stdout": "git\\ngh\\n",
+      "status": 0
+    },
+    {
+      "name": "trailing garbage",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git status\"}}]} x",
+      "tool": "refuses",
+      "stdout": "- Bash: git status\\n",
+      "status": 5
+    },
+    {
+      "name": "trailing garbage",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git status\"}}]} x",
+      "tool": "refuses",
+      "stdout": "git\\n",
+      "status": 5
+    },
+    {
+      "name": "truncated JSON",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git status\"}",
+      "tool": "refuses",
+      "stdout": "",
+      "status": 5
+    },
+    {
+      "name": "truncated JSON",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git status\"}",
+      "tool": "refuses",
+      "stdout": "",
+      "status": 5
+    },
+    {
+      "name": "byte order mark",
+      "function": "claude_result_permission_denials_summary",
+      "result": "\\xef\\xbb\\xbf{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git status\"}}]}",
+      "tool": "refuses",
+      "stdout": "- Bash: git status\\n",
+      "status": 0
+    },
+    {
+      "name": "byte order mark",
+      "function": "claude_result_denied_command_names",
+      "result": "\\xef\\xbb\\xbf{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git status\"}}]}",
+      "tool": "refuses",
+      "stdout": "git\\n",
+      "status": 0
+    },
+    {
+      "name": "invalid UTF-8 in a string",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git \\xff status\"}}]}",
+      "tool": "refuses",
+      "stdout": "- Bash: git \\xef\\xbf\\xbd status\\n",
+      "status": 0
+    },
+    {
+      "name": "invalid UTF-8 in a string",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git \\xff status\"}}]}",
+      "tool": "refuses",
+      "stdout": "git\\n",
+      "status": 0
+    },
+    {
+      "name": "invalid UTF-8 outside the denials",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"result\":\"\\xc3(\",\"permission_denials\":[]}",
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "invalid UTF-8 outside the denials",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"result\":\"\\xc3(\",\"permission_denials\":[]}",
+      "tool": "refuses",
+      "stdout": "\\n",
+      "status": 0
+    },
+    {
+      "name": "raw tab in a string",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git\\tstatus\"}}]}",
+      "tool": "refuses",
+      "stdout": "",
+      "status": 5
+    },
+    {
+      "name": "raw tab in a string",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git\\tstatus\"}}]}",
+      "tool": "refuses",
+      "stdout": "",
+      "status": 5
+    },
+    {
+      "name": "nan literal",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"x\":nan,\"permission_denials\":[]}",
+      "tool": "refuses",
+      "stdout": "",
+      "status": 0
+    },
+    {
+      "name": "nan literal",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"x\":nan,\"permission_denials\":[]}",
+      "tool": "refuses",
+      "stdout": "\\n",
+      "status": 0
+    },
+    {
+      "name": "trailing comma",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[],}",
+      "tool": "refuses",
+      "stdout": "",
+      "status": 5
+    },
+    {
+      "name": "trailing comma",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[],}",
+      "tool": "refuses",
+      "stdout": "",
+      "status": 5
+    },
+    {
+      "name": "leading whitespace and newline",
+      "function": "claude_result_permission_denials_summary",
+      "result": "\\n\\n  {\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git status\"}}]}\\n\\n",
+      "tool": "answers",
+      "stdout": "- Bash: git status\\n",
+      "status": 0
+    },
+    {
+      "name": "leading whitespace and newline",
+      "function": "claude_result_denied_command_names",
+      "result": "\\n\\n  {\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git status\"}}]}\\n\\n",
+      "tool": "answers",
+      "stdout": "git\\n",
+      "status": 0
+    },
+    {
+      "name": "repeated key takes the last value",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"rm -rf x\"}}],\"permission_denials\":[{\"tool_name\":\"Read\",\"tool_name\":\"Grep\",\"tool_input\":{\"file_path\":\"a\",\"file_path\":\"b\"}}]}",
+      "tool": "answers",
+      "stdout": "- Grep: b\\n",
+      "status": 0
+    },
+    {
+      "name": "repeated key takes the last value",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"rm -rf x\"}}],\"permission_denials\":[{\"tool_name\":\"Read\",\"tool_name\":\"Grep\",\"tool_input\":{\"file_path\":\"a\",\"file_path\":\"b\"}}]}",
+      "tool": "answers",
+      "stdout": "Grep\\n",
+      "status": 0
+    },
+    {
+      "name": "repeated key inside a dumped input",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"WebFetch\",\"tool_input\":{\"url\":\"a\",\"prompt\":\"p\",\"url\":\"b\"}}]}",
+      "tool": "answers",
+      "stdout": "- WebFetch: {\"url\":\"b\",\"prompt\":\"p\"}\\n",
+      "status": 0
+    },
+    {
+      "name": "repeated key inside a dumped input",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"WebFetch\",\"tool_input\":{\"url\":\"a\",\"prompt\":\"p\",\"url\":\"b\"}}]}",
+      "tool": "answers",
+      "stdout": "WebFetch\\n",
+      "status": 0
+    },
+    {
+      "name": "lone low surrogate escape",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git \\\\udc00 status\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: git \\xef\\xbf\\xbd status\\n",
+      "status": 0
+    },
+    {
+      "name": "lone low surrogate escape",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git \\\\udc00 status\"}}]}",
+      "tool": "answers",
+      "stdout": "git\\n",
+      "status": 0
+    },
+    {
+      "name": "lone high surrogate escape",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git \\\\ud800 status\"}}]}",
+      "tool": "refuses",
+      "stdout": "",
+      "status": 5
+    },
+    {
+      "name": "lone high surrogate escape",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git \\\\ud800 status\"}}]}",
+      "tool": "refuses",
+      "stdout": "",
+      "status": 5
+    },
+    {
+      "name": "escaped surrogate pair",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\\\\ud83d\\\\ude00 status\"}},{\"tool_name\":\"X\\\\ud83d\\\\ude00\",\"tool_input\":{\"q\":\"\\\\ud83d\\\\ude00\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: \\xf0\\x9f\\x98\\x80 status\\n- X\\xf0\\x9f\\x98\\x80: {\"q\":\"\\xf0\\x9f\\x98\\x80\"}\\n",
+      "status": 0
+    },
+    {
+      "name": "escaped surrogate pair",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\\\\ud83d\\\\ude00 status\"}},{\"tool_name\":\"X\\\\ud83d\\\\ude00\",\"tool_input\":{\"q\":\"\\\\ud83d\\\\ude00\"}}]}",
+      "tool": "answers",
+      "stdout": "(other)\\n",
+      "status": 0
+    },
+    {
+      "name": "escaped NUL in a command",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git\\\\u0000status\"}}]}",
+      "tool": "refuses",
+      "stdout": "- Bash: gitstatus\\n",
+      "status": 0
+    },
+    {
+      "name": "escaped NUL in a command",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git\\\\u0000status\"}}]}",
+      "tool": "answers",
+      "stdout": "(other)\\n",
+      "status": 0
+    },
+    {
+      "name": "escaped NUL in a tool name",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Re\\\\u0000ad\",\"tool_input\":{\"file_path\":\"a\"}}]}",
+      "tool": "refuses",
+      "stdout": "- Read: a\\n",
+      "status": 0
+    },
+    {
+      "name": "escaped NUL in a tool name",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Re\\\\u0000ad\",\"tool_input\":{\"file_path\":\"a\"}}]}",
+      "tool": "answers",
+      "stdout": "(other)\\n",
+      "status": 0
+    },
+    {
+      "name": "escaped control characters",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"a\\\\u0001b\\\\u001fc\\\\u007fd\\\\be\\\\ff\"}},{\"tool_name\":\"T\",\"tool_input\":{\"k\":\"\\\\u0001\\\\u007f\\\\b\\\\f\\\\t\\\\\"\\\\\\\\\\\\/\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: a\\x01b\\x1fc\\x7fd\\x08e\\x0cf\\n- T: {\"k\":\"\\\\u0001\\\\u007f\\\\b\\\\f\\\\t\\\\\"\\\\\\\\/\"}\\n",
+      "status": 0
+    },
+    {
+      "name": "escaped control characters",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"a\\\\u0001b\\\\u001fc\\\\u007fd\\\\be\\\\ff\"}},{\"tool_name\":\"T\",\"tool_input\":{\"k\":\"\\\\u0001\\\\u007f\\\\b\\\\f\\\\t\\\\\"\\\\\\\\\\\\/\"}}]}",
+      "tool": "answers",
+      "stdout": "(other),T\\n",
+      "status": 0
+    },
+    {
+      "name": "escaped slash",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\\\\/usr\\\\/bin\\\\/git status\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: /usr/bin/git status\\n",
+      "status": 0
+    },
+    {
+      "name": "escaped slash",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\\\\/usr\\\\/bin\\\\/git status\"}}]}",
+      "tool": "answers",
+      "stdout": "git\\n",
+      "status": 0
+    },
+    {
+      "name": "single Bash denial",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git status\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: git status\\n",
+      "status": 0
+    },
+    {
+      "name": "single Bash denial",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git status\"}}]}",
+      "tool": "answers",
+      "stdout": "git\\n",
+      "status": 0
+    },
+    {
+      "name": "Bash and Edit",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git status\"}},{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"/workspace/repo/.database\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: git status\\n- Edit: /workspace/repo/.database\\n",
+      "status": 0
+    },
+    {
+      "name": "Bash and Edit",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git status\"}},{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"/workspace/repo/.database\"}}]}",
+      "tool": "answers",
+      "stdout": "Edit,git\\n",
+      "status": 0
+    },
+    {
+      "name": "non-object tool_input then a good one",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":\"not-an-object\"},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo hi\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: not-an-object\\n- Bash: echo hi\\n",
+      "status": 0
+    },
+    {
+      "name": "non-object tool_input then a good one",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":\"not-an-object\"},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo hi\"}}]}",
+      "tool": "answers",
+      "stdout": "(other),echo\\n",
+      "status": 0
+    },
+    {
+      "name": "bare string element",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[\"a bare string entry\",{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo hi\"}}]}",
+      "tool": "answers",
+      "stdout": "- malformed-denial-entry: {\"raw\":\"a bare string entry\"}\\n- Bash: echo hi\\n",
+      "status": 0
+    },
+    {
+      "name": "bare string element",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[\"a bare string entry\",{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo hi\"}}]}",
+      "tool": "answers",
+      "stdout": "echo\\n",
+      "status": 0
+    },
+    {
+      "name": "number, null, bool, array and object elements",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[5,null,true,false,[1,\"a\"],{\"nested\":{\"x\":1}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo hi\"}}]}",
+      "tool": "answers",
+      "stdout": "- malformed-denial-entry: {\"raw\":5}\\n- malformed-denial-entry: {\"raw\":null}\\n- malformed-denial-entry: {\"raw\":true}\\n- malformed-denial-entry: {\"raw\":false}\\n- malformed-denial-entry: {\"raw\":[1,\"a\"]}\\n- unknown: {}\\n- Bash: echo hi\\n",
+      "status": 0
+    },
+    {
+      "name": "number, null, bool, array and object elements",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[5,null,true,false,[1,\"a\"],{\"nested\":{\"x\":1}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo hi\"}}]}",
+      "tool": "answers",
+      "stdout": "(other),echo\\n",
+      "status": 0
+    },
+    {
+      "name": "embedded newline",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo one\\\\necho two\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo three\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: echo one echo two\\n- Bash: echo three\\n",
+      "status": 0
+    },
+    {
+      "name": "embedded newline",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo one\\\\necho two\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo three\"}}]}",
+      "tool": "answers",
+      "stdout": "echo\\n",
+      "status": 0
+    },
+    {
+      "name": "CR LF and CR runs",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"a\\\\r\\\\nb\\\\r\\\\r\\\\n\\\\nc\\\\rd\\\\n\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\\\\n\\\\nlead\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: a b c d \\n- Bash:  lead\\n",
+      "status": 0
+    },
+    {
+      "name": "CR LF and CR runs",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"a\\\\r\\\\nb\\\\r\\\\r\\\\n\\\\nc\\\\rd\\\\n\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\\\\n\\\\nlead\"}}]}",
+      "tool": "answers",
+      "stdout": "a,lead\\n",
+      "status": 0
+    },
+    {
+      "name": "newline in the tool name",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Ba\\\\nsh\",\"tool_input\":{\"command\":\"x\"}},{\"tool_name\":\"Read\\\\n\",\"tool_input\":{\"file_path\":\"/a\"}}]}",
+      "tool": "answers",
+      "stdout": "- Ba sh: x\\n- Read : /a\\n",
+      "status": 0
+    },
+    {
+      "name": "newline in the tool name",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Ba\\\\nsh\",\"tool_input\":{\"command\":\"x\"}},{\"tool_name\":\"Read\\\\n\",\"tool_input\":{\"file_path\":\"/a\"}}]}",
+      "tool": "answers",
+      "stdout": "(other),Read\\n\\n",
+      "status": 0
+    },
+    {
+      "name": "null and absent tool_input",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Weird\",\"tool_input\":null},{\"tool_name\":\"NoInput\"}]}",
+      "tool": "answers",
+      "stdout": "- Weird: {}\\n- NoInput: {}\\n",
+      "status": 0
+    },
+    {
+      "name": "null and absent tool_input",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Weird\",\"tool_input\":null},{\"tool_name\":\"NoInput\"}]}",
+      "tool": "answers",
+      "stdout": "NoInput,Weird\\n",
+      "status": 0
+    },
+    {
+      "name": "false tool_input",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"F\",\"tool_input\":false},{\"tool_name\":\"Bash\",\"tool_input\":false}]}",
+      "tool": "answers",
+      "stdout": "- F: {}\\n- Bash: {}\\n",
+      "status": 0
+    },
+    {
+      "name": "false tool_input",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"F\",\"tool_input\":false},{\"tool_name\":\"Bash\",\"tool_input\":false}]}",
+      "tool": "answers",
+      "stdout": "(other),F\\n",
+      "status": 0
+    },
+    {
+      "name": "number tool_input",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"N\",\"tool_input\":12},{\"tool_name\":\"Bash\",\"tool_input\":7}]}",
+      "tool": "answers",
+      "stdout": "- N: 12\\n- Bash: 7\\n",
+      "status": 0
+    },
+    {
+      "name": "number tool_input",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"N\",\"tool_input\":12},{\"tool_name\":\"Bash\",\"tool_input\":7}]}",
+      "tool": "answers",
+      "stdout": "(other),N\\n",
+      "status": 0
+    },
+    {
+      "name": "array tool_input",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"A\",\"tool_input\":[\"x\",1,null]},{\"tool_name\":\"Bash\",\"tool_input\":[\"git\",\"status\"]}]}",
+      "tool": "answers",
+      "stdout": "- A: [\"x\",1,null]\\n- Bash: [\"git\",\"status\"]\\n",
+      "status": 0
+    },
+    {
+      "name": "array tool_input",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"A\",\"tool_input\":[\"x\",1,null]},{\"tool_name\":\"Bash\",\"tool_input\":[\"git\",\"status\"]}]}",
+      "tool": "answers",
+      "stdout": "(other),A\\n",
+      "status": 0
+    },
+    {
+      "name": "command false falls back to file_path",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Edit\",\"tool_input\":{\"command\":false,\"file_path\":\"/f\"}}]}",
+      "tool": "answers",
+      "stdout": "- Edit: /f\\n",
+      "status": 0
+    },
+    {
+      "name": "command false falls back to file_path",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Edit\",\"tool_input\":{\"command\":false,\"file_path\":\"/f\"}}]}",
+      "tool": "answers",
+      "stdout": "Edit\\n",
+      "status": 0
+    },
+    {
+      "name": "command null and file_path null",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Edit\",\"tool_input\":{\"command\":null,\"file_path\":null,\"old\":\"x\"}}]}",
+      "tool": "answers",
+      "stdout": "- Edit: {\"command\":null,\"file_path\":null,\"old\":\"x\"}\\n",
+      "status": 0
+    },
+    {
+      "name": "command null and file_path null",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Edit\",\"tool_input\":{\"command\":null,\"file_path\":null,\"old\":\"x\"}}]}",
+      "tool": "answers",
+      "stdout": "Edit\\n",
+      "status": 0
+    },
+    {
+      "name": "empty command string is kept",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\",\"file_path\":\"/f\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: \\n",
+      "status": 0
+    },
+    {
+      "name": "empty command string is kept",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\",\"file_path\":\"/f\"}}]}",
+      "tool": "answers",
+      "stdout": "(other)\\n",
+      "status": 0
+    },
+    {
+      "name": "empty file_path string is kept",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"\"}}]}",
+      "tool": "answers",
+      "stdout": "- Edit: \\n",
+      "status": 0
+    },
+    {
+      "name": "empty file_path string is kept",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"\"}}]}",
+      "tool": "answers",
+      "stdout": "Edit\\n",
+      "status": 0
+    },
+    {
+      "name": "command a number",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":42}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: 42\\n",
+      "status": 0
+    },
+    {
+      "name": "command a number",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":42}}]}",
+      "tool": "answers",
+      "stdout": "42\\n",
+      "status": 0
+    },
+    {
+      "name": "command true",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":true}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: true\\n",
+      "status": 0
+    },
+    {
+      "name": "command true",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":true}}]}",
+      "tool": "answers",
+      "stdout": "true\\n",
+      "status": 0
+    },
+    {
+      "name": "command an object",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":{\"a\":\"b\",\"c\":[1,2]}}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: {\"a\":\"b\",\"c\":[1,2]}\\n",
+      "status": 0
+    },
+    {
+      "name": "command an object",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":{\"a\":\"b\",\"c\":[1,2]}}}]}",
+      "tool": "answers",
+      "stdout": "(other)\\n",
+      "status": 0
+    },
+    {
+      "name": "command an array",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":[\"git\",\"status\"]}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: [\"git\",\"status\"]\\n",
+      "status": 0
+    },
+    {
+      "name": "command an array",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":[\"git\",\"status\"]}}]}",
+      "tool": "answers",
+      "stdout": "(other)\\n",
+      "status": 0
+    },
+    {
+      "name": "file_path an object",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":{\"p\":\"/x\"}}}]}",
+      "tool": "answers",
+      "stdout": "- Edit: {\"p\":\"/x\"}\\n",
+      "status": 0
+    },
+    {
+      "name": "file_path an object",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":{\"p\":\"/x\"}}}]}",
+      "tool": "answers",
+      "stdout": "Edit\\n",
+      "status": 0
+    },
+    {
+      "name": "tool_name missing",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_input\":{\"command\":\"x\"}}]}",
+      "tool": "answers",
+      "stdout": "- unknown: x\\n",
+      "status": 0
+    },
+    {
+      "name": "tool_name missing",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_input\":{\"command\":\"x\"}}]}",
+      "tool": "answers",
+      "stdout": "(other)\\n",
+      "status": 0
+    },
+    {
+      "name": "tool_name null",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":null,\"tool_input\":{\"command\":\"x\"}}]}",
+      "tool": "answers",
+      "stdout": "- unknown: x\\n",
+      "status": 0
+    },
+    {
+      "name": "tool_name null",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":null,\"tool_input\":{\"command\":\"x\"}}]}",
+      "tool": "answers",
+      "stdout": "(other)\\n",
+      "status": 0
+    },
+    {
+      "name": "tool_name false",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":false,\"tool_input\":{\"command\":\"x\"}}]}",
+      "tool": "answers",
+      "stdout": "- unknown: x\\n",
+      "status": 0
+    },
+    {
+      "name": "tool_name false",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":false,\"tool_input\":{\"command\":\"x\"}}]}",
+      "tool": "answers",
+      "stdout": "(other)\\n",
+      "status": 0
+    },
+    {
+      "name": "tool_name empty",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"\",\"tool_input\":{\"command\":\"x\"}}]}",
+      "tool": "answers",
+      "stdout": "- : x\\n",
+      "status": 0
+    },
+    {
+      "name": "tool_name empty",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"\",\"tool_input\":{\"command\":\"x\"}}]}",
+      "tool": "answers",
+      "stdout": "(other)\\n",
+      "status": 0
+    },
+    {
+      "name": "tool_name a number",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":7,\"tool_input\":{\"command\":\"x\"}}]}",
+      "tool": "answers",
+      "stdout": "- 7: x\\n",
+      "status": 0
+    },
+    {
+      "name": "tool_name a number",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":7,\"tool_input\":{\"command\":\"x\"}}]}",
+      "tool": "answers",
+      "stdout": "7\\n",
+      "status": 0
+    },
+    {
+      "name": "tool_name true",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":true,\"tool_input\":{\"command\":\"x\"}}]}",
+      "tool": "answers",
+      "stdout": "- true: x\\n",
+      "status": 0
+    },
+    {
+      "name": "tool_name true",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":true,\"tool_input\":{\"command\":\"x\"}}]}",
+      "tool": "answers",
+      "stdout": "true\\n",
+      "status": 0
+    },
+    {
+      "name": "tool_name an object",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":{\"n\":\"Bash\"},\"tool_input\":{\"command\":\"x\"}}]}",
+      "tool": "answers",
+      "stdout": "- {\"n\":\"Bash\"}: x\\n",
+      "status": 0
+    },
+    {
+      "name": "tool_name an object",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":{\"n\":\"Bash\"},\"tool_input\":{\"command\":\"x\"}}]}",
+      "tool": "answers",
+      "stdout": "(other)\\n",
+      "status": 0
+    },
+    {
+      "name": "tool_name an array",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":[\"Bash\"],\"tool_input\":{\"command\":\"x\"}}]}",
+      "tool": "answers",
+      "stdout": "- [\"Bash\"]: x\\n",
+      "status": 0
+    },
+    {
+      "name": "tool_name an array",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":[\"Bash\"],\"tool_input\":{\"command\":\"x\"}}]}",
+      "tool": "answers",
+      "stdout": "(other)\\n",
+      "status": 0
+    },
+    {
+      "name": "dumped input of 208 characters",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"WebFetch\",\"tool_input\":{\"url\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}}]}",
+      "tool": "answers",
+      "stdout": "- WebFetch: {\"url\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx...(truncated)\\n",
+      "status": 0
+    },
+    {
+      "name": "dumped input of 208 characters",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"WebFetch\",\"tool_input\":{\"url\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}}]}",
+      "tool": "answers",
+      "stdout": "WebFetch\\n",
+      "status": 0
+    },
+    {
+      "name": "dumped input of 209 characters",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"WebFetch\",\"tool_input\":{\"url\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}}]}",
+      "tool": "answers",
+      "stdout": "- WebFetch: {\"url\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx...(truncated)\\n",
+      "status": 0
+    },
+    {
+      "name": "dumped input of 209 characters",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"WebFetch\",\"tool_input\":{\"url\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}}]}",
+      "tool": "answers",
+      "stdout": "WebFetch\\n",
+      "status": 0
+    },
+    {
+      "name": "dumped input of 210 characters",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"WebFetch\",\"tool_input\":{\"url\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}}]}",
+      "tool": "answers",
+      "stdout": "- WebFetch: {\"url\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx...(truncated)\\n",
+      "status": 0
+    },
+    {
+      "name": "dumped input of 210 characters",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"WebFetch\",\"tool_input\":{\"url\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}}]}",
+      "tool": "answers",
+      "stdout": "WebFetch\\n",
+      "status": 0
+    },
+    {
+      "name": "dumped input of 211 characters",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"WebFetch\",\"tool_input\":{\"url\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}}]}",
+      "tool": "answers",
+      "stdout": "- WebFetch: {\"url\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx...(truncated)\\n",
+      "status": 0
+    },
+    {
+      "name": "dumped input of 211 characters",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"WebFetch\",\"tool_input\":{\"url\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}}]}",
+      "tool": "answers",
+      "stdout": "WebFetch\\n",
+      "status": 0
+    },
+    {
+      "name": "dumped input of 212 characters",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"WebFetch\",\"tool_input\":{\"url\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}}]}",
+      "tool": "answers",
+      "stdout": "- WebFetch: {\"url\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx...(truncated)\\n",
+      "status": 0
+    },
+    {
+      "name": "dumped input of 212 characters",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"WebFetch\",\"tool_input\":{\"url\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}}]}",
+      "tool": "answers",
+      "stdout": "WebFetch\\n",
+      "status": 0
+    },
+    {
+      "name": "dumped input of 410 characters",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"WebFetch\",\"tool_input\":{\"url\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}}]}",
+      "tool": "answers",
+      "stdout": "- WebFetch: {\"url\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx...(truncated)\\n",
+      "status": 0
+    },
+    {
+      "name": "dumped input of 410 characters",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"WebFetch\",\"tool_input\":{\"url\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}}]}",
+      "tool": "answers",
+      "stdout": "WebFetch\\n",
+      "status": 0
+    },
+    {
+      "name": "dump cut inside multi-byte characters",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"WebFetch\",\"tool_input\":{\"url\":\"\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\"}}]}",
+      "tool": "answers",
+      "stdout": "- WebFetch: {\"url\":\"\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9...(truncated)\\n",
+      "status": 0
+    },
+    {
+      "name": "dump cut inside multi-byte characters",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"WebFetch\",\"tool_input\":{\"url\":\"\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\\xc3\\xa9\"}}]}",
+      "tool": "answers",
+      "stdout": "WebFetch\\n",
+      "status": 0
+    },
+    {
+      "name": "dump cut at an emoji",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"WebFetch\",\"tool_input\":{\"url\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\xf0\\x9f\\x98\\x80\\xf0\\x9f\\x98\\x80\\xf0\\x9f\\x98\\x80\\xf0\\x9f\\x98\\x80\"}}]}",
+      "tool": "answers",
+      "stdout": "- WebFetch: {\"url\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\xf0\\x9f\\x98\\x80\\xf0\\x9f\\x98\\x80\\xf0\\x9f\\x98\\x80...(truncated)\\n",
+      "status": 0
+    },
+    {
+      "name": "dump cut at an emoji",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"WebFetch\",\"tool_input\":{\"url\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\xf0\\x9f\\x98\\x80\\xf0\\x9f\\x98\\x80\\xf0\\x9f\\x98\\x80\\xf0\\x9f\\x98\\x80\"}}]}",
+      "tool": "answers",
+      "stdout": "WebFetch\\n",
+      "status": 0
+    },
+    {
+      "name": "dump cut inside an escape",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"WebFetch\",\"tool_input\":{\"url\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\\\\"\\\\\\\\\\\\n\\\\u0001\\\\\"\\\\\\\\\\\\n\\\\u0001\\\\\"\\\\\\\\\\\\n\\\\u0001\\\\\"\\\\\\\\\\\\n\\\\u0001\\\\\"\\\\\\\\\\\\n\\\\u0001\"}}]}",
+      "tool": "answers",
+      "stdout": "- WebFetch: {\"url\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\\\\"\\\\\\\\...(truncated)\\n",
+      "status": 0
+    },
+    {
+      "name": "dump cut inside an escape",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"WebFetch\",\"tool_input\":{\"url\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\\\\"\\\\\\\\\\\\n\\\\u0001\\\\\"\\\\\\\\\\\\n\\\\u0001\\\\\"\\\\\\\\\\\\n\\\\u0001\\\\\"\\\\\\\\\\\\n\\\\u0001\\\\\"\\\\\\\\\\\\n\\\\u0001\"}}]}",
+      "tool": "answers",
+      "stdout": "WebFetch\\n",
+      "status": 0
+    },
+    {
+      "name": "dumped string input over 200",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"S\",\"tool_input\":\"ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss\"}]}",
+      "tool": "answers",
+      "stdout": "- S: ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss...(truncated)\\n",
+      "status": 0
+    },
+    {
+      "name": "dumped string input over 200",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"S\",\"tool_input\":\"ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss\"}]}",
+      "tool": "answers",
+      "stdout": "S\\n",
+      "status": 0
+    },
+    {
+      "name": "dumped non-object element over 200",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"]}",
+      "tool": "answers",
+      "stdout": "- malformed-denial-entry: {\"raw\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee...(truncated)\\n",
+      "status": 0
+    },
+    {
+      "name": "dumped non-object element over 200",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"]}",
+      "tool": "answers",
+      "stdout": "\\n",
+      "status": 0
+    },
+    {
+      "name": "long command is not cut",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: echo yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\\n",
+      "status": 0
+    },
+    {
+      "name": "long command is not cut",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"}}]}",
+      "tool": "answers",
+      "stdout": "echo\\n",
+      "status": 0
+    },
+    {
+      "name": "long file_path is not cut",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"/pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\"}}]}",
+      "tool": "answers",
+      "stdout": "- Read: /pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\\n",
+      "status": 0
+    },
+    {
+      "name": "long file_path is not cut",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"/pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\"}}]}",
+      "tool": "answers",
+      "stdout": "Read\\n",
+      "status": 0
+    },
+    {
+      "name": "dump with CR LF inside",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"W\",\"tool_input\":{\"text\":\"a\\\\r\\\\nb\"}},{\"tool_name\":\"W\",\"tool_input\":\"line1\\\\nline2\\\\r\"}]}",
+      "tool": "answers",
+      "stdout": "- W: {\"text\":\"a\\\\r\\\\nb\"}\\n- W: line1 line2 \\n",
+      "status": 0
+    },
+    {
+      "name": "dump with CR LF inside",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"W\",\"tool_input\":{\"text\":\"a\\\\r\\\\nb\"}},{\"tool_name\":\"W\",\"tool_input\":\"line1\\\\nline2\\\\r\"}]}",
+      "tool": "answers",
+      "stdout": "W\\n",
+      "status": 0
+    },
+    {
+      "name": "unicode line separators are kept",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"a\\xe2\\x80\\xa8b\\xe2\\x80\\xa9c\\xc2\\x85d\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: a\\xe2\\x80\\xa8b\\xe2\\x80\\xa9c\\xc2\\x85d\\n",
+      "status": 0
+    },
+    {
+      "name": "unicode line separators are kept",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"a\\xe2\\x80\\xa8b\\xe2\\x80\\xa9c\\xc2\\x85d\"}}]}",
+      "tool": "answers",
+      "stdout": "a\\n",
+      "status": 0
+    },
+    {
+      "name": "non-ASCII text",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo caf\\xc3\\xa9 \\xe2\\x80\\x94 \\xe6\\x97\\xa5\\xe6\\x9c\\xac\"}},{\"tool_name\":\"R\\xc3\\xa9ad\",\"tool_input\":{\"file_path\":\"/\\xc3\\xa9\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: echo caf\\xc3\\xa9 \\xe2\\x80\\x94 \\xe6\\x97\\xa5\\xe6\\x9c\\xac\\n- R\\xc3\\xa9ad: /\\xc3\\xa9\\n",
+      "status": 0
+    },
+    {
+      "name": "non-ASCII text",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo caf\\xc3\\xa9 \\xe2\\x80\\x94 \\xe6\\x97\\xa5\\xe6\\x9c\\xac\"}},{\"tool_name\":\"R\\xc3\\xa9ad\",\"tool_input\":{\"file_path\":\"/\\xc3\\xa9\"}}]}",
+      "tool": "answers",
+      "stdout": "(other),echo\\n",
+      "status": 0
+    },
+    {
+      "name": "deep nesting in a dump",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Deep\",\"tool_input\":{\"a\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}}]}",
+      "tool": "answers",
+      "stdout": "- Deep: {\"a\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[...(truncated)\\n",
+      "status": 0
+    },
+    {
+      "name": "deep nesting in a dump",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Deep\",\"tool_input\":{\"a\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}}]}",
+      "tool": "answers",
+      "stdout": "Deep\\n",
+      "status": 0
+    },
+    {
+      "name": "nesting past the depth the tool reads",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Deep\",\"tool_input\":{\"a\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}}]}",
+      "tool": "refuses",
+      "stdout": "- Deep: {\"a\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[...(truncated)\\n",
+      "status": 0
+    },
+    {
+      "name": "nesting past the depth the tool reads",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Deep\",\"tool_input\":{\"a\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}}]}",
+      "tool": "refuses",
+      "stdout": "Deep\\n",
+      "status": 0
+    },
+    {
+      "name": "many denials",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd0 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd1 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd2 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd3 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd4 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd5 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd6 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd7 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd8 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd9 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd10 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd11 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd12 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd13 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd14 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd15 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd16 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd17 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd18 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd19 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd20 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd21 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd22 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd23 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd24 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd25 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd26 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd27 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd28 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd29 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd30 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd31 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd32 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd33 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd34 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd35 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd36 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd37 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd38 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd39 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd40 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd41 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd42 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd43 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd44 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd45 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd46 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd47 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd48 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd49 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd50 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd51 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd52 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd53 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd54 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd55 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd56 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd57 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd58 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd59 arg\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: cmd0 arg\\n- Bash: cmd1 arg\\n- Bash: cmd2 arg\\n- Bash: cmd3 arg\\n- Bash: cmd4 arg\\n- Bash: cmd5 arg\\n- Bash: cmd6 arg\\n- Bash: cmd7 arg\\n- Bash: cmd8 arg\\n- Bash: cmd9 arg\\n- Bash: cmd10 arg\\n- Bash: cmd11 arg\\n- Bash: cmd12 arg\\n- Bash: cmd13 arg\\n- Bash: cmd14 arg\\n- Bash: cmd15 arg\\n- Bash: cmd16 arg\\n- Bash: cmd17 arg\\n- Bash: cmd18 arg\\n- Bash: cmd19 arg\\n- Bash: cmd20 arg\\n- Bash: cmd21 arg\\n- Bash: cmd22 arg\\n- Bash: cmd23 arg\\n- Bash: cmd24 arg\\n- Bash: cmd25 arg\\n- Bash: cmd26 arg\\n- Bash: cmd27 arg\\n- Bash: cmd28 arg\\n- Bash: cmd29 arg\\n- Bash: cmd30 arg\\n- Bash: cmd31 arg\\n- Bash: cmd32 arg\\n- Bash: cmd33 arg\\n- Bash: cmd34 arg\\n- Bash: cmd35 arg\\n- Bash: cmd36 arg\\n- Bash: cmd37 arg\\n- Bash: cmd38 arg\\n- Bash: cmd39 arg\\n- Bash: cmd40 arg\\n- Bash: cmd41 arg\\n- Bash: cmd42 arg\\n- Bash: cmd43 arg\\n- Bash: cmd44 arg\\n- Bash: cmd45 arg\\n- Bash: cmd46 arg\\n- Bash: cmd47 arg\\n- Bash: cmd48 arg\\n- Bash: cmd49 arg\\n- Bash: cmd50 arg\\n- Bash: cmd51 arg\\n- Bash: cmd52 arg\\n- Bash: cmd53 arg\\n- Bash: cmd54 arg\\n- Bash: cmd55 arg\\n- Bash: cmd56 arg\\n- Bash: cmd57 arg\\n- Bash: cmd58 arg\\n- Bash: cmd59 arg\\n",
+      "status": 0
+    },
+    {
+      "name": "many denials",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd0 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd1 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd2 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd3 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd4 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd5 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd6 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd7 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd8 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd9 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd10 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd11 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd12 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd13 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd14 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd15 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd16 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd17 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd18 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd19 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd20 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd21 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd22 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd23 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd24 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd25 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd26 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd27 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd28 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd29 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd30 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd31 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd32 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd33 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd34 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd35 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd36 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd37 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd38 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd39 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd40 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd41 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd42 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd43 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd44 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd45 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd46 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd47 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd48 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd49 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd50 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd51 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd52 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd53 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd54 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd55 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd56 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd57 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd58 arg\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cmd59 arg\"}}]}",
+      "tool": "answers",
+      "stdout": "cmd0,cmd1,cmd10,cmd11,cmd12,cmd13,cmd14,cmd15,cmd16,cmd17,cmd18,cmd19,cmd2,cmd20,cmd21,cmd22,cmd23,cmd24,cmd25,cmd26,cmd27,cmd28,cmd29,cmd3,cmd30,cmd31,cmd32,cmd33,cmd34,cmd35,cmd36,cmd37,cmd38,cmd39,cmd4,cmd40,cmd41,cmd42,cmd43,cmd44,cmd45,cmd46,cmd47,cmd48,cmd49,cmd5,cmd50,cmd51,cmd52,cmd53,cmd54,cmd55,cmd56,cmd57,cmd58,cmd59,cmd6,cmd7,cmd8,cmd9\\n",
+      "status": 0
+    },
+    {
+      "name": "other fields ignored",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"usage\":{\"input_tokens\":1.5,\"cost\":0.001},\"num_turns\":12345678901234567890,\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git status\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: git status\\n",
+      "status": 0
+    },
+    {
+      "name": "other fields ignored",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"usage\":{\"input_tokens\":1.5,\"cost\":0.001},\"num_turns\":12345678901234567890,\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git status\"}}]}",
+      "tool": "answers",
+      "stdout": "git\\n",
+      "status": 0
+    },
+    {
+      "name": "number 0 printed",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":0}},{\"tool_name\":0,\"tool_input\":{\"x\":0}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: 0\\n- 0: {\"x\":0}\\n",
+      "status": 0
+    },
+    {
+      "name": "number 0 printed",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":0}},{\"tool_name\":0,\"tool_input\":{\"x\":0}}]}",
+      "tool": "answers",
+      "stdout": "0\\n",
+      "status": 0
+    },
+    {
+      "name": "number -12 printed",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":-12}},{\"tool_name\":-12,\"tool_input\":{\"x\":-12}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: -12\\n- -12: {\"x\":-12}\\n",
+      "status": 0
+    },
+    {
+      "name": "number -12 printed",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":-12}},{\"tool_name\":-12,\"tool_input\":{\"x\":-12}}]}",
+      "tool": "answers",
+      "stdout": "(other)\\n",
+      "status": 0
+    },
+    {
+      "name": "number 123456789012345 printed",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":123456789012345}},{\"tool_name\":123456789012345,\"tool_input\":{\"x\":123456789012345}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: 123456789012345\\n- 123456789012345: {\"x\":123456789012345}\\n",
+      "status": 0
+    },
+    {
+      "name": "number 123456789012345 printed",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":123456789012345}},{\"tool_name\":123456789012345,\"tool_input\":{\"x\":123456789012345}}]}",
+      "tool": "answers",
+      "stdout": "123456789012345\\n",
+      "status": 0
+    },
+    {
+      "name": "number -123456789012345 printed",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":-123456789012345}},{\"tool_name\":-123456789012345,\"tool_input\":{\"x\":-123456789012345}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: -123456789012345\\n- -123456789012345: {\"x\":-123456789012345}\\n",
+      "status": 0
+    },
+    {
+      "name": "number -123456789012345 printed",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":-123456789012345}},{\"tool_name\":-123456789012345,\"tool_input\":{\"x\":-123456789012345}}]}",
+      "tool": "answers",
+      "stdout": "(other)\\n",
+      "status": 0
+    },
+    {
+      "name": "number 1234567890123456 printed",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":1234567890123456}},{\"tool_name\":1234567890123456,\"tool_input\":{\"x\":1234567890123456}}]}",
+      "tool": "refuses",
+      "stdout": "- Bash: 1234567890123456\\n- 1234567890123456: {\"x\":1234567890123456}\\n",
+      "status": 0
+    },
+    {
+      "name": "number 1234567890123456 printed",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":1234567890123456}},{\"tool_name\":1234567890123456,\"tool_input\":{\"x\":1234567890123456}}]}",
+      "tool": "refuses",
+      "stdout": "1234567890123456\\n",
+      "status": 0
+    },
+    {
+      "name": "number 1.0 printed",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":1.0}},{\"tool_name\":1.0,\"tool_input\":{\"x\":1.0}}]}",
+      "tool": "refuses",
+      "stdout": "- Bash: 1.0\\n- 1.0: {\"x\":1.0}\\n",
+      "status": 0
+    },
+    {
+      "name": "number 1.0 printed",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":1.0}},{\"tool_name\":1.0,\"tool_input\":{\"x\":1.0}}]}",
+      "tool": "refuses",
+      "stdout": "1.0\\n",
+      "status": 0
+    },
+    {
+      "name": "number 1e2 printed",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":1e2}},{\"tool_name\":1e2,\"tool_input\":{\"x\":1e2}}]}",
+      "tool": "refuses",
+      "stdout": "- Bash: 1E+2\\n- 1E+2: {\"x\":1E+2}\\n",
+      "status": 0
+    },
+    {
+      "name": "number 1e2 printed",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":1e2}},{\"tool_name\":1e2,\"tool_input\":{\"x\":1e2}}]}",
+      "tool": "refuses",
+      "stdout": "1E+2\\n",
+      "status": 0
+    },
+    {
+      "name": "number 1E-7 printed",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":1E-7}},{\"tool_name\":1E-7,\"tool_input\":{\"x\":1E-7}}]}",
+      "tool": "refuses",
+      "stdout": "- Bash: 1E-7\\n- 1E-7: {\"x\":1E-7}\\n",
+      "status": 0
+    },
+    {
+      "name": "number 1E-7 printed",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":1E-7}},{\"tool_name\":1E-7,\"tool_input\":{\"x\":1E-7}}]}",
+      "tool": "refuses",
+      "stdout": "1E-7\\n",
+      "status": 0
+    },
+    {
+      "name": "number -0 printed",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":-0}},{\"tool_name\":-0,\"tool_input\":{\"x\":-0}}]}",
+      "tool": "refuses",
+      "stdout": "- Bash: -0\\n- -0: {\"x\":-0}\\n",
+      "status": 0
+    },
+    {
+      "name": "number -0 printed",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":-0}},{\"tool_name\":-0,\"tool_input\":{\"x\":-0}}]}",
+      "tool": "refuses",
+      "stdout": "(other)\\n",
+      "status": 0
+    },
+    {
+      "name": "number 0.10 printed",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":0.10}},{\"tool_name\":0.10,\"tool_input\":{\"x\":0.10}}]}",
+      "tool": "refuses",
+      "stdout": "- Bash: 0.10\\n- 0.10: {\"x\":0.10}\\n",
+      "status": 0
+    },
+    {
+      "name": "number 0.10 printed",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":0.10}},{\"tool_name\":0.10,\"tool_input\":{\"x\":0.10}}]}",
+      "tool": "refuses",
+      "stdout": "0.10\\n",
+      "status": 0
+    },
+    {
+      "name": "number 1.5e300 printed",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":1.5e300}},{\"tool_name\":1.5e300,\"tool_input\":{\"x\":1.5e300}}]}",
+      "tool": "refuses",
+      "stdout": "- Bash: 1.5E+300\\n- 1.5E+300: {\"x\":1.5E+300}\\n",
+      "status": 0
+    },
+    {
+      "name": "number 1.5e300 printed",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":1.5e300}},{\"tool_name\":1.5e300,\"tool_input\":{\"x\":1.5e300}}]}",
+      "tool": "refuses",
+      "stdout": "1.5E+300\\n",
+      "status": 0
+    },
+    {
+      "name": "number 1e400 printed",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":1e400}},{\"tool_name\":1e400,\"tool_input\":{\"x\":1e400}}]}",
+      "tool": "refuses",
+      "stdout": "- Bash: 1E+400\\n- 1E+400: {\"x\":1E+400}\\n",
+      "status": 0
+    },
+    {
+      "name": "number 1e400 printed",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":1e400}},{\"tool_name\":1e400,\"tool_input\":{\"x\":1e400}}]}",
+      "tool": "refuses",
+      "stdout": "1E+400\\n",
+      "status": 0
+    },
+    {
+      "name": "number 123456789012345678901234 printed",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":123456789012345678901234}},{\"tool_name\":123456789012345678901234,\"tool_input\":{\"x\":123456789012345678901234}}]}",
+      "tool": "refuses",
+      "stdout": "- Bash: 123456789012345678901234\\n- 123456789012345678901234: {\"x\":123456789012345678901234}\\n",
+      "status": 0
+    },
+    {
+      "name": "number 123456789012345678901234 printed",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":123456789012345678901234}},{\"tool_name\":123456789012345678901234,\"tool_input\":{\"x\":123456789012345678901234}}]}",
+      "tool": "refuses",
+      "stdout": "123456789012345678901234\\n",
+      "status": 0
+    },
+    {
+      "name": "number 1e99999999999999999999 printed",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":1e99999999999999999999}},{\"tool_name\":1e99999999999999999999,\"tool_input\":{\"x\":1e99999999999999999999}}]}",
+      "tool": "refuses",
+      "stdout": "- Bash: 1.7976931348623157e+308\\n- 1.7976931348623157e+308: {\"x\":1.7976931348623157e+308}\\n",
+      "status": 0
+    },
+    {
+      "name": "number 1e99999999999999999999 printed",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":1e99999999999999999999}},{\"tool_name\":1e99999999999999999999,\"tool_input\":{\"x\":1e99999999999999999999}}]}",
+      "tool": "refuses",
+      "stdout": "1.7976931348623157e+308\\n",
+      "status": 0
+    },
+    {
+      "name": "non-plain number not printed",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"cost\":1.50,\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"ls\",\"n\":1e2}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: ls\\n",
+      "status": 0
+    },
+    {
+      "name": "non-plain number not printed",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"cost\":1.50,\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"ls\",\"n\":1e2}}]}",
+      "tool": "answers",
+      "stdout": "ls\\n",
+      "status": 0
+    },
+    {
+      "name": "non-plain number in a dumped input",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"W\",\"tool_input\":{\"n\":1.50}}]}",
+      "tool": "refuses",
+      "stdout": "- W: {\"n\":1.50}\\n",
+      "status": 0
+    },
+    {
+      "name": "non-plain number in a Bash tool_input object",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"n\":1.50}}]}",
+      "tool": "answers",
+      "stdout": "(other)\\n",
+      "status": 0
+    },
+    {
+      "name": "first words, other tools, deduplicated",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git fetch origin --token=s3cret\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"  gh api user\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git status\"}},{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"/home/x/.ssh/id_rsa\"}},\"malformed\"]}",
+      "tool": "answers",
+      "stdout": "- Bash: git fetch origin --token=s3cret\\n- Bash:   gh api user\\n- Bash: git status\\n- Read: /home/x/.ssh/id_rsa\\n- malformed-denial-entry: {\"raw\":\"malformed\"}\\n",
+      "status": 0
+    },
+    {
+      "name": "first words, other tools, deduplicated",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git fetch origin --token=s3cret\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"  gh api user\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git status\"}},{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"/home/x/.ssh/id_rsa\"}},\"malformed\"]}",
+      "tool": "answers",
+      "stdout": "Read,gh,git\\n",
+      "status": 0
+    },
+    {
+      "name": "leading assignments",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"GH_TOKEN=ghp_abc123 FOO=bar gh pr merge 7\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"env GH_TOKEN=ghp_def456 sudo nohup dotnet build\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"GH_TOKEN=ghp_only\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: GH_TOKEN=ghp_abc123 FOO=bar gh pr merge 7\\n- Bash: env GH_TOKEN=ghp_def456 sudo nohup dotnet build\\n- Bash: GH_TOKEN=ghp_only\\n",
+      "status": 0
+    },
+    {
+      "name": "leading assignments",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"GH_TOKEN=ghp_abc123 FOO=bar gh pr merge 7\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"env GH_TOKEN=ghp_def456 sudo nohup dotnet build\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"GH_TOKEN=ghp_only\"}}]}",
+      "tool": "answers",
+      "stdout": "(other),dotnet,gh\\n",
+      "status": 0
+    },
+    {
+      "name": "assignment shapes",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"_A=1 one\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"1A=2 two\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"A-B=1 three\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"=x four\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"a=b=c five\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"A= six\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"aB_9=x seven\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: _A=1 one\\n- Bash: 1A=2 two\\n- Bash: A-B=1 three\\n- Bash: =x four\\n- Bash: a=b=c five\\n- Bash: A= six\\n- Bash: aB_9=x seven\\n",
+      "status": 0
+    },
+    {
+      "name": "assignment shapes",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"_A=1 one\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"1A=2 two\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"A-B=1 three\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"=x four\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"a=b=c five\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"A= six\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"aB_9=x seven\"}}]}",
+      "tool": "answers",
+      "stdout": "(other),five,one,seven,six\\n",
+      "status": 0
+    },
+    {
+      "name": "absolute path",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"/home/someone/private-project/bin/deploy.sh --prod\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: /home/someone/private-project/bin/deploy.sh --prod\\n",
+      "status": 0
+    },
+    {
+      "name": "absolute path",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"/home/someone/private-project/bin/deploy.sh --prod\"}}]}",
+      "tool": "answers",
+      "stdout": "deploy.sh\\n",
+      "status": 0
+    },
+    {
+      "name": "path shapes",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"./run\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"dir/\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"/\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"a//b\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"../x/y/z.py arg\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: ./run\\n- Bash: dir/\\n- Bash: /\\n- Bash: a//b\\n- Bash: ../x/y/z.py arg\\n",
+      "status": 0
+    },
+    {
+      "name": "path shapes",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"./run\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"dir/\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"/\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"a//b\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"../x/y/z.py arg\"}}]}",
+      "tool": "answers",
+      "stdout": "(other),b,run,z.py\\n",
+      "status": 0
+    },
+    {
+      "name": "brackets and quotes",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\\\\\"$HOME/secret-dir/tool\\\\\" --x\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"(cd /workspace/repo && make)\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"{ git status; }\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$(cat /etc/passwd)\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: \"$HOME/secret-dir/tool\" --x\\n- Bash: (cd /workspace/repo && make)\\n- Bash: { git status; }\\n- Bash: $(cat /etc/passwd)\\n",
+      "status": 0
+    },
+    {
+      "name": "brackets and quotes",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\\\\\"$HOME/secret-dir/tool\\\\\" --x\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"(cd /workspace/repo && make)\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"{ git status; }\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$(cat /etc/passwd)\"}}]}",
+      "tool": "answers",
+      "stdout": "(other),cd,git,tool\\n",
+      "status": 0
+    },
+    {
+      "name": "more brackets and quotes",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"((x))\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"'quoted'\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\\\\\"a b\\\\\"\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"( ( { ls\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"({\\\\\"'x'\\\\\"})\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"(\\\\\"\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: ((x))\\n- Bash: 'quoted'\\n- Bash: \"a b\"\\n- Bash: ( ( { ls\\n- Bash: ({\"'x'\"})\\n- Bash: (\"\\n",
+      "status": 0
+    },
+    {
+      "name": "more brackets and quotes",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"((x))\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"'quoted'\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\\\\\"a b\\\\\"\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"( ( { ls\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"({\\\\\"'x'\\\\\"})\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"(\\\\\"\"}}]}",
+      "tool": "answers",
+      "stdout": "(other),a,ls,quoted,x\\n",
+      "status": 0
+    },
+    {
+      "name": "sudo options",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -u root apt-get install x\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -E env X=1 make\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo --user=root ls\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -- rm -rf /\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -u\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: sudo -u root apt-get install x\\n- Bash: sudo -E env X=1 make\\n- Bash: sudo --user=root ls\\n- Bash: sudo -- rm -rf /\\n- Bash: sudo\\n- Bash: sudo -u\\n",
+      "status": 0
+    },
+    {
+      "name": "sudo options",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -u root apt-get install x\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -E env X=1 make\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo --user=root ls\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -- rm -rf /\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -u\"}}]}",
+      "tool": "answers",
+      "stdout": "(other),apt-get,ls,make,rm\\n",
+      "status": 0
+    },
+    {
+      "name": "sudo quoted values",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -u 'some user' cmd\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -u \\\\\"x y\\\\\" cmd2\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -u 'root' ls\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -u ' cmd3\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -i 'x y' cmd4\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: sudo -u 'some user' cmd\\n- Bash: sudo -u \"x y\" cmd2\\n- Bash: sudo -u 'root' ls\\n- Bash: sudo -u ' cmd3\\n- Bash: sudo -i 'x y' cmd4\\n",
+      "status": 0
+    },
+    {
+      "name": "sudo quoted values",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -u 'some user' cmd\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -u \\\\\"x y\\\\\" cmd2\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -u 'root' ls\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -u ' cmd3\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -i 'x y' cmd4\"}}]}",
+      "tool": "answers",
+      "stdout": "(other),ls,x\\n",
+      "status": 0
+    },
+    {
+      "name": "sudo every option with a value",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -u v prog0\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -g v prog1\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -C v prog2\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -D v prog3\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -h v prog4\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -p v prog5\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -r v prog6\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -t v prog7\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -U v prog8\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo --user v prog9\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo --group v prog10\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo --close-from v prog11\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo --chdir v prog12\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo --host v prog13\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo --prompt v prog14\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo --role v prog15\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo --type v prog16\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo --other-user v prog17\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: sudo -u v prog0\\n- Bash: sudo -g v prog1\\n- Bash: sudo -C v prog2\\n- Bash: sudo -D v prog3\\n- Bash: sudo -h v prog4\\n- Bash: sudo -p v prog5\\n- Bash: sudo -r v prog6\\n- Bash: sudo -t v prog7\\n- Bash: sudo -U v prog8\\n- Bash: sudo --user v prog9\\n- Bash: sudo --group v prog10\\n- Bash: sudo --close-from v prog11\\n- Bash: sudo --chdir v prog12\\n- Bash: sudo --host v prog13\\n- Bash: sudo --prompt v prog14\\n- Bash: sudo --role v prog15\\n- Bash: sudo --type v prog16\\n- Bash: sudo --other-user v prog17\\n",
+      "status": 0
+    },
+    {
+      "name": "sudo every option with a value",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -u v prog0\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -g v prog1\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -C v prog2\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -D v prog3\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -h v prog4\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -p v prog5\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -r v prog6\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -t v prog7\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -U v prog8\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo --user v prog9\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo --group v prog10\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo --close-from v prog11\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo --chdir v prog12\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo --host v prog13\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo --prompt v prog14\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo --role v prog15\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo --type v prog16\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo --other-user v prog17\"}}]}",
+      "tool": "answers",
+      "stdout": "prog0,prog1,prog10,prog11,prog12,prog13,prog14,prog15,prog16,prog17,prog2,prog3,prog4,prog5,prog6,prog7,prog8,prog9\\n",
+      "status": 0
+    },
+    {
+      "name": "env options",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"env -u VAR cmd\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"env -S 'a b' cmd\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"env -i cmd2\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"env -- -x\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"env -C /tmp --unset A --chdir /x --split-string s cmd3\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"env\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: env -u VAR cmd\\n- Bash: env -S 'a b' cmd\\n- Bash: env -i cmd2\\n- Bash: env -- -x\\n- Bash: env -C /tmp --unset A --chdir /x --split-string s cmd3\\n- Bash: env\\n",
+      "status": 0
+    },
+    {
+      "name": "env options",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"env -u VAR cmd\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"env -S 'a b' cmd\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"env -i cmd2\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"env -- -x\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"env -C /tmp --unset A --chdir /x --split-string s cmd3\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"env\"}}]}",
+      "tool": "answers",
+      "stdout": "(other),cmd,cmd2,cmd3\\n",
+      "status": 0
+    },
+    {
+      "name": "xargs options",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"xargs -I {} echo {}\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"xargs -n 1 rm\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"xargs --max-args 2 ls\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"xargs -0 grep x\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"xargs -d , -L 1 -P 4 -s 9 -E e -a f --delimiter x --max-procs 2 --max-chars 9 --arg-file f cat\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: xargs -I {} echo {}\\n- Bash: xargs -n 1 rm\\n- Bash: xargs --max-args 2 ls\\n- Bash: xargs -0 grep x\\n- Bash: xargs -d , -L 1 -P 4 -s 9 -E e -a f --delimiter x --max-procs 2 --max-chars 9 --arg-file f cat\\n",
+      "status": 0
+    },
+    {
+      "name": "xargs options",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"xargs -I {} echo {}\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"xargs -n 1 rm\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"xargs --max-args 2 ls\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"xargs -0 grep x\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"xargs -d , -L 1 -P 4 -s 9 -E e -a f --delimiter x --max-procs 2 --max-chars 9 --arg-file f cat\"}}]}",
+      "tool": "answers",
+      "stdout": "cat,echo,grep,ls,rm\\n",
+      "status": 0
+    },
+    {
+      "name": "time and other wrappers",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"time -o out.txt make\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"time make2\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"time -f %e --output o --format f make3\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"command -v git\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"exec bash\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"nohup ./server &\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"command -u x y\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: time -o out.txt make\\n- Bash: time make2\\n- Bash: time -f %e --output o --format f make3\\n- Bash: command -v git\\n- Bash: exec bash\\n- Bash: nohup ./server &\\n- Bash: command -u x y\\n",
+      "status": 0
+    },
+    {
+      "name": "time and other wrappers",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"time -o out.txt make\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"time make2\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"time -f %e --output o --format f make3\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"command -v git\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"exec bash\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"nohup ./server &\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"command -u x y\"}}]}",
+      "tool": "answers",
+      "stdout": "bash,git,make,make2,make3,server,x\\n",
+      "status": 0
+    },
+    {
+      "name": "wrapper chains",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo env A=1 time -f x nohup python3 a.py\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"exec -- command -- xargs -- env -- nohup -- x\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"nohup nohup nohup\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: sudo env A=1 time -f x nohup python3 a.py\\n- Bash: exec -- command -- xargs -- env -- nohup -- x\\n- Bash: nohup nohup nohup\\n",
+      "status": 0
+    },
+    {
+      "name": "wrapper chains",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo env A=1 time -f x nohup python3 a.py\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"exec -- command -- xargs -- env -- nohup -- x\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"nohup nohup nohup\"}}]}",
+      "tool": "answers",
+      "stdout": "(other),python3,x\\n",
+      "status": 0
+    },
+    {
+      "name": "option value that is a wrapper",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -u env ls\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"xargs -I sudo -n 1 git\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: sudo -u env ls\\n- Bash: xargs -I sudo -n 1 git\\n",
+      "status": 0
+    },
+    {
+      "name": "option value that is a wrapper",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -u env ls\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"xargs -I sudo -n 1 git\"}}]}",
+      "tool": "answers",
+      "stdout": "git,ls\\n",
+      "status": 0
+    },
+    {
+      "name": "name lengths",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"g++\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"python3.12\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"a_b\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"-x\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\".hidden\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"x-y+z.w_\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\n- Bash: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\\n- Bash: g++\\n- Bash: python3.12\\n- Bash: a_b\\n- Bash: -x\\n- Bash: .hidden\\n- Bash: x-y+z.w_\\n",
+      "status": 0
+    },
+    {
+      "name": "name lengths",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"g++\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"python3.12\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"a_b\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"-x\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\".hidden\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"x-y+z.w_\"}}]}",
+      "tool": "answers",
+      "stdout": "(other),a_b,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,g++,python3.12,x-y+z.w_\\n",
+      "status": 0
+    },
+    {
+      "name": "tool name shapes",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"mcp__server__tool\"},{\"tool_name\":\"mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm\"},{\"tool_name\":\"nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn\"},{\"tool_name\":\"Web Fetch\"},{\"tool_name\":\"Read\\\\n\"},{\"tool_name\":\"Read\\\\n\\\\n\"},{\"tool_name\":\"\\\\nRead\"},{\"tool_name\":\"a.b+c-d_e\"},{\"tool_name\":\"_x\"}]}",
+      "tool": "answers",
+      "stdout": "- mcp__server__tool: {}\\n- mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm: {}\\n- nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn: {}\\n- Web Fetch: {}\\n- Read : {}\\n- Read : {}\\n-  Read: {}\\n- a.b+c-d_e: {}\\n- _x: {}\\n",
+      "status": 0
+    },
+    {
+      "name": "tool name shapes",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"mcp__server__tool\"},{\"tool_name\":\"mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm\"},{\"tool_name\":\"nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn\"},{\"tool_name\":\"Web Fetch\"},{\"tool_name\":\"Read\\\\n\"},{\"tool_name\":\"Read\\\\n\\\\n\"},{\"tool_name\":\"\\\\nRead\"},{\"tool_name\":\"a.b+c-d_e\"},{\"tool_name\":\"_x\"}]}",
+      "tool": "answers",
+      "stdout": "(other),Read\\n,a.b+c-d_e,mcp__server__tool,mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm\\n",
+      "status": 0
+    },
+    {
+      "name": "tool names that are not strings",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":5},{\"tool_name\":true},{\"tool_name\":false},{\"tool_name\":null},{\"tool_name\":{\"a\":\"b\"}},{\"tool_name\":[\"x\"]},{}]}",
+      "tool": "answers",
+      "stdout": "- 5: {}\\n- true: {}\\n- unknown: {}\\n- unknown: {}\\n- {\"a\":\"b\"}: {}\\n- [\"x\"]: {}\\n- unknown: {}\\n",
+      "status": 0
+    },
+    {
+      "name": "tool names that are not strings",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":5},{\"tool_name\":true},{\"tool_name\":false},{\"tool_name\":null},{\"tool_name\":{\"a\":\"b\"}},{\"tool_name\":[\"x\"]},{}]}",
+      "tool": "answers",
+      "stdout": "(other),5,true\\n",
+      "status": 0
+    },
+    {
+      "name": "Bash inputs that give nothing",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":\"git status\"},{\"tool_name\":\"Bash\",\"tool_input\":null},{\"tool_name\":\"Bash\"},{\"tool_name\":\"Bash\",\"tool_input\":{}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":null}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":false}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"   \"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: git status\\n- Bash: {}\\n- Bash: {}\\n- Bash: {}\\n- Bash: {\"command\":null}\\n- Bash: {\"command\":false}\\n- Bash:    \\n",
+      "status": 0
+    },
+    {
+      "name": "Bash inputs that give nothing",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":\"git status\"},{\"tool_name\":\"Bash\",\"tool_input\":null},{\"tool_name\":\"Bash\"},{\"tool_name\":\"Bash\",\"tool_input\":{}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":null}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":false}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"   \"}}]}",
+      "tool": "answers",
+      "stdout": "(other)\\n",
+      "status": 0
+    },
+    {
+      "name": "Bash command not a string",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":42}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":true}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":{\"a\":\"b\"}}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":[\"ls\",\"-l\"]}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: 42\\n- Bash: true\\n- Bash: {\"a\":\"b\"}\\n- Bash: [\"ls\",\"-l\"]\\n",
+      "status": 0
+    },
+    {
+      "name": "Bash command not a string",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":42}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":true}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":{\"a\":\"b\"}}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":[\"ls\",\"-l\"]}}]}",
+      "tool": "answers",
+      "stdout": "(other),42,true\\n",
+      "status": 0
+    },
+    {
+      "name": "unicode whitespace splits",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\\xc2\\xa0git\\xe2\\x80\\x83status\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo\\xe3\\x80\\x80-u\\xe2\\x80\\xa8root\\xe2\\x81\\x9fls\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\\xc2\\x85env\\xe1\\x9a\\x80A=1\\xe2\\x80\\xafmake\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\\\\u000bvt\\\\f ff\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: \\xc2\\xa0git\\xe2\\x80\\x83status\\n- Bash: sudo\\xe3\\x80\\x80-u\\xe2\\x80\\xa8root\\xe2\\x81\\x9fls\\n- Bash: \\xc2\\x85env\\xe1\\x9a\\x80A=1\\xe2\\x80\\xafmake\\n- Bash: \\x0bvt\\x0c ff\\n",
+      "status": 0
+    },
+    {
+      "name": "unicode whitespace splits",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\\xc2\\xa0git\\xe2\\x80\\x83status\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo\\xe3\\x80\\x80-u\\xe2\\x80\\xa8root\\xe2\\x81\\x9fls\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\\xc2\\x85env\\xe1\\x9a\\x80A=1\\xe2\\x80\\xafmake\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\\\\u000bvt\\\\f ff\"}}]}",
+      "tool": "answers",
+      "stdout": "git,ls,make,vt\\n",
+      "status": 0
+    },
+    {
+      "name": "characters that are not whitespace",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\\xe2\\x80\\x8bgit\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\\\\u001cfs\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\\xe1\\xa0\\x8emvs\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\\xef\\xbb\\xbfbom\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"x\\\\u001fy\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: \\xe2\\x80\\x8bgit\\n- Bash: \\x1cfs\\n- Bash: \\xe1\\xa0\\x8emvs\\n- Bash: \\xef\\xbb\\xbfbom\\n- Bash: x\\x1fy\\n",
+      "status": 0
+    },
+    {
+      "name": "characters that are not whitespace",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\\xe2\\x80\\x8bgit\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\\\\u001cfs\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\\xe1\\xa0\\x8emvs\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\\xef\\xbb\\xbfbom\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"x\\\\u001fy\"}}]}",
+      "tool": "answers",
+      "stdout": "(other)\\n",
+      "status": 0
+    },
+    {
+      "name": "sorted and deduplicated",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git a\"}},{\"tool_name\":\"Read\"},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"gh b\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git c\"}},\"junk\",{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\"}},{\"tool_name\":\"Grep\"},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"Zed\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"_x\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"9lives\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: git a\\n- Read: {}\\n- Bash: gh b\\n- Bash: git c\\n- malformed-denial-entry: {\"raw\":\"junk\"}\\n- Bash: \\n- Grep: {}\\n- Bash: Zed\\n- Bash: _x\\n- Bash: 9lives\\n",
+      "status": 0
+    },
+    {
+      "name": "sorted and deduplicated",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git a\"}},{\"tool_name\":\"Read\"},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"gh b\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git c\"}},\"junk\",{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\"}},{\"tool_name\":\"Grep\"},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"Zed\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"_x\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"9lives\"}}]}",
+      "tool": "answers",
+      "stdout": "(other),9lives,Grep,Read,Zed,gh,git\\n",
+      "status": 0
+    },
+    {
+      "name": "non-ASCII program names",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"caf\\xc3\\xa9 x\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\\xe6\\x97\\xa5\\xe6\\x9c\\xac\"}},{\"tool_name\":\"R\\xc3\\xa9ad\"}]}",
+      "tool": "answers",
+      "stdout": "- Bash: caf\\xc3\\xa9 x\\n- Bash: \\xe6\\x97\\xa5\\xe6\\x9c\\xac\\n- R\\xc3\\xa9ad: {}\\n",
+      "status": 0
+    },
+    {
+      "name": "non-ASCII program names",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"caf\\xc3\\xa9 x\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\\xe6\\x97\\xa5\\xe6\\x9c\\xac\"}},{\"tool_name\":\"R\\xc3\\xa9ad\"}]}",
+      "tool": "answers",
+      "stdout": "(other)\\n",
+      "status": 0
+    },
+    {
+      "name": "only non-object entries",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[\"a\",1,null,[true]]}",
+      "tool": "answers",
+      "stdout": "- malformed-denial-entry: {\"raw\":\"a\"}\\n- malformed-denial-entry: {\"raw\":1}\\n- malformed-denial-entry: {\"raw\":null}\\n- malformed-denial-entry: {\"raw\":[true]}\\n",
+      "status": 0
+    },
+    {
+      "name": "only non-object entries",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[\"a\",1,null,[true]]}",
+      "tool": "answers",
+      "stdout": "\\n",
+      "status": 0
+    },
+    {
+      "name": "names with quotes kept inside",
+      "function": "claude_result_permission_denials_summary",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"it's\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"a\\\\\"b\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"x)y\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"'a'b'\"}}]}",
+      "tool": "answers",
+      "stdout": "- Bash: it's\\n- Bash: a\"b\\n- Bash: x)y\\n- Bash: 'a'b'\\n",
+      "status": 0
+    },
+    {
+      "name": "names with quotes kept inside",
+      "function": "claude_result_denied_command_names",
+      "result": "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"it's\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"a\\\\\"b\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"x)y\"}},{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"'a'b'\"}}]}",
+      "tool": "answers",
+      "stdout": "(other)\\n",
+      "status": 0
+    }
+  ]
+}
