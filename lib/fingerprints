@@ -58,7 +58,7 @@ fetch_pr_issue_comments() {
 _fetch_pr_comment_list() {
     local item_id="$1" kind="$2" read="$3" projection="$4" attempt=1 result flattened
     while [ "${attempt}" -le "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ]; do
-        if [ "${ORCHESTRATOR_DOTNET_GITHUB}" = 1 ]; then
+        if [ "${ORCHESTRATOR_DOTNET_GITHUB}" = 1 ] && orchestrator_cmd_supports github "${read}"; then
             if result=$(_github_read_with_orchestrator_cmd "${read}" --repo "${REPO_FULL}" --pr "${item_id}"); then
                 printf '%s' "${result}"
                 return 0
@@ -148,7 +148,7 @@ fingerprint_pr_json() {
     local review_comments_json="${3:-[]}"
     local canonical review_comments_file
 
-    if [ "${ORCHESTRATOR_DOTNET_FINGERPRINTS}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_FINGERPRINTS}" = 1 ] && orchestrator_cmd_supports fingerprint pr; then
         _fingerprint_with_orchestrator_cmd pr "${pr_json}" "${trusted_logins}" "${review_comments_json}"
         return
     fi
@@ -442,7 +442,7 @@ fingerprint_issue_json() {
     local plan_approved="${3:-false}"
     local canonical
 
-    if [ "${ORCHESTRATOR_DOTNET_FINGERPRINTS}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_FINGERPRINTS}" = 1 ] && orchestrator_cmd_supports fingerprint issue; then
         _fingerprint_with_orchestrator_cmd issue "${issue_json}" "${trusted_logins}" "${plan_approved}"
         return
     fi

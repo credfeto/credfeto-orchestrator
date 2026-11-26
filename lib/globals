@@ -95,6 +95,19 @@ if [ "${ORCHESTRATOR_CMD_FROM_ENVIRONMENT}" = 0 ] && [ -f "${ORCHESTRATOR_CMD_IN
 fi
 # shellcheck disable=SC2034  # read by lib/fingerprints after sourcing
 ORCHESTRATOR_CMD="${ORCHESTRATOR_CMD:-credfeto-orchestrator}"
+# What the self-installed binary can do (#2095): this checkout updates itself within minutes of a merge, the installed
+# binary only once a newer package is on the feed, so the binary can lack a command this checkout asks for. Once a run,
+# check_orchestrator_cmd_capabilities (lib/self-install) reads the binary's --capabilities into
+# ORCHESTRATOR_CMD_CAPABILITIES, and orchestrator_cmd_supports then sends a call to it only when it lists the command;
+# any other call runs in bash, as with its area off. ORCHESTRATOR_CMD_CAPABILITIES_FILE is the list this checkout's
+# own build prints, so the run can say in one line which commands the binary lacks. Only the self-installed binary is
+# checked: an ORCHESTRATOR_CMD the environment sets is used as before.
+# shellcheck disable=SC2034  # read by lib/self-install after sourcing
+ORCHESTRATOR_CMD_CAPABILITIES_FILE="${ONESHOT_DIR}/src/Credfeto.Orchestrator.Install/capabilities.txt"
+# shellcheck disable=SC2034  # set and read by lib/self-install
+ORCHESTRATOR_CMD_CHECKED=0
+# shellcheck disable=SC2034  # set and read by lib/self-install
+ORCHESTRATOR_CMD_CAPABILITIES=""
 # shellcheck disable=SC2034  # read by lib/fingerprints after sourcing
 ORCHESTRATOR_DOTNET_FINGERPRINTS="${ORCHESTRATOR_DOTNET_FINGERPRINTS:-0}"
 # ORCHESTRATOR_DOTNET_DISCORD: the lib/discord webhook payloads (build_discord_*_payload), which the tool builds

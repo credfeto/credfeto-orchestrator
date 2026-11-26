@@ -246,6 +246,8 @@ main() {
     # The .NET tool's self-install (#252, lib/self-install; off unless ORCHESTRATOR_DOTNET_SELF_INSTALL=1), before
     # anything runs ORCHESTRATOR_CMD. It never stops the tick: a failure warns and keeps the installed binary.
     self_install_orchestrator_cmd
+    # Once a run, before the first tool call: which commands the installed binary has (#2095, lib/self-install)
+    check_orchestrator_cmd_capabilities
 
     validate_config "${owner_filter}"
     if [ -n "${GIT_SIGNING_KEY}" ]; then

@@ -30,7 +30,7 @@
 # tool included) becomes 2, so the gate still fails open.
 github_incident_open() {
     local status_json result used impacts outages
-    if [ "${ORCHESTRATOR_DOTNET_DISCOVERY}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_DISCOVERY}" = 1 ] && orchestrator_cmd_supports discovery github-incident; then
         local -a args=(github-incident --url "${GITHUB_STATUS_URL}")
         local item cmd_rc=0
         for item in "${GITHUB_HEALTH_COMPONENTS[@]}"; do args+=(--component "${item}"); done

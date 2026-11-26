@@ -12,6 +12,7 @@
 _state_tool_answers() {
     local query="$1" text status
     shift
+    orchestrator_cmd_supports state "${query}" || return 1
     # The tool's exit status after a dot keeps the output's own trailing newlines, which $(...) would drop
     text=$(
         "${ORCHESTRATOR_CMD}" state "${query}" "$@" < /dev/null
@@ -37,6 +38,7 @@ _state_tool_answers() {
 _state_tool_wrote() {
     local write="$1" status
     shift
+    orchestrator_cmd_supports state "${write}" || return 1
     "${ORCHESTRATOR_CMD}" state "${write}" "$@"
     status=$?
     [ "${status}" = 0 ] && return 0
