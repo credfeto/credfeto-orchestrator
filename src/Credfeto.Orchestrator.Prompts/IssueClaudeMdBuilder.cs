@@ -86,16 +86,6 @@ internal static class IssueClaudeMdBuilder
             )
         );
         values.AddOutput(
-            name: "board_planning",
-            output: SharedSections.Clause(
-                templates: templates,
-                board: board,
-                itemKind: SharedSections.ISSUE,
-                itemId: request.ItemId,
-                status: "Planning"
-            )
-        );
-        values.AddOutput(
             name: "plan_approval_instruction",
             output: IssueSections.PlanApprovalInstruction(templates: templates, board)
         );
