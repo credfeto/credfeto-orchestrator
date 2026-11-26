@@ -24,6 +24,11 @@ public static class StateCommandParser
     public const string Sha = "sha";
     public const string MinSamples = "min-samples";
     public const string File = "file";
+    public const string Count = "count";
+    public const string Total = "total";
+    public const string Idle = "idle";
+    public const string Reset = "reset";
+    public const string Status = "status";
 
     private const string OPTION_PREFIX = "--";
 
@@ -43,6 +48,12 @@ public static class StateCommandParser
         ["pull-duration-baseline"] = new(StateQuery.PULL_DURATION_BASELINE, [StateDirectory, Owner, MinSamples]),
         ["rate-limit"] = new(StateQuery.RATE_LIMIT, [StateDirectory, Owner]),
         ["session-denials-summary"] = new(StateQuery.SESSION_DENIALS_SUMMARY, [File]),
+        ["save-infra-failures"] = new(StateQuery.SAVE_INFRA_FAILURES, [SessionDirectory, ItemType, ItemId, Count]),
+        ["save-invocations"] = new(StateQuery.SAVE_INVOCATIONS, [SessionDirectory, ItemType, ItemId, Total, Idle]),
+        ["save-env-unblock-attempts"] = new(StateQuery.SAVE_ENV_UNBLOCK_ATTEMPTS, [SessionDirectory, ItemId, Total]),
+        ["save-rate-limit"] = new(StateQuery.SAVE_RATE_LIMIT, [StateDirectory, Owner, Reset]),
+        ["save-precheck-result"] = new(StateQuery.SAVE_PRECHECK_RESULT, [SessionDirectory, Key, Sha, Status]),
+        ["save-last-diagnostic"] = new(StateQuery.SAVE_LAST_DIAGNOSTIC, [SessionDirectory, ItemType, ItemId]),
     };
 
     public static string QueryNames => string.Join(separator: ", ", values: Queries.Keys);
@@ -110,13 +121,11 @@ public static class StateCommandParser
 
     private static string Check(StateQuery query, IReadOnlyDictionary<string, string> options)
     {
-        if (
-            query == StateQuery.INVOCATIONS
-            && !StringComparer.Ordinal.Equals(x: options[ItemType], y: PullRequest)
-            && !StringComparer.Ordinal.Equals(x: options[ItemType], y: Issue)
-        )
+        if (query is StateQuery.INVOCATIONS or StateQuery.SAVE_INVOCATIONS && !IsInvocationType(options[ItemType]))
         {
-            return $"state invocations --type must be {PullRequest} or {Issue}";
+            string name = query == StateQuery.INVOCATIONS ? "invocations" : "save-invocations";
+
+            return $"state {name} --type must be {PullRequest} or {Issue}";
         }
 
         if (query == StateQuery.MARKER && !MarkerKinds.Contains(value: options[Kind], comparer: StringComparer.Ordinal))
@@ -125,6 +134,12 @@ public static class StateCommandParser
         }
 
         return string.Empty;
+    }
+
+    private static bool IsInvocationType(string itemType)
+    {
+        return StringComparer.Ordinal.Equals(x: itemType, y: PullRequest)
+            || StringComparer.Ordinal.Equals(x: itemType, y: Issue);
     }
 
     private static string Describe(Definition definition)

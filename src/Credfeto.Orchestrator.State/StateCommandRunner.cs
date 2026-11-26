@@ -8,7 +8,8 @@ using System.Threading.Tasks;
 namespace Credfeto.Orchestrator.State;
 
 // credfeto-orchestrator state ...: answers a read-only lib/state query from the same state file, printing what the
-// shell function prints (or leaves in its global), byte for byte, and exiting with the status it returns
+// shell function prints (or leaves in its global), byte for byte, and exiting with the status it returns; or writes a
+// state file as its lib/state function writes it, printing nothing
 public sealed class StateCommandRunner
 {
     public const int Usage = 2;
@@ -16,7 +17,7 @@ public sealed class StateCommandRunner
     // The query cannot be answered exactly as bash would answer it, so lib/state answers it in bash
     public const int Refused = 3;
 
-    // The answer could not be written
+    // The answer, or the state file, could not be written
     public const int Failed = 125;
 
     // Stopped by SIGINT or SIGTERM
@@ -33,6 +34,15 @@ public sealed class StateCommandRunner
                credfeto-orchestrator state pull-duration-baseline --state-dir <dir> --owner <owner> --min-samples <n>
                credfeto-orchestrator state rate-limit --state-dir <dir> --owner <owner>
                credfeto-orchestrator state session-denials-summary --file <file>
+               credfeto-orchestrator state save-infra-failures --session-dir <dir> --type <type> --id <id>
+                   --count <n>
+               credfeto-orchestrator state save-invocations --session-dir <dir> --type <type> --id <id> --total <n>
+                   --idle <n>
+               credfeto-orchestrator state save-env-unblock-attempts --session-dir <dir> --id <id> --total <n>
+               credfeto-orchestrator state save-rate-limit --state-dir <dir> --owner <owner> --reset <unix time>
+               credfeto-orchestrator state save-precheck-result --session-dir <dir> --key <key> --sha <sha>
+                   --status <status>
+               credfeto-orchestrator state save-last-diagnostic --session-dir <dir> --type <type> --id <id> < text
 
         Each query reads the state file its lib/state function reads (--session-dir is SESSION_BASE_DIR, --state-dir
         ORCHESTRATOR_STATE_DIR) and prints what the function prints, or leaves in its global: infra-failures
@@ -43,22 +53,38 @@ public sealed class StateCommandRunner
         pull-duration-baseline pull_duration_baseline, rate-limit is_owner_rate_limited and session-denials-summary
         summarise_session_denials_day.
 
-        Exit codes: 0 or 1 the answer; 4 (rate-limit) not rate-limited and the file is stale, so the caller removes
-        it; 2 a usage error; 3 the query cannot be answered exactly as bash would (an argument that is not UTF-8, a
-        file that cannot be read or holds a NUL byte, or text bash reads by the locale's rules), so lib/state answers
-        it; 125 the answer could not be written.
+        Each save- command writes the file its lib/state function writes, with the same bytes, and leaves it with the
+        mode, owner and group that function's write leaves: save-infra-failures save_infra_failure_count,
+        save-invocations save_pr_invocation_counts or save_issue_invocation_counts, save-env-unblock-attempts
+        save_env_unblock_attempts, save-rate-limit save_rate_limit, save-precheck-result save_precheck_result and
+        save-last-diagnostic save_last_diagnostic, whose text is stdin up to the newline a here-string ends it with.
+        The file is replaced by renaming a complete copy over it, so it is never seen half written.
+
+        Exit codes: 0 or 1 the answer, 0 written; 4 (rate-limit) not rate-limited and the file is stale, so the caller
+        removes it; 2 a usage error; 3 the query cannot be answered exactly as bash would (an argument that is not
+        UTF-8, a file that cannot be read or holds a NUL byte, or text bash reads by the locale's rules), so lib/state
+        answers it, or a write a rename would leave differently from bash's (no directory yet, a link, a directory, a
+        file with more than one link or that cannot be written, another owner or group, or a part of the file name
+        holding a slash), so lib/state writes it; 125 the answer or the file could not be written, and a file is as it
+        was.
         """;
 
+    private readonly Func<Stream> _input;
     private readonly StateQueries _queries;
 
     public StateCommandRunner(StateQueries queries)
+        : this(queries: queries, input: () => Stream.Null) { }
+
+    // input opens what save-last-diagnostic reads its text from
+    public StateCommandRunner(StateQueries queries, Func<Stream> input)
     {
         this._queries = queries;
+        this._input = input;
     }
 
     public static StateCommandRunner CreateDefault()
     {
-        return new(new StateQueries(TimeProvider.System));
+        return new(queries: new StateQueries(TimeProvider.System), input: Console.OpenStandardInput);
     }
 
     public async ValueTask<int> RunAsync(
@@ -81,6 +107,12 @@ public sealed class StateCommandRunner
         try
         {
             RefuseReplacedArguments(command);
+
+            if (StateWrites.Handles(command.Query))
+            {
+                return await this.WriteAsync(command: command, cancellationToken: cancellationToken);
+            }
+
             StateResult answer = await this.AnswerAsync(command: command, cancellationToken: cancellationToken);
             await output.WriteAsync(answer.Output, cancellationToken);
             await output.FlushAsync(cancellationToken);
@@ -99,6 +131,14 @@ public sealed class StateCommandRunner
         {
             return await FailAsync(error: error, message: exception.Message, status: Failed, cancellationToken);
         }
+    }
+
+    private async ValueTask<int> WriteAsync(StateCommand command, CancellationToken cancellationToken)
+    {
+        await using Stream input = this._input();
+        await StateWrites.WriteAsync(command: command, input: input, cancellationToken: cancellationToken);
+
+        return StateQueries.Answered;
     }
 
     // An argument that was not UTF-8 reaches .NET with U+FFFD in place of the bad bytes, so it no longer names the

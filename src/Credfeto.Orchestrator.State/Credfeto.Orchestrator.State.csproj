@@ -1,10 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <!-- The LibraryImport stub for statx(2) (UnixFiles) is generated as unsafe code -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AnalysisLevel>latest</AnalysisLevel>
     <AnalysisMode>AllEnabledByDefault</AnalysisMode>
     <CodeAnalysisTreatWarningsAsErrors>true</CodeAnalysisTreatWarningsAsErrors>
     <DebuggerSupport>true</DebuggerSupport>
-    <Description>Credfeto Orchestrator state: the read-only queries over the state files oneshot keeps between ticks</Description>
+    <Description>Credfeto Orchestrator state: the read-only queries over the state files oneshot keeps between ticks, and the writes of the counters, the rate-limit reset, the pre-check record and the last diagnostic</Description>
     <DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
     <EnableTrimAnalyzer>true</EnableTrimAnalyzer>

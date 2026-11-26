@@ -183,7 +183,7 @@ public sealed class StateParityTests : TestBase
         List<string> paths = [];
         AddEntries(directory: new(state), relative: ".", paths: paths);
 
-        return [.. paths.Select(Encoding.UTF8.GetBytes).Order(ByteOrder.Instance).Select(Escape)];
+        return [.. paths.Select(Encoding.UTF8.GetBytes).Order(ByteOrder.Instance).Select(PrintfEscapes.Encode)];
     }
 
     private static void AddEntries(DirectoryInfo directory, string relative, List<string> paths)
@@ -197,38 +197,6 @@ public sealed class StateParityTests : TestBase
             {
                 AddEntries(directory: subdirectory, relative: path, paths: paths);
             }
-        }
-    }
-
-    private static string Escape(byte[] bytes)
-    {
-        StringBuilder text = new();
-
-        foreach (byte value in bytes)
-        {
-            text.Append(
-                value switch
-                {
-                    (byte)'\n' => "\\n",
-                    (byte)'\r' => "\\r",
-                    (byte)'\t' => "\\t",
-                    (byte)'\\' => "\\\\",
-                    >= 0x20 and <= 0x7e => ((char)value).ToString(),
-                    _ => "\\x" + value.ToString(format: "x2", provider: CultureInfo.InvariantCulture),
-                }
-            );
-        }
-
-        return text.ToString();
-    }
-
-    private sealed class ByteOrder : IComparer<byte[]>
-    {
-        public static readonly ByteOrder Instance = new();
-
-        public int Compare(byte[]? x, byte[]? y)
-        {
-            return x.AsSpan().SequenceCompareTo(y);
         }
     }
 }
