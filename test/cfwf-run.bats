@@ -776,7 +776,12 @@ run_cfwf_run() {
         run "${SCRIPT}" ${invocation}
         [ "${status}" -eq 0 ]
         [[ "${output}" == "${RUN_LOG_USAGE}"$'\n'* ]]
-        [[ "${output}" == *"--lines  The most of the last lines of each failed step kept, from 1 to 2000 (default 200)."* ]]
+        [[ "${output}" == *"--lines        The most of the last lines of each failed step kept, from 1 to 2000 (default 200);"* ]]
+        [[ "${output}" == *"--context      With --grep: also print this many lines either side of each match, from 0 to 20"* ]]
+        [[ "${output}" == *"--max-matches  With --grep: the most matches printed, across every failed step, from 1 to 1000"* ]]
+        [[ "${output}" == *"  cfwf run log --repo <owner/repo> --run <id> --grep 'not ok|##\\[error\\]|FAIL' --context 5"* ]]
+        [[ "${output}" == *"  summary jobs=<a> steps=<b> lines=<c> redacted=<d> masked=<e> matches=<f> cut=<g>"* ]]
+        [[ "${output}" == *"  | <n>- <text>   a context line of a match"* ]]
         [[ "${output}" == *"  summary jobs=<a> steps=<b> lines=<c> redacted=<d> masked=<e>"* ]]
         [[ "${output}" == *"[cfwf: line redacted: token]"* ]]
         [[ "${output}" == *"A 40-digit"$'\n'"              commit SHA is kept"* ]]
@@ -792,7 +797,7 @@ run_cfwf_run() {
     run "${SCRIPT}" help
     local listed=$'\n'"  run list                 List a repository's Actions runs for a branch or a commit, newest first"$'\n'
     listed+="  run view                 Print an Actions run's status and jobs (exit 9 when not found)"$'\n'
-    listed+="  run log                  Print the tail of a run's failed steps' logs (exit 4 while it runs, 9 when not found)"$'\n'
+    listed+="  run log                  Print the tail of a run's failed steps' logs, or search them (exit 4 while it runs, 9 when not found)"$'\n'
     listed+="  run rerun                Rerun"
     [[ "${output}" == *"${listed}"* ]]
     [ ! -f "${GH_LOG}" ]
@@ -841,7 +846,13 @@ run_cfwf_run() {
 
     local -a log_cases=("" "${repo}" "--run 123" "${repo} --run 0" "${repo} --run 1 --job 0" "${repo} --run 1 --job x"
         "${repo} --run 1 --lines 0" "${repo} --run 1 --lines 2001" "${repo} --run 1 --lines 1 --lines 2"
-        "${repo} --run 1 --log" "${repo} --run 1 --json x" "${repo} --run 1 --attempt 1" "${repo} --run 1 --branch main")
+        "${repo} --run 1 --log" "${repo} --run 1 --json x" "${repo} --run 1 --attempt 1" "${repo} --run 1 --branch main"
+        "${repo} --run 1 --grep (" "${repo} --run 1 --grep x --grep y"
+        "${repo} --run 1 --grep x --lines 3" "${repo} --run 1 --grep x --from-line 2"
+        "${repo} --run 1 --context 1" "${repo} --run 1 --max-matches 5" "${repo} --run 1 --grep x --context 21"
+        "${repo} --run 1 --grep x --context -1" "${repo} --run 1 --grep x --context x" "${repo} --run 1 --grep x --max-matches 0"
+        "${repo} --run 1 --grep x --max-matches 1001" "${repo} --run 1 --from-line 0" "${repo} --run 1 --from-line x"
+        "${repo} --run 1 --from-line 1 --from-line 2" "${repo} --run 1 --grep")
     for args in "${log_cases[@]}"; do
         # shellcheck disable=SC2086  # each case is split into its words on purpose
         run --separate-stderr "${SCRIPT}" run log ${args}
@@ -851,6 +862,25 @@ run_cfwf_run() {
     done
     run_cfwf_run log --repo "${REPO}" --run 1 --lines 2001
     [[ "${stderr}" == "cfwf: invalid value for --lines: it must be a number from 1 to 2000"$'\n'* ]]
+    run_cfwf_run log --repo "${REPO}" --run 1 --grep x --context 21
+    [[ "${stderr}" == "cfwf: invalid value for --context: it must be a number from 0 to 20"$'\n'* ]]
+    run_cfwf_run log --repo "${REPO}" --run 1 --grep x --max-matches 1001
+    [[ "${stderr}" == "cfwf: invalid value for --max-matches: it must be a number from 1 to 1000"$'\n'* ]]
+    run_cfwf_run log --repo "${REPO}" --run 1 --grep x --lines 3
+    [[ "${stderr}" == "cfwf: --grep cannot be given with --lines or --from-line"$'\n'* ]]
+    run_cfwf_run log --repo "${REPO}" --run 1 --context 1
+    [[ "${stderr}" == "cfwf: --context and --max-matches need --grep"$'\n'* ]]
+    local pattern
+    for pattern in "" $'a\x01b' $'a\tb' "$(printf 'a%.0s' $(seq 1 257))" "(" "a[" ; do
+        run_cfwf_run log --repo "${REPO}" --run 1 --grep "${pattern}"
+        [ "${status}" -eq 2 ] || { echo "run log accepted the pattern: ${pattern} (${status})" >&2; return 1; }
+        [ -z "${output}" ]
+        [[ "${stderr}" == "cfwf: "*$'\n\n'"${RUN_LOG_USAGE}"$'\n'* ]]
+    done
+    local hidden="(ghp_${RANDOM}zz"
+    run_cfwf_run log --repo "${REPO}" --run 1 --grep "${hidden}"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" != *"${hidden}"* ]]
 
     local secret="ghp_${RANDOM}abcdefghijklmnopqrstuvwxyz0123456789"
     run_cfwf_run list --repo "${REPO}" --branch main "${secret}"
@@ -1123,6 +1153,115 @@ run_cfwf_run() {
     run_cfwf_run log --repo "${REPO}" --run 123 --lines 40
     [ "${status}" -eq 0 ]
     [[ "${output}" == *$'\n'"summary jobs=1 steps=6 lines=240 redacted=0 masked=0" ]]
+
+    run_cfwf_run log --repo "${REPO}" --run 123 --grep y --max-matches 1000
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: the failed steps' logs of the run 123 of ${REPO} are "*" bytes, more than the 262144 cfwf prints, so none is printed; use a smaller --context or --max-matches, or --job for one job" ]]
+
+    run_cfwf_run log --repo "${REPO}" --run 123 --grep y --max-matches 100
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *$'\n'"summary jobs=1 steps=6 lines=100 redacted=0 masked=0 matches=360 cut=260" ]]
+}
+
+@test "run log --grep finds a match far outside the tail and prints it with its line number within its step (#1880)" {
+    write_view_run 123 completed failure feat/x
+    awk 'BEGIN { for (n = 1; n <= 4000; n++) printf "build\ttest\t%s\n", (n == 1978 ? "not ok 7 the thing" : "ok " n) }' | write_run_log 123
+    run_cfwf_run log --repo "${REPO}" --run 123
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"not ok"* ]]
+
+    run_cfwf_run log --repo "${REPO}" --run 123 --grep 'not ok'
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = $'== job build step test\n| 1978: not ok 7 the thing\nsummary jobs=1 steps=1 lines=1 redacted=0 masked=0 matches=1 cut=0' ]
+    [ "$(gh_call_count "run view 123 --repo ${REPO} --log-failed")" -eq 2 ]
+}
+
+@test "run log --grep --context prints numbered context lines, merges overlapping groups and marks a gap with | --, per step (#1880)" {
+    write_view_run 123 completed failure feat/x
+    {
+        printf 'build\ta\tx1\nlint\tb\ty1\nbuild\ta\tx2\nbuild\ta\tFAIL one\nlint\tb\tFAIL b\nbuild\ta\tx4\n'
+        printf 'build\ta\tFAIL two\nbuild\ta\tx6\nlint\tb\ty3\nlint\tc\tnothing here\n'
+        printf 'build\ta\tx7\nbuild\ta\tx8\nbuild\ta\tx9\nbuild\ta\tFAIL three\nbuild\ta\tx11\n'
+    } | write_run_log 123
+    run_cfwf_run log --repo "${REPO}" --run 123 --grep FAIL --context 1
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    local expected=$'== job build step a\n| 2- x2\n| 3: FAIL one\n| 4- x4\n| 5: FAIL two\n| 6- x6\n| --\n| 9- x9\n| 10: FAIL three\n| 11- x11\n'
+    expected+=$'== job lint step b\n| 1- y1\n| 2: FAIL b\n| 3- y3\n'
+    expected+="summary jobs=2 steps=2 lines=11 redacted=0 masked=0 matches=4 cut=0"
+    [ "${output}" = "${expected}" ]
+}
+
+@test "run log --max-matches caps the matches printed across the log, counting the rest as cut, and a later match can still show as context (#1880)" {
+    write_view_run 123 completed failure feat/x
+    printf 'build\ttest\t%s\n' l1 l2 l3 'FAIL a' l5 'FAIL b' l7 'FAIL c' l9 l10 l11 'FAIL d' | write_run_log 123
+    run_cfwf_run log --repo "${REPO}" --run 123 --grep FAIL --context 2 --max-matches 2
+    [ "${status}" -eq 0 ]
+    local expected=$'== job build step test\n| 2- l2\n| 3- l3\n| 4: FAIL a\n| 5- l5\n| 6: FAIL b\n| 7- l7\n| 8- FAIL c\n'
+    expected+="summary jobs=1 steps=1 lines=7 redacted=0 masked=0 matches=4 cut=2"
+    [ "${output}" = "${expected}" ]
+}
+
+@test "run log --grep that matches nothing prints only the summary and exits 0, and takes a 256-byte pattern (#1880)" {
+    write_view_run 123 completed failure feat/x
+    printf 'build\ttest\tall fine\n' | write_run_log 123
+    run_cfwf_run log --repo "${REPO}" --run 123 --grep "$(printf 'a%.0s' $(seq 1 256))"
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "summary jobs=0 steps=0 lines=0 redacted=0 masked=0 matches=0 cut=0" ]
+}
+
+@test "run log --grep takes backslashes as the pattern gives them, so an escaped bracket matches a literal ##[error] line (#1880)" {
+    write_view_run 123 completed failure feat/x
+    printf 'build\ttest\t%s\n' 'ok 1' '##[error]Process completed with exit code 1.' '#error' '##e' 'not ok 2 thing' | write_run_log 123
+    run_cfwf_run log --repo "${REPO}" --run 123 --grep 'not ok|##\[error\]|FAIL'
+    [ "${status}" -eq 0 ]
+    local expected=$'== job build step test\n| 2: ##[error]Process completed with exit code 1.\n| 5: not ok 2 thing\n'
+    expected+="summary jobs=1 steps=1 lines=2 redacted=0 masked=0 matches=2 cut=0"
+    [ "${output}" = "${expected}" ]
+}
+
+@test "run log --grep takes POSIX intervals and bracket classes as grep -E does, and --context 0 as no context (#1880)" {
+    write_view_run 123 completed failure feat/x
+    printf 'build\ttest\t%s\n' 'aa' 'a{2}' 'a b' 'ab' | write_run_log 123
+    run_cfwf_run log --repo "${REPO}" --run 123 --grep '^a{2}$'
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'== job build step test\n| 1: aa\nsummary jobs=1 steps=1 lines=1 redacted=0 masked=0 matches=1 cut=0' ]
+    run_cfwf_run log --repo "${REPO}" --run 123 --grep 'a[[:space:]]b' --context 0
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'== job build step test\n| 3: a b\nsummary jobs=1 steps=1 lines=1 redacted=0 masked=0 matches=1 cut=0' ]
+}
+
+@test "run log --grep still redacts a token line, masks long runs and makes text printable, keeping each line's number (#1880)" {
+    write_view_run 123 completed failure feat/x
+    local token="ghp_${RANDOM}abcdefghijklmnopqrstuvwxyz0123456789"
+    {
+        printf 'build\tstep\tusing %s token\n' "${token}"
+        printf 'build\tstep\thex %s1 token\n' "${RUN_SHA}"
+        printf 'build\tstep\t\033[31mred\033[0m\ttoken\n'
+        printf 'build\tstep\tskipped\n'
+    } | write_run_log 123
+    run_cfwf_run log --repo "${REPO}" --run 123 --grep '^red token$|token$'
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"${token}"* ]]
+    local expected=$'== job build step step\n| 1: [cfwf: line redacted: token]\n| 2: hex *** token\n| 3: red token\n'
+    expected+="summary jobs=1 steps=1 lines=3 redacted=1 masked=1 matches=3 cut=0"
+    [ "${output}" = "${expected}" ]
+}
+
+@test "run log --from-line prints a numbered window of each failed step, --lines long, and no header for a step too short for it (#1880)" {
+    write_view_run 123 completed failure feat/x
+    printf 'build\ta\ta1\nbuild\tb\tb1\nbuild\ta\ta2\nbuild\ta\ta3\nbuild\tb\tb2\nbuild\ta\ta4\nbuild\ta\t\nbuild\ta\ta6\n' | write_run_log 123
+    run_cfwf_run log --repo "${REPO}" --run 123 --from-line 3 --lines 2
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = $'== job build step a\n| 3: a3\n| 4: a4\nsummary jobs=1 steps=1 lines=2 redacted=0 masked=0' ]
+
+    run_cfwf_run log --repo "${REPO}" --run 123 --from-line 2
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'== job build step a\n| 2: a2\n| 3: a3\n| 4: a4\n| 5:\n| 6: a6\n== job build step b\n| 2: b2\nsummary jobs=1 steps=2 lines=6 redacted=0 masked=0' ]
 }
 
 @test "run list, run view and run log fail (exit 1) when gh is not installed, after the options are checked" {
