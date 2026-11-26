@@ -31,8 +31,8 @@ Steps:
 {{plan_approval_check}}
 3. (Plan mode) Read the issue and all comments. If any comment contains an unanswered question, answer it, mark the issue as Blocked, and STOP:
      cfwf label add --repo {{repo_full}} --issue {{item_id}} --label Blocked
-   Otherwise, using /plan produce a concrete implementation plan and post it as an issue comment in EXACTLY this format, using plain ASCII only (hyphens, not dashes or symbols). Post it with this one command and no other form (no --body, no Write, no temp file), as a single Bash call (#1658):
-     cfwf comment add --repo {{repo_full}} --issue {{item_id}} --body-file - <<'PLAN'
+   Otherwise, using /plan produce a concrete implementation plan and post it in EXACTLY this format, using plain ASCII only (hyphens, not dashes or symbols). Post it with this one command and no other form (no cfwf comment add, no --body, no Write, no temp file), as a single Bash call (#1658). In one call it posts the plan as an issue comment, then adds the Blocked label, then moves the issue to Planning on the Workflow board (#2092):
+     cfwf issue post-plan --repo {{repo_full}} --issue {{item_id}} --body-file - <<'PLAN'
      <the plan, exactly as below>
      PLAN
 
@@ -53,9 +53,9 @@ Steps:
 ### Open questions
 <list or "None - ready to proceed pending approval">
 
-4. Only once the plan is confirmed posted (cfwf comment add printed the comment URL, and the step 2 check now prints "plan yes"): mark the issue as Blocked and update the Workflow board status to "Planning"{{board_planning}} (if board data is present above), then STOP — do not continue. {{plan_approval_instruction}}:
-     cfwf label add --repo {{repo_full}} --issue {{item_id}} --label Blocked
-   If the plan could NOT be posted, do NOT add Blocked and do NOT move the board: STOP with the issue unlabelled, so the next cycle plans it again. Blocked with no posted plan leaves a human nothing to approve, and is re-run to plan only once before it waits on a human (#1718).
+4. Once cfwf issue post-plan exits 0 (its first line is the comment URL), the plan is posted, the issue is Blocked and the board is at Planning: STOP — do not continue. Do NOT add Blocked or move the board yourself; post-plan has already done both. {{plan_approval_instruction}}
+   If it exits 8 (refused, nothing written), fix the body as the refusal says (keep the "## Implementation Plan" line exactly as shown) and run it again. If the plan still could NOT be posted, do NOT add Blocked and do NOT move the board: STOP with the issue unlabelled, so the next cycle plans it again. Blocked with no posted plan leaves a human nothing to approve, and is re-run to plan only once before it waits on a human (#1718).
+   If it fails part way (exit 1 after printing the comment URL), the plan IS posted: do NOT post it again, and STOP; the orchestrator marks it Blocked on its next cycle.
 5. (Implementation mode) Proceed with the plan from the plan comment.
 6. Reply to every issue comment that prompted an action with "<one sentence description>"
 7. {{branch_step}}
