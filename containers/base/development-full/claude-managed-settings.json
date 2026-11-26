@@ -10,7 +10,7 @@
       "mcp__kb__*",
       "mcp__codegraph__*",
       "mcp__rider__*",
-      "mcp__webstorm__*",
+      "mcp__datagrip__*",
       "Bash(actionlint *)",
       "Bash(ansible-lint *)",
       "Bash(awk *)",
