@@ -192,6 +192,7 @@
       "NotebookEdit",
       "Read",
       "SendMessage",
+      "Skill(security-review)",
       "SlashCommand",
       "Task",
       "TodoWrite",
