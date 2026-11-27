@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 
 namespace Credfeto.Orchestrator.Commands;
 
@@ -11,6 +12,21 @@ public static class PromptCommandParser
     public const string Verb = "prompt";
 
     private const string MAX = "--max";
+
+    // Every kind name Parse accepts; the tool's --capabilities lists them (Names)
+    private static readonly IReadOnlyDictionary<string, PromptKind> ByName = new Dictionary<string, PromptKind>(
+        StringComparer.Ordinal
+    )
+    {
+        ["issue-claude-md"] = PromptKind.ISSUE_CLAUDE_MD,
+        ["pr-claude-md"] = PromptKind.PULL_REQUEST_CLAUDE_MD,
+        ["issue-launch"] = PromptKind.ISSUE_LAUNCH,
+        ["pr-launch"] = PromptKind.PULL_REQUEST_LAUNCH,
+        ["precheck-section"] = PromptKind.PRECHECK_SECTION,
+        ["check-length"] = PromptKind.CHECK_LENGTH,
+    };
+
+    public static IReadOnlyList<string> Names { get; } = [.. ByName.Keys.Order(StringComparer.Ordinal)];
 
     public static bool IsVerb(IReadOnlyList<string> args)
     {
@@ -55,16 +71,7 @@ public static class PromptCommandParser
 
     private static PromptKind? ParseKind(string kind)
     {
-        return kind switch
-        {
-            "issue-claude-md" => PromptKind.ISSUE_CLAUDE_MD,
-            "pr-claude-md" => PromptKind.PULL_REQUEST_CLAUDE_MD,
-            "issue-launch" => PromptKind.ISSUE_LAUNCH,
-            "pr-launch" => PromptKind.PULL_REQUEST_LAUNCH,
-            "precheck-section" => PromptKind.PRECHECK_SECTION,
-            "check-length" => PromptKind.CHECK_LENGTH,
-            _ => null,
-        };
+        return ByName.TryGetValue(key: kind, value: out PromptKind value) ? value : null;
     }
 
     private static PromptCommand? ParseMaxLength(IReadOnlyList<string> args, out string error)

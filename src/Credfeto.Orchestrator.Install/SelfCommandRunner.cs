@@ -8,7 +8,8 @@ using Credfeto.Orchestrator.Fingerprints;
 namespace Credfeto.Orchestrator.Install;
 
 // credfeto-orchestrator --version | --self-test: what oneshot's self-install (lib/self-install) asks of a binary it
-// has just unpacked, before it points the current link at it
+// has just unpacked, before it points the current link at it; --capabilities: what oneshot asks of the installed
+// binary once a run, so it never calls a command the binary lacks (#2095)
 public sealed class SelfCommandRunner
 {
     public const int Failed = 1;
@@ -23,12 +24,16 @@ public sealed class SelfCommandRunner
     private const string USAGE = """
         Usage: credfeto-orchestrator --version
                credfeto-orchestrator --self-test
+               credfeto-orchestrator --capabilities
 
         --version prints the tool's informational version (the package version, with any +build metadata).
 
         --self-test runs fast offline checks of the tool's own parts against tiny built-in inputs (config resolution,
         JSON parsing and printing, a pull request fingerprint and the embedded prompt templates), printing one line a
         check. It reads no files and makes no network calls.
+
+        --capabilities prints "credfeto-orchestrator capabilities 1", then one line for each command the tool accepts:
+        the verb and the command ("git head-sha"), or "discord payload <kind>" for each payload kind, in ordinal order.
 
         Exit codes: 0 success; 1 a self-test check failed (named on stderr); 2 a usage error.
         """;
@@ -77,6 +82,13 @@ public sealed class SelfCommandRunner
         if (query == SelfQuery.VERSION)
         {
             await output.WriteLineAsync(this._version.AsMemory(), cancellationToken);
+
+            return 0;
+        }
+
+        if (query == SelfQuery.CAPABILITIES)
+        {
+            await output.WriteAsync(ToolCapabilities.Text.AsMemory(), cancellationToken);
 
             return 0;
         }

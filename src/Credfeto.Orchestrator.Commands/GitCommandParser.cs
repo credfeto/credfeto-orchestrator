@@ -26,6 +26,25 @@ public static class GitCommandParser
         "head-sha, current-branch, uncommitted-changes, origin-branch-exists, commits-behind, stale-issue-branch, "
         + "porcelain-status, changed-file-count, stash-head or autostashes-beyond-keep";
 
+    // Every query name Parse accepts; the tool's --capabilities lists them (Names)
+    private static readonly IReadOnlyDictionary<string, GitQuery> ByName = new Dictionary<string, GitQuery>(
+        StringComparer.Ordinal
+    )
+    {
+        ["head-sha"] = GitQuery.HEAD_SHA,
+        ["current-branch"] = GitQuery.CURRENT_BRANCH,
+        ["uncommitted-changes"] = GitQuery.UNCOMMITTED_CHANGES,
+        ["origin-branch-exists"] = GitQuery.ORIGIN_BRANCH_EXISTS,
+        ["commits-behind"] = GitQuery.COMMITS_BEHIND,
+        ["stale-issue-branch"] = GitQuery.STALE_ISSUE_BRANCH,
+        ["porcelain-status"] = GitQuery.PORCELAIN_STATUS,
+        ["changed-file-count"] = GitQuery.CHANGED_FILE_COUNT,
+        ["stash-head"] = GitQuery.STASH_HEAD,
+        ["autostashes-beyond-keep"] = GitQuery.AUTOSTASHES_BEYOND_KEEP,
+    };
+
+    public static IReadOnlyList<string> Names { get; } = [.. ByName.Keys.Order(StringComparer.Ordinal)];
+
     public static bool IsVerb(IReadOnlyList<string> args)
     {
         return args.Count > 0 && StringComparer.Ordinal.Equals(x: args[0], y: Verb);
@@ -71,20 +90,7 @@ public static class GitCommandParser
 
     private static GitQuery? ParseQuery(string query)
     {
-        return query switch
-        {
-            "head-sha" => GitQuery.HEAD_SHA,
-            "current-branch" => GitQuery.CURRENT_BRANCH,
-            "uncommitted-changes" => GitQuery.UNCOMMITTED_CHANGES,
-            "origin-branch-exists" => GitQuery.ORIGIN_BRANCH_EXISTS,
-            "commits-behind" => GitQuery.COMMITS_BEHIND,
-            "stale-issue-branch" => GitQuery.STALE_ISSUE_BRANCH,
-            "porcelain-status" => GitQuery.PORCELAIN_STATUS,
-            "changed-file-count" => GitQuery.CHANGED_FILE_COUNT,
-            "stash-head" => GitQuery.STASH_HEAD,
-            "autostashes-beyond-keep" => GitQuery.AUTOSTASHES_BEYOND_KEEP,
-            _ => null,
-        };
+        return ByName.TryGetValue(key: query, value: out GitQuery value) ? value : null;
     }
 
     private static IReadOnlyList<string> RequiredOptions(GitQuery query)

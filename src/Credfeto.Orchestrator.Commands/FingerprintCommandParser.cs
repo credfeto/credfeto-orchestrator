@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using Credfeto.Orchestrator.Fingerprints;
 
 namespace Credfeto.Orchestrator.Commands;
@@ -14,6 +15,18 @@ public static class FingerprintCommandParser
     private const string REVIEW_COMMENTS_FILE = "--review-comments-file";
     private const string PLAN_APPROVED = "--plan-approved";
     private const string SCHEMA_VERSION = "--schema-version";
+
+    // Every kind name Parse accepts; the tool's --capabilities lists them (Names)
+    private static readonly IReadOnlyDictionary<string, FingerprintKind> ByName = new Dictionary<
+        string,
+        FingerprintKind
+    >(StringComparer.Ordinal)
+    {
+        ["pr"] = FingerprintKind.PULL_REQUEST,
+        ["issue"] = FingerprintKind.ISSUE,
+    };
+
+    public static IReadOnlyList<string> Names { get; } = [.. ByName.Keys.Order(StringComparer.Ordinal)];
 
     public static FingerprintCommand? Parse(IReadOnlyList<string> args, out string error)
     {
@@ -40,12 +53,7 @@ public static class FingerprintCommandParser
 
     private static FingerprintKind? ParseKind(string kind)
     {
-        return kind switch
-        {
-            "pr" => FingerprintKind.PULL_REQUEST,
-            "issue" => FingerprintKind.ISSUE,
-            _ => null,
-        };
+        return ByName.TryGetValue(key: kind, value: out FingerprintKind value) ? value : null;
     }
 
     private static FingerprintCommand? ParseOptions(IReadOnlyList<string> args, FingerprintKind kind, out string error)
