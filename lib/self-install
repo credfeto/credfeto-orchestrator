@@ -309,6 +309,7 @@ _orchestrator_cmd_area_on() {
     local switch
     case "$1" in
         agent) switch=ORCHESTRATOR_DOTNET_AGENTS ;;
+        checks) switch=ORCHESTRATOR_DOTNET_CHECKS ;;
         discord) switch=ORCHESTRATOR_DOTNET_DISCORD ;;
         discovery) switch=ORCHESTRATOR_DOTNET_DISCOVERY ;;
         fingerprint) switch=ORCHESTRATOR_DOTNET_FINGERPRINTS ;;
@@ -341,7 +342,7 @@ check_orchestrator_cmd_capabilities() {
     fi
     local verb text status=0 line version joined
     local -a areas=() missing=()
-    for verb in agent discord discovery fingerprint git github podman predicate prompt state; do
+    for verb in agent checks discord discovery fingerprint git github podman predicate prompt state; do
         _orchestrator_cmd_area_on "${verb}" && areas+=("${verb}")
     done
     [ "${#areas[@]}" -gt 0 ] || return 0

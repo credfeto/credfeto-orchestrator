@@ -1005,7 +1005,12 @@ priority_name_for_rank() {
 # function's header comment) — notify_discord_work_item uses priority_name_for_rank above
 # instead, since it does have the real value (#1375).
 priority_for_labels() {
-    local labels_json="$1"
+    local labels_json="$1" checks_tool_output checks_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_CHECKS}" = 1 ] && _checks_tool_answers priority-for-labels "${labels_json}" \
+        && [ "${checks_tool_status}" = 0 ]; then
+        printf '%s' "${checks_tool_output}"
+        return 0
+    fi
     printf '%s' "${labels_json}" | jq -r '
         ([.[]?.name // empty | ascii_downcase]) as $names
         | if ($names | index("security")) then "Security"

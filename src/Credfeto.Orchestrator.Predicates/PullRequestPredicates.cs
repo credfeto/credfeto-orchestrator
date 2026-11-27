@@ -78,6 +78,14 @@ public static class PullRequestPredicates
         return HasReviewDecision(pullRequestJson: pullRequestJson, decision: "REVIEW_REQUIRED");
     }
 
+    // .autoMergeRequest == null, which pr_next_phase_for_board_status and pr_should_arm_missing_auto_merge ask
+    public static PredicateAnswer HasNoAutoMergeRequest(string pullRequestJson)
+    {
+        return Evaluate(pullRequestJson: pullRequestJson, predicate: static pullRequest =>
+            JqBuiltins.Equal(left: JqOps.Field(value: pullRequest, name: "autoMergeRequest"), right: JqValue.Null)
+        );
+    }
+
     private static PredicateAnswer HasReviewDecision(string pullRequestJson, string decision)
     {
         return Evaluate(pullRequestJson: pullRequestJson, predicate: pullRequest =>

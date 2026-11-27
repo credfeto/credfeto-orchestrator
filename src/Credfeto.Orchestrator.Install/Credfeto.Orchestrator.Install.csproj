@@ -44,6 +44,7 @@
     <ProjectReference Include="../Credfeto.Orchestrator.Fingerprints/Credfeto.Orchestrator.Fingerprints.csproj" />
     <ProjectReference Include="../Credfeto.Orchestrator.Jq/Credfeto.Orchestrator.Jq.csproj" />
     <ProjectReference Include="../Credfeto.Orchestrator.Podman/Credfeto.Orchestrator.Podman.csproj" />
+    <ProjectReference Include="../Credfeto.Orchestrator.Predicates/Credfeto.Orchestrator.Predicates.csproj" />
     <ProjectReference Include="../Credfeto.Orchestrator.Prompts/Credfeto.Orchestrator.Prompts.csproj" />
     <ProjectReference Include="../Credfeto.Orchestrator.State/Credfeto.Orchestrator.State.csproj" />
   </ItemGroup>

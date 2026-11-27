@@ -38,6 +38,34 @@ _predicate_with_orchestrator_cmd() {
     return "${status}"
 }
 
+# Asks `ORCHESTRATOR_CMD checks <query>` (ORCHESTRATOR_DOTNET_CHECKS=1, #252), the .NET port of one of the routing
+# and label reads below and of priority_for_labels (lib/workflow-board), with $2 on stdin as a here-string (the pull
+# request, Issue or labels JSON; empty for a query that reads none) and the further arguments as its options. Returns
+# 0 when the tool answered, with what it printed in checks_tool_output and its status, 0 or 1, in checks_tool_status,
+# both locals of the caller. Returns 1 when the binary does not list the query, and 1 with a warning when the tool
+# fails or refuses (exit 3: an answer the locale or grep could decide otherwise), so the caller answers in bash.
+# test/fixtures/checks-parity.json holds the cases both are tested against.
+_checks_tool_answers() {
+    local query="$1" input="$2" text status
+    shift 2
+    orchestrator_cmd_supports checks "${query}" || return 1
+    # The tool's exit status after a dot keeps the output's own trailing newlines, which $(...) would drop
+    text=$(
+        "${ORCHESTRATOR_CMD}" checks "${query}" "$@" <<< "${input}" 2> /dev/null
+        printf '.%s' "$?"
+    )
+    status=${text##*.}
+    case "${status}" in
+        0 | 1)
+            checks_tool_output=${text%.*}
+            checks_tool_status=${status}
+            return 0
+            ;;
+    esac
+    warn "${ORCHESTRATOR_CMD} checks ${query} failed (exit ${status}); answering it in bash instead"
+    return 1
+}
+
 # Whether the PR still carries the .deleteme.now placeholder a template repo's opening commit adds
 # (agent-roles.instructions.md, Changelog skip case): the real change has not landed, so the PR
 # must never be treated as ready or settled. Only the first 100 files are visible in pr_json, which
@@ -922,7 +950,11 @@ pr_within_idle_budget() {
 # has no review decision at all) a BEHIND PR is not settled and takes the same rebase. Any other
 # merge state may be settled.
 pr_merge_state_allows_settled() {
-    local pr_json="$1" merge_state="$2"
+    local pr_json="$1" merge_state="$2" checks_tool_output checks_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_CHECKS}" = 1 ] \
+        && _checks_tool_answers merge-state-allows-settled "${pr_json}" --merge-state "${merge_state}"; then
+        return "${checks_tool_status}"
+    fi
     case "${merge_state}" in
         DIRTY) return 1 ;;
         BEHIND) pr_json_needs_review_approval "${pr_json}" ;;
@@ -949,6 +981,13 @@ pr_merge_state_allows_settled() {
 # does.
 pr_session_progress_reason() {
     local pre_board="$1" post_board="$2" pre_comment_ts="$3" post_comment_ts="$4" pre_head="$5" post_head="$6"
+    local checks_tool_output checks_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_CHECKS}" = 1 ] && _checks_tool_answers session-progress-reason "" \
+        --pre-board "${pre_board}" --post-board "${post_board}" --pre-comment-ts "${pre_comment_ts}" \
+        --post-comment-ts "${post_comment_ts}" --pre-head "${pre_head}" --post-head "${post_head}"; then
+        printf '%s' "${checks_tool_output}"
+        return "${checks_tool_status}"
+    fi
     if [ -n "${pre_board}" ] && [ -n "${post_board}" ] && [ "${pre_board}" != "Unknown" ] && [ "${post_board}" != "Unknown" ] \
         && [ "${pre_board}" != "${post_board}" ]; then
         printf 'board moved from %s to %s' "${pre_board}" "${post_board}"
@@ -995,6 +1034,11 @@ pr_clean_review_board_advance() {
 # (pr_clean_review_board_advance): the same opening as the comment the phase asks the agent to
 # post, then a note that the orchestrator moved the board. Argument: the status the board moved to.
 pr_clean_review_status_comment() {
+    local checks_tool_output checks_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_CHECKS}" = 1 ] && _checks_tool_answers clean-review-comment "" --status "${1:-}"; then
+        printf '%s' "${checks_tool_output}"
+        return "${checks_tool_status}"
+    fi
     case "$1" in
         "AI Security Review") printf 'Code review clean - advancing to security review (board moved by the orchestrator: the session reported no findings but did not move it)' ;;
         "AI Coverage") printf 'Security review clean, advancing to coverage check (board moved by the orchestrator: the session reported no findings but did not move it)' ;;
@@ -1019,7 +1063,13 @@ pr_clean_review_status_comment() {
 # otherwise a Human Review board would hand the PR PHASE H while the failure may be on a required
 # check nobody is fixing.
 pr_next_phase_for_board_status() {
-    local board_status="$1" pr_json="$2" required_checks_unknown="${3:-false}"
+    local board_status="$1" pr_json="$2" required_checks_unknown="${3:-false}" checks_tool_output checks_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_CHECKS}" = 1 ] && _checks_tool_answers next-phase "${pr_json}" \
+        --board-status "${board_status}" --required-checks-unknown "${required_checks_unknown}"; then
+        [ "${checks_tool_status}" = 0 ] || return 2
+        printf '%s' "${checks_tool_output}"
+        return 0
+    fi
     if pr_json_has_failed_required_check "${pr_json}"; then
         printf 'PHASE C (fix the failed required check)'
         return 0
@@ -1218,7 +1268,10 @@ block_pr_for_ci_timeout() {
 
 # Returns 0 (true) if the pre-fetched JSON contains a label named 'blocked' (case-insensitive).
 _json_has_blocked_label() {
-    local json="$1"
+    local json="$1" checks_tool_output checks_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_CHECKS}" = 1 ] && _checks_tool_answers has-blocked-label "${json}"; then
+        return "${checks_tool_status}"
+    fi
     printf '%s' "${json}" | jq -r '(.labels // [])[] | .name' | grep -qi '^blocked$'
 }
 

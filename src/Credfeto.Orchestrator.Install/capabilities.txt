@@ -1,6 +1,12 @@
 credfeto-orchestrator capabilities 1
 agent ssh-key-state
 agent stop-ssh-agent
+checks clean-review-comment
+checks has-blocked-label
+checks merge-state-allows-settled
+checks next-phase
+checks priority-for-labels
+checks session-progress-reason
 discord item-status
 discord item-status-log
 discord no-work-breakdown
