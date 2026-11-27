@@ -300,3 +300,184 @@ a file
     [[ "${stderr}" == *"Claude reported 2 permission denial(s)"* ]]
     [ "$(cat "${notify_log}")" = $'Issue 42 - Tool: one\n- Tool: two 2' ]
 }
+
+# A stand-in for the tool's text queries: writes its arguments NUL-ended to ${TEST_TMP}/text_args_<n> and its stdin to
+# ${TEST_TMP}/text_stdin_<n> (n counts the calls from 1), prints ${TEST_TMP}/answer and exits with ${TEST_TMP}/status
+make_text_cmd_stub() {
+    make_stub_multiline fake-orchestrator \
+        'n=$(($(cat "${TEST_TMP}/text_calls" 2> /dev/null || printf 0) + 1)); printf "%s" "${n}" > "${TEST_TMP}/text_calls"' \
+        'for a in "$@"; do printf "%s\0" "${a}"; done > "${TEST_TMP}/text_args_${n}"' \
+        'cat > "${TEST_TMP}/text_stdin_${n}"' \
+        'printf "tool stderr\n" >&2' \
+        'if [ -f "${TEST_TMP}/answer" ]; then cat "${TEST_TMP}/answer"; fi' \
+        'if [ -f "${TEST_TMP}/status" ]; then exit "$(cat "${TEST_TMP}/status")"; fi' \
+        'exit 0'
+    export ORCHESTRATOR_CMD=fake-orchestrator
+}
+
+# Prints argument $2 (from 0) of text query call $1
+_text_call_arg() {
+    local -a args
+    mapfile -d '' -t args < "${TEST_TMP}/text_args_$1"
+    printf '%s' "${args[$2]}"
+}
+
+# Prints the pattern array named $1 joined with "|", as lib/podman joins it
+_joined_patterns() {
+    local IFS='|'
+    local -n patterns="$1"
+    printf '%s' "${patterns[*]}"
+}
+
+# Prints text query call $1's arguments, one a line
+_text_call_args() {
+    tr '\0' '\n' < "${TEST_TMP}/text_args_$1"
+}
+
+@test "the text heuristics never run ORCHESTRATOR_CMD while ORCHESTRATOR_DOTNET_PODMAN is off (#252)" {
+    make_text_cmd_stub
+    ORCHESTRATOR_DOTNET_PODMAN=0
+    claude_result_indicates_background_stall "I'll continue automatically"
+    claude_result_indicates_diagnostic_refusal "git push is denied"
+    claude_result_indicates_tool_denied_quit "Bash is denied, so I cannot continue."
+    [ "$(review_result_marker "REVIEW RESULT: CLEAN")" = CLEAN ]
+    claude_result_indicates_clean_review "Code review: no findings."
+    [ ! -f "${TEST_TMP}/text_calls" ]
+}
+
+@test "each text heuristic hands its query, the locale, its patterns and the message to ORCHESTRATOR_CMD podman (#252)" {
+    make_text_cmd_stub
+    ORCHESTRATOR_DOTNET_PODMAN=1
+    _tool_answers "" 1
+    local stall_args
+    LC_ALL=C.UTF-8
+    claude_result_indicates_background_stall $'a message\n' || true
+    claude_result_indicates_diagnostic_refusal "short" || true
+    claude_result_indicates_tool_denied_quit "quit?" || true
+    review_result_marker "marker?" > /dev/null
+    claude_result_indicates_clean_review "clean?" || true
+    [ "$(cat "${TEST_TMP}/text_calls")" = 5 ]
+    stall_args=$(_text_call_args 1)
+    [ "$(printf '%s\n' "${stall_args}" | head -6)" = "podman
+background-stall
+--ctype
+C.UTF-8
+--collate
+C.UTF-8" ]
+    [ "$(_text_call_arg 1 6)" = --pattern ]
+    [[ "$(_text_call_arg 1 7)" == "background.*(wait|still running|pause here)|"* ]]
+    [ "$(od -An -c "${TEST_TMP}/text_stdin_1" | tr -s ' ')" = " a m e s s a g e \n \n" ]
+    [ "$(_text_call_arg 2 1)" = diagnostic-refusal ]
+    [ "$(cat "${TEST_TMP}/text_stdin_2")" = short ]
+    [ "$(_text_call_arg 3 1)" = tool-denied-quit ]
+    [ "$(_text_call_args 3 | sed -n '7p;9p;11p;13p' | tr '\n' ' ')" = "--mention --give-up --workaround --negated " ]
+    [ "$(_text_call_arg 3 7)" = "$(_joined_patterns TOOL_DENIAL_MENTION_PATTERNS)" ]
+    [ "$(_text_call_arg 3 13)" = "$(_joined_patterns TOOL_DENIED_NEGATED_WORKAROUND_PATTERNS)" ]
+    [ "$(_text_call_args 4 | tail -n +2 | sed -n '1p;6,9p' | tr '\n' '|')" = "review-result-marker|--clean-marker|${REVIEW_RESULT_CLEAN_MARKER}|--findings-marker|${REVIEW_RESULT_FINDINGS_MARKER}|" ]
+    [ "$(_text_call_arg 5 1)" = clean-review ]
+    [ "$(_text_call_args 5 | sed -n '7p;9p;11p;13p;15p' | tr '\n' ' ')" = "--clean-marker --findings-marker --clean --findings --negated " ]
+    [ "$(_text_call_arg 5 13)" = "$(_joined_patterns REVIEW_FINDINGS_PATTERNS)" ]
+}
+
+@test "the text heuristics pass the shell's effective LC_CTYPE and LC_COLLATE, exported or not (#252)" {
+    make_text_cmd_stub
+    ORCHESTRATOR_DOTNET_PODMAN=1
+    _tool_answers "" 1
+    (
+        unset LC_ALL LC_CTYPE LC_COLLATE
+        LANG=C.UTF-8
+        claude_result_indicates_background_stall "x" || true
+        LC_CTYPE=C
+        LC_COLLATE=POSIX
+        claude_result_indicates_background_stall "x" || true
+        LC_ALL=C.UTF-8
+        claude_result_indicates_background_stall "x" || true
+        unset LANG LC_ALL LC_CTYPE LC_COLLATE
+        claude_result_indicates_background_stall "x" || true
+    ) 2> /dev/null
+    [ "$(_text_call_args 1 | sed -n '4p;6p' | tr '\n' ' ')" = "C.UTF-8 C.UTF-8 " ]
+    [ "$(_text_call_args 2 | sed -n '4p;6p' | tr '\n' ' ')" = "C POSIX " ]
+    [ "$(_text_call_args 3 | sed -n '4p;6p' | tr '\n' ' ')" = "C.UTF-8 C.UTF-8 " ]
+    [ "$(_text_call_args 4 | sed -n '4p;6p' | tr '\n' '|')" = "||" ]
+}
+
+@test "a text heuristic takes the tool's answer, exit 0 or 1, and hides its stderr (#252)" {
+    make_text_cmd_stub
+    ORCHESTRATOR_DOTNET_PODMAN=1
+    _tool_answers "" 0
+    run --separate-stderr claude_result_indicates_background_stall "no stall here"
+    [ "${status}" -eq 0 ]
+    [ "${stderr}" = "" ]
+    _tool_answers "" 1
+    run --separate-stderr claude_result_indicates_tool_denied_quit "Bash is denied, so I cannot continue."
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "" ]
+    _tool_answers "" 0
+    run claude_result_indicates_clean_review "I fixed two findings."
+    [ "${status}" -eq 0 ]
+    _tool_answers "FINDINGS" 0
+    run --separate-stderr review_result_marker "REVIEW RESULT: CLEAN"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = FINDINGS ]
+    [ "${stderr}" = "" ]
+}
+
+@test "a text heuristic matches in bash, with a warning, when ORCHESTRATOR_CMD refuses, fails or is missing (#252)" {
+    make_text_cmd_stub
+    ORCHESTRATOR_DOTNET_PODMAN=1
+    local exit_code
+    for exit_code in 2 3 125 130 143; do
+        _tool_answers "wrong" "${exit_code}"
+        run --separate-stderr claude_result_indicates_background_stall "I'll continue automatically once it completes"
+        [ "${status}" -eq 0 ]
+        [[ "${stderr}" == *"fake-orchestrator podman background-stall failed (exit ${exit_code}); matching it in bash instead"* ]]
+        run --separate-stderr claude_result_indicates_diagnostic_refusal "done"
+        [ "${status}" -eq 1 ]
+        [[ "${stderr}" == *"podman diagnostic-refusal failed (exit ${exit_code}); matching it in bash instead"* ]]
+        run --separate-stderr claude_result_indicates_tool_denied_quit "Bash is denied, so I cannot continue."
+        [ "${status}" -eq 0 ]
+        [[ "${stderr}" == *"podman tool-denied-quit failed (exit ${exit_code}); matching it in bash instead"* ]]
+        run --separate-stderr review_result_marker $'done\nREVIEW RESULT: CLEAN'
+        [ "${output}" = CLEAN ]
+        [[ "${stderr}" == *"podman review-result-marker failed (exit ${exit_code}); matching it in bash instead"* ]]
+        run --separate-stderr claude_result_indicates_clean_review "Code review: no findings."
+        [ "${status}" -eq 0 ]
+        [[ "${stderr}" == *"podman clean-review failed (exit ${exit_code}); matching it in bash instead"* ]]
+    done
+    ORCHESTRATOR_CMD="${TEST_TMP}/no-such-tool"
+    run --separate-stderr claude_result_indicates_tool_denied_quit "Bash is denied, so I cannot continue."
+    [ "${status}" -eq 0 ]
+    [[ "${stderr}" == *"no-such-tool podman tool-denied-quit failed (exit 127); matching it in bash instead"* ]]
+}
+
+@test "review_result_marker reads the line in bash when the tool exits 1, which it never answers with (#252)" {
+    make_text_cmd_stub
+    ORCHESTRATOR_DOTNET_PODMAN=1
+    _tool_answers "FINDINGS" 1
+    run --separate-stderr review_result_marker "REVIEW RESULT: CLEAN"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = CLEAN ]
+}
+
+@test "the diagnostic refusal's length cap and the clean review's empty test are decided before the tool is asked (#252)" {
+    make_text_cmd_stub
+    ORCHESTRATOR_DOTNET_PODMAN=1
+    _tool_answers "" 0
+    local long
+    printf -v long '%501s' "is denied"
+    run claude_result_indicates_diagnostic_refusal "${long}"
+    [ "${status}" -eq 1 ]
+    run claude_result_indicates_clean_review ""
+    [ "${status}" -eq 1 ]
+    [ ! -f "${TEST_TMP}/text_calls" ]
+}
+
+@test "a clean review the tool refuses reads its result line in bash, without asking the tool again (#252)" {
+    make_text_cmd_stub
+    ORCHESTRATOR_DOTNET_PODMAN=1
+    _tool_answers "" 3
+    run --separate-stderr claude_result_indicates_clean_review $'I fixed it.\nREVIEW RESULT: CLEAN'
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${TEST_TMP}/text_calls")" = 1 ]
+    [ "$(grep -c 'matching it in bash instead' <<< "${stderr}")" -eq 1 ]
+}
