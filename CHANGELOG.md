@@ -10,6 +10,19 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 
 ## [Unreleased]
 ### Security
+### Added
+### Fixed
+### Changed
+### Deprecated
+### Removed
+### Deployment Changes
+
+<!--
+Releases that have at least been deployed to staging, BUT NOT necessarily released to live.  Changes should be moved from [Unreleased] into here as they are merged into the appropriate release branch
+-->
+
+## [0.0.9] - 2026-11-27
+### Security
 - Keep the GitHub, cfwf and kb MCP tokens out of the agent's readable environment: tokens are mounted as root-only files and served to MCP headers helpers by a root-owned broker (#1838)
 - Refuse symlinked, foreign-owned or wrong-mode OAuth token files: a shared token_file_problem check in lib/core is used by read_token_if_safe, validate_config and setup-owner, so a token file is only read when it is a regular file owned by the account that runs the tool with mode 0600 or 0400 (#1839)
 - Split the 992 KB test/cfwf.bats, which made shellcheck run out of memory and could take the host down, into per-subcommand test/cfwf-*.bats files sharing test/cfwf_helper.bash; the shell-tests workflow now shellchecks every test file one at a time under a 2 GB memory cap and a 120 s timeout, and test/shell-file-size.bats fails when a shell file grows past 200 KB (#1982)
@@ -93,15 +106,9 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - SDK - Updated DotNet SDK to 11.0.100
 - build-dotnet MCP docs: the build-dotnet-mcp wrapper comments, development-full README, Claude hooks guide and local instructions now describe the current server: a set but relative or blank BUILD_MCP_REPO_ROOT or BUILD_MCP_LOG_DIR stops it at startup, job logs default to the per-user state folder (in the container too, not the temp scratch mount), and its own git-root fallback does not replace the wrapper's root lookup (#1956)
 - oneshot's GitHub health gate reads githubstatus.com's status summary and skips the tick only for a serious incident on a component sessions use: major or critical impact, or the component in partial or major outage. A minor incident there (the component only degraded) logs `GitHub incident open (<name>, since <time>, <component>: <status>) — minor, continuing` and the tick goes ahead, so a GitHub slowdown no longer stops the fleet; the lookup still fails open; Actions is now a used component too, because CI on it gates PR merges (#1964)
-### Deprecated
 ### Removed
 - `cfwf run rerun` no longer refuses a run on its third attempt or later: the `attempt limit` rule is gone, so a check whose cause was fixed elsewhere (a broken shared CI tool, say) can be rerun however many attempts it has used. The default branch, open pull request head and pending rules are unchanged (#1991)
 - The agent images no longer install PowerShell or the PSScriptAnalyzer module, now that the global pre-commit has dropped its PSScriptAnalyzer hook: the development-dotnet-tools PowerShell install and its version pin, the module install, their sanity and installed-versions checks, the pwsh and run-psscriptanalyzer checks in development-full and the agent image, and the run-psscriptanalyzer agent allow rules are gone (#1925)
-### Deployment Changes
-
-<!--
-Releases that have at least been deployed to staging, BUT NOT necessarily released to live.  Changes should be moved from [Unreleased] into here as they are merged into the appropriate release branch
--->
 
 ## [0.0.8] - 2026-11-04
 ### Fixed
