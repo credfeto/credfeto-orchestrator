@@ -205,6 +205,7 @@ match_nocase() {
 # matching again in bash is safe. The tool's stderr goes to /dev/null.
 _claude_text_tool_answers() {
     local query="$1" result_text="$2" text status
+    orchestrator_cmd_supports podman "${query}" || return 1
     shift 2
     # The tool's exit status after a dot keeps the output's own trailing newlines, which $(...) would drop
     text=$(

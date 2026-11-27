@@ -206,3 +206,88 @@ _warnings() {
         | sed -E 's/^orchestrator_cmd_supports //; s/(;| \|\|)$//' | sort -u)
     [ "${count}" -ge 30 ]
 }
+
+# Messages for the session-outcome text heuristics: a background stall, a refusal, a clean review and one with findings
+_TEXT_MESSAGES=(
+    "The build is running in the background. I'll continue automatically once it completes."
+    "Running git push is denied."
+    $'No issues found.\nREVIEW RESULT: CLEAN'
+    $'REVIEW RESULT: FINDINGS\nThe loop never ends.'
+)
+
+# Prints 1 when the command in its arguments succeeds, 0 when it fails
+_answer() {
+    if "$@"; then printf '1'; else printf '0'; fi
+}
+
+# One run's worth of the session-outcome text heuristics (lib/podman): the once-a-run check, then every heuristic on
+# each message, each in a subshell as the callers do, printing one line of answers per message
+_run_text_cycle() {
+    local message answers
+    check_orchestrator_cmd_capabilities
+    for message in "${_TEXT_MESSAGES[@]}"; do
+        answers=$(
+            _answer claude_result_indicates_background_stall "${message}"
+            _answer claude_result_indicates_diagnostic_refusal "${message}"
+            _answer claude_result_indicates_tool_denied_quit "${message}"
+            _answer claude_result_indicates_clean_review "${message}"
+            printf ' %s' "$(review_result_marker "${message}")"
+        )
+        printf '%s\n' "${answers}"
+    done
+}
+
+@test "a self-installed binary lacking the podman text queries is never asked them, and the run logs it in one line (#2095)" {
+    local expected lines
+    ORCHESTRATOR_DOTNET_PODMAN=1
+    printf 'podman %s\n' background-stall clean-review diagnostic-refusal review-result-marker tool-denied-quit \
+        > "${TEST_TMP}/lacks"
+    _install_stand_in
+    expected=$(ORCHESTRATOR_DOTNET_PODMAN=0 _run_text_cycle)
+    mapfile -t lines <<< "${expected}"
+    [ "${#lines[@]}" -eq 4 ]
+    [[ "${lines[0]}" == 1* ]]
+    [[ "${lines[1]}" == ?1* ]]
+    [[ "${lines[2]}" == *" CLEAN" ]]
+    [[ "${lines[3]}" == *" FINDINGS" ]]
+
+    run --separate-stderr _run_text_cycle
+
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${expected}" ]
+    [ "$(_warnings | wc -l)" -eq 1 ]
+    [[ "$(_warnings)" == *"Credfeto.Orchestrator.Cmd 9.9.9-main is older than this checkout and lacks podman background-stall, podman clean-review, podman diagnostic-refusal, podman review-result-marker, podman tool-denied-quit, so those run in bash this run" ]]
+    [[ "${stderr}" != *Usage* ]]
+    [[ "${stderr}" != *expected:* ]]
+    [ "$(cat "${TEST_TMP}/calls")" = "--capabilities" ]
+}
+
+@test "a self-installed binary that predates --capabilities is never asked a podman text query (#2095)" {
+    local expected
+    ORCHESTRATOR_DOTNET_PODMAN=1
+    _install_stand_in old
+    expected=$(ORCHESTRATOR_DOTNET_PODMAN=0 _run_text_cycle)
+
+    run --separate-stderr _run_text_cycle
+
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${expected}" ]
+    [ "$(_warnings | wc -l)" -eq 1 ]
+    [[ "$(_warnings)" == *"Credfeto.Orchestrator.Cmd 9.9.9-main does not list its capabilities (it is older than this checkout), so podman run in bash this run" ]]
+    [[ "${stderr}" != *Usage* ]]
+    [ "$(cat "${TEST_TMP}/calls")" = "--capabilities" ]
+}
+
+@test "a self-installed binary that lists the podman text queries is asked them, and nothing is logged (#2095)" {
+    local query
+    ORCHESTRATOR_DOTNET_PODMAN=1
+    _install_stand_in
+
+    run --separate-stderr _run_text_cycle
+
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    for query in background-stall diagnostic-refusal tool-denied-quit clean-review review-result-marker; do
+        [ "$(grep -c "^podman ${query} " "${TEST_TMP}/calls")" -eq "${#_TEXT_MESSAGES[@]}" ]
+    done
+}

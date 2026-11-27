@@ -48,12 +48,17 @@ github pr-commit-authors
 github pr-issue-comments
 github pr-review-comments
 github whoami
+podman background-stall
+podman clean-review
 podman container-exists
 podman container-running
 podman denials-summary
 podman denied-command-names
+podman diagnostic-refusal
 podman image-exists
 podman image-sha
+podman review-result-marker
+podman tool-denied-quit
 predicate issue-has-human-plan-approval
 predicate issue-has-plan-comment
 predicate pr-annotate-required-checks
