@@ -23,458 +23,458 @@ Releases that have at least been deployed to staging, BUT NOT necessarily releas
 
 ## [0.0.9] - 2026-11-27
 ### Security
-- Keep the GitHub, cfwf and kb MCP tokens out of the agent's readable environment: tokens are mounted as root-only files and served to MCP headers helpers by a root-owned broker (#1838)
-- Refuse symlinked, foreign-owned or wrong-mode OAuth token files: a shared token_file_problem check in lib/core is used by read_token_if_safe, validate_config and setup-owner, so a token file is only read when it is a regular file owned by the account that runs the tool with mode 0600 or 0400 (#1839)
-- Split the 992 KB test/cfwf.bats, which made shellcheck run out of memory and could take the host down, into per-subcommand test/cfwf-*.bats files sharing test/cfwf_helper.bash; the shell-tests workflow now shellchecks every test file one at a time under a 2 GB memory cap and a 120 s timeout, and test/shell-file-size.bats fails when a shell file grows past 200 KB (#1982)
-- The pre-commit pre-check container no longer gets the agent's Claude, GitHub or kb token secrets, GPG signing, database credentials, persistent Claude session state or orchestrator global cache: it keeps the repository mounts, the secret-file masks and the ssh-agent that pre-commit-check needs to fetch origin (#1858)
+- Keep GitHub, cfwf and kb MCP tokens out of the agent environment via a token broker (#1838)
+- Refuse symlinked, foreign-owned or wrong-mode OAuth token files with one shared check (#1839)
+- Split the 992 KB test/cfwf.bats, which ran shellcheck out of memory, into many files (#1982)
+- The pre-commit pre-check container no longer gets the agent's tokens, signing or state (#1858)
 ### Added
-- The development-full sanity check also requires the build-node MCP server binary (the `credfeto.build.node.server` package and an executable `credfeto-build-node`), now that the published development-credfeto-tools image carries it (#1972)
-- Phase 6 of the .NET rewrite of oneshot (#252), third slice: with ORCHESTRATOR_DOTNET_PODMAN=1, the session-outcome text heuristics (background stall, diagnostic refusal, tool-denied quit, the review result line and clean review) ask `credfeto-orchestrator podman background-stall|diagnostic-refusal|tool-denied-quit|review-result-marker|clean-review`, which matches the same lib/globals patterns with a POSIX leftmost-longest matcher, refuses any message, locale or pattern whose answer it cannot guarantee (non-ASCII outside the C locale, a locale other than C, POSIX, C.UTF-8 or en_*.UTF-8, unsupported regular expression syntax), and falls back to bash with a warning. The switch stays off by default and nothing changes while it is off
-- Phase 6 of the .NET rewrite of oneshot (#252), second slice: with ORCHESTRATOR_DOTNET_PODMAN=1, the two reads of the permission denials in a Claude JSON result ask `credfeto-orchestrator podman denials-summary|denied-command-names`, which runs the same jq programs over the file itself: the denial summary, now split out of handle_claude_permission_denials as claude_result_permission_denials_summary, and claude_result_denied_command_names. The tool refuses any file whose answer it cannot be sure matches jq's (not UTF-8, JSON System.Text.Json will not parse, more than one text, a top-level value jq fails on, NUL output, or a printed number that is not a plain integer), and lib/podman then runs the jq with a warning. The switch stays off by default and nothing changes while it is off
-- Phase 9 of the .NET rewrite of oneshot (#252), second slice: with ORCHESTRATOR_DOTNET_AGENTS=1, stop_ssh_agent asks `credfeto-orchestrator agent stop-ssh-agent`, which reads /proc and sends SIGTERM to exactly the processes the bash `pkill -u <user> -f "ssh-agent -a <socket>"` would signal, never itself; it refuses, signalling nothing, a socket path holding a regular-expression special character other than `.` or anything outside printable ASCII, a user name not in /etc/passwd, and any process whose match could depend on a byte outside printable ASCII or on text past byte 4095, and lib/podman then runs pkill with a warning. The switch stays off by default and nothing changes while it is off
-- Phase 9 of the .NET rewrite of oneshot (#252), first slice: the Credfeto.Orchestrator.Agents library asks an ssh-agent for its keys over the ssh-agent protocol, sending only the identities request `ssh-add -l` sends, and judges the reply as ssh-add does. preload_ssh_keys now asks the new ssh_agent_key_state function, and setting ORCHESTRATOR_DOTNET_AGENTS=1 makes that use the tool, falling back to ssh-add for any key type or socket path the tool cannot judge exactly; it is off by default, and shared golden cases test that both give the same status
-- Phase 10 of the .NET rewrite of oneshot (#252), first slice: oneshot can install the tool itself behind ORCHESTRATOR_DOTNET_SELF_INSTALL (off by default). It picks the newest `-main` pre-release of the `credfeto.orchestrator.cmd.linux-x64` package (or the newest stable release, or a pinned ORCHESTRATOR_CMD_VERSION) from a configurable NuGet feed, caches the resolved version, checks the package against the SHA-512 the feed publishes, unpacks only the native binary under the state directory, and switches the `current` link to it only after its `--version` and `--self-test` pass, keeping the previous version. Every failure warns and keeps the installed binary. ORCHESTRATOR_CMD uses the installed binary when the environment does not set it. The tool gains `--version` and `--self-test` (Credfeto.Orchestrator.Install)
-- The development-tools image installs `clang` and `zlib1g-dev`, so agents can run Native AOT `dotnet publish` builds inside the container; the build-time sanity step checks for both (#1861)
-- The `kb` knowledge-base MCP server is installed in the development-full agent image with its tools allowed as `mcp__kb__*`, and the image sanity check requires it and pins it exactly, alongside cfwf and build-dotnet; its token is an optional `KB_MCP_TOKEN` in `.env`, passed to each container as a per-container Podman secret and read only by a root-owned headers helper, so it is never written to the image or the managed MCP configuration, a malformed `KB_MCP_TOKEN` in `.env` is warned about and ignored on the host, and a shell-exported `KB_MCP_TOKEN` or Discord webhook URL is no longer left exported to host child processes, and the pre-commit pre-check container no longer receives the kb token (#1791)
-- `install-claude-hooks` installs the same `kb` MCP server on a developer machine, with its token taken from `KB_MCP_TOKEN` or a private `~/.config/kb-mcp/token` file, which is warned about when it is not private, the token file's first non-blank line is used with its surrounding whitespace trimmed, a dangling token-file symlink is reported as not private, a host entry identical to a shipped server merges silently, and a left-out duplicate holding a literal secret is warned about (#1791)
-- oneshot skips the whole tick (logs one line and exits 0) while githubstatus.com has an unresolved incident on Git Operations, Pull Requests, Issues, API Requests or Webhooks, so no session runs and no idle budget is charged during an outage. The lookup fails open, and the agent pre-flight SSH-auth message now says it can be a Git Operations outage. As a second guard, when a session's pre-flight fails on GitHub SSH auth, oneshot treats it as a likely GitHub outage: it logs one line, picks no further items that tick and exits 0 (the attempt is still not counted against the invocation budget) - #1846
-- The development-tools agent image installs the CodeGraph code-knowledge-graph CLI at a pinned release, verified against its SHA256 checksum before extraction and bumped daily by the pinned-tool bump workflow like the other curl-installed tools, and the development-full image inherits it and registers it as a managed `codegraph` MCP server with its tools allowed as `mcp__codegraph__*`, with its sanity check requiring both; agents have no shell access to codegraph and use only that MCP tool. Each work item's CodeGraph index is kept outside the checkout in the orchestrator state directory, shared by an Issue and its PR, purged after 14 days idle, and mounted at the checkout's `.codegraph` for agent sessions only. The entrypoint builds a missing index within a time limit, `CODEGRAPH_INIT_TIMEOUT_SECS` (default 900 seconds, set in lib/globals and passed into the agent container), so a hung build cannot use up the session's own time limit, and adds `.codegraph/` to the checkout's `.git/info/exclude`; a failed or timed-out index build only logs a warning and the session starts without an index, which never stops the session. When the checkout tracks files under `.codegraph`, CodeGraph is skipped entirely for that session with a warning: no index is mounted, built or cleared, and no exclude entry is added, so those tracked files are never touched. A new docs/codegraph.md rollout guide describes setting CodeGraph up across repositories (#1882)
-- Phase 1 of the .NET rewrite of oneshot (#252): the Credfeto.Orchestrator.Cmd dotnet tool (trimmed, Native AOT) with its configuration, jq and fingerprint libraries. Setting ORCHESTRATOR_DOTNET_FINGERPRINTS=1 makes oneshot compute Issue and PR fingerprints with the tool (ORCHESTRATOR_CMD, default credfeto-orchestrator) instead of jq; it is off by default, so nothing changes until an operator opts in, and shared golden cases test that both produce identical fingerprints
-- Phase 2 of the .NET rewrite of oneshot (#252), first slice: the Credfeto.Orchestrator.GitHub library, an MCP client that makes GitHub reads as tool calls to the cfwf MCP server (ORCHESTRATOR_CFWF_MCP_URL) with the same Authorization header as the agent's cfwf-mcp-headers helper. Setting ORCHESTRATOR_DOTNET_GITHUB=1 makes oneshot list and count the open pull requests on a head branch and check whether a branch requires status checks with the tool instead of gh; it is off by default, and shared golden cases test that both give identical answers
-- A new `changelog` managed MCP server runs the Credfeto.ChangeLog.Mcp dotnet tool next to `build-dotnet`, so agents in the development-full image can read and edit CHANGELOG.md through it instead of a shell. The development-credfeto-tools image installs the tool and the development-full image registers it behind a root-owned launcher that starts from the repository root. `install-claude-hooks` installs the same server on a developer machine, but a local tool starts from $HOME and needs CHANGELOG_MCP_REPO_ROOT, which no released Credfeto.ChangeLog.Mcp reads yet (credfeto/credfeto-changelog-manager#403) (#1936)
-- A new `build-node` managed MCP server runs the Credfeto.Build.Node.Server dotnet tool, the Node build, test and coverage server, next to `build-dotnet`. The development-credfeto-tools image installs the tool behind the tools cache bust and checks it at build time, both tool-tracking workflows watch the package, and the development-full image registers it behind a root-owned `build-node-mcp` launcher, a copy of `build-dotnet-mcp` without the .NET SDK preview-message setting, with its tools allowed as `mcp__build-node__*` and its sanity check requiring the entry, the launcher and the allow rule. `install-claude-hooks` installs the same launcher on a developer machine (#1970)
-- Phase 3 of the .NET rewrite of oneshot (#252), predicates slice: the Credfeto.Orchestrator.Predicates library ports the pure lib/github-status predicates and reads (terminal, pending, failed and only-passed checks, required-check annotation, trusted comment activity, review decisions, plan comment and human plan approval, env-block image SHA, lowest closing issue) onto Credfeto.Orchestrator.Jq. Setting ORCHESTRATOR_DOTNET_PREDICATES=1 makes oneshot answer them with the tool's predicate commands instead of jq; it is off by default, a missing or failing tool reads as false as a jq failure does, and shared golden cases, including adversarial plan-approval cases, test that both give identical answers
-- Phase 2 of the .NET rewrite of oneshot (#252), next slice: with ORCHESTRATOR_DOTNET_GITHUB=1, list_bot_created_open_prs lists the orchestrator's own open pull requests (authored by the agent or the pull request bot, Blocked ones left out unless asked) with the tool's github own-open-prs read through the cfwf MCP server's pr_list instead of gh; off by default, and shared golden cases test that both give the same numbers
-- Phase 6 of the .NET rewrite of oneshot (#252), first slice: the Credfeto.Orchestrator.Podman library answers the read-only lib/podman queries (the agent image's IMAGE_SHA_DEVELOPMENT_AGENT, whether the agent container exists or is running, and whether the agent image is in local storage) by running the same podman commands as a process. Setting ORCHESTRATOR_DOTNET_PODMAN=1 makes lib/podman ask the tool, falling back to bash with a warning for any query the tool cannot answer exactly; it is off by default, and shared golden cases run both sides against a scripted podman stand-in and check that they print, return and call the same
-- Phase 5 of the .NET rewrite of oneshot (#252), first slice: the Credfeto.Orchestrator.Git library answers the read-only lib/git checkout queries (current branch, uncommitted changes, whether origin has a branch, the head commit, commits behind and the stale issue branch) by running the same git commands as a process. Setting ORCHESTRATOR_DOTNET_GIT=1 makes lib/git ask the tool, falling back to bash for any query the tool cannot answer exactly; it is off by default, and shared golden cases over scripted throwaway repositories test that both print and return the same
-- Phase 3 of the .NET rewrite of oneshot (#252), first slice: the Credfeto.Orchestrator.Discovery library. Setting ORCHESTRATOR_DOTNET_DISCOVERY=1 makes oneshot read the priorities feed (with its retries and the user parameter), build the trusted logins (reading the collaborators through the cfwf MCP server) and check the GitHub health gate with the tool (`credfeto-orchestrator discovery`), with the same output and return codes and the gate still failing open; it is off by default, and shared golden cases in test/fixtures/discovery-parity.json test that both produce identical results
-- Phase 5 of the .NET rewrite of oneshot (#252), second slice: with ORCHESTRATOR_DOTNET_GIT=1, the porcelain status and stash reads in lib/git (the dirty files recover_orphaned_branch lists, the file count and stash head autostash_dirty_checkout reads, and the autostashes prune_autostashes drops) are answered by the tool running the same git commands, falling back to bash for any it cannot answer exactly; off by default, and the shared golden cases now cover dirty, staged, untracked, renamed, conflicted and detached checkouts and stash lists
-- Phase 8 of the .NET rewrite of oneshot (#252), first slice: the Credfeto.Orchestrator.Discord library builds the webhook payloads of the lib/discord notifications (work item, no work, low disk space, host health, slow image pull, Claude error and image pull failure, board conversion failure, stale self-update, priorities unreachable, blocked item, blocked issue re-planning, pull request needs approval, permission denials and rate limited) byte for byte as their jq programs print them. Each payload is now built by its own build_discord_*_payload function; setting ORCHESTRATOR_DOTNET_DISCORD=1 makes those functions ask credfeto-orchestrator discord payload for it and build it in bash, with a warning, when the tool refuses or fails. The switch is off by default, and posting, the webhook URLs and the dedup markers stay in bash
-- Phase 8 of the .NET rewrite of oneshot (#252), next slice: with ORCHESTRATOR_DOTNET_DISCORD=1 the tool also builds the session-stalled payload, masking tokens and path-like text in the final message exactly as the jq program does, and the daily session digest payload from the day's and the day before's summaries; it refuses any summary or message it cannot build exactly as jq would, and bash then builds it. Off by default, and shared golden cases, including adversarial masking and digest edge cases, test that both print the same payloads
-- Phase 8 of the .NET rewrite of oneshot (#252), third slice: with ORCHESTRATOR_DOTNET_DISCORD=1 the tool also prints the item-status entries and their log, the no-work notice's item breakdown (the @tsv rows as bash reads them back, build_item_url with its REPO_FULL default, and the 3900-character budget counted as bash counts in its locale) and truncate_for_display's cut, exactly as lib/discord's jq and bash do; long input goes on stdin, and anything the tool cannot be sure of (input that is not UTF-8, JSON, numbers or a length jq might read or print differently) is refused, so bash answers as before
-- A new `git` managed MCP server runs the Credfeto.Git.Mcp dotnet tool (read-only status, diff, log and fetch so far), so agents in the development-full image can read the repository's git state through it. The development-credfeto-tools image installs the tool's latest stable release behind its cache bust, the development-full image registers it behind the shared launcher, and `install-claude-hooks` installs the same server on a developer machine. Raw git stays allowed (#2067)
-- Phase 2 of the .NET rewrite of oneshot (#252), next slice: with ORCHESTRATOR_DOTNET_GITHUB=1, the takeover stand-off, the bot-driven pull request pivot, the identity lookup and the behind-base check make their GitHub reads with the tool through the cfwf MCP server instead of gh: the token's login (auth_status), every open pull request's author, closing issues and head branch (pr_list), a pull request's commit authors (pr_view) and how far a branch is behind its base (branch_compare). The MCP client now sends flag, number and list arguments as JSON values. Off by default, and shared golden cases test that both give the same output
-- Phase 4 of the .NET rewrite of oneshot (#252), first slice: the Credfeto.Orchestrator.Prompts library builds the generated CLAUDE.md for issue, pull request and dependency pull request sessions, the launch prompts and the pre-check section from embedded Markdown templates with named placeholders, and counts a prompt for the MAX_PROMPT_CHARS guard as bash does. Setting ORCHESTRATOR_DOTNET_PROMPTS=1 makes the lib/prompts builders and the guard use the tool, falling back to bash for any input the tool cannot reproduce exactly; it is off by default, and shared golden cases test that both print byte-identical text
-- `scripts/prompts/regenerate` rebuilds the .NET prompt templates and both prompt parity fixtures from lib/prompts, so a prompt wording change is made only in lib/prompts; `--check` lists the files that are out of date, the parity tests run it, and their failures say to run the script (#252)
-- Phase 2 of the .NET rewrite of oneshot (#252), next slice: with ORCHESTRATOR_DOTNET_GITHUB=1, a pull request's inline review comments and top-level comments (pr_comments), the issues it closes (pr_view) and those issues' labels (closing_issue_labels) are read with the tool through the cfwf MCP server instead of gh, for the fingerprint, the unaddressed-comment check, the label sync and the board-status sync. Both paths print only the comment fields the callers read, in id order, and the tool's JSON is now escaped exactly as jq escapes it. The label sync now reads each closing issue's labels from that issue's own repository and also leaves out On Hold and any-case Blocked/On-Hold, as the server does. Off by default, and shared golden cases test that both give the same output
-- Phase 7 of the .NET rewrite of oneshot (#252), first slice: the Credfeto.Orchestrator.State library answers the read-only lib/state queries (the infra-failure, invocation and env-unblock counters, the plan-block, blocked-replan and background-stall markers, the last diagnostic, the pre-check cache, the pull-duration baseline, the rate-limit check and the session-denials day summary) from the same state files. Setting ORCHESTRATOR_DOTNET_STATE=1 makes lib/state ask credfeto-orchestrator state for them and answer in bash, with a warning, when the tool refuses or fails; the switch is off by default and every write stays in bash
-- Phase 7 of the .NET rewrite of oneshot (#252), second slice: with ORCHESTRATOR_DOTNET_STATE=1 the Credfeto.Orchestrator.State library also writes the infra-failure, invocation and env-unblock counters, the owner's rate-limit reset, the pre-check record and the last diagnostic, with the same bytes, mode, owner and group as the lib/state functions, as a temporary copy flushed to disk and renamed over the file, so a crash or a reader never sees half a file; anything a rename would leave differently is refused and written in bash. It is off by default, and shared golden cases check the files both leave behind
-- `cfwf run log` can search a failed step's whole log instead of only its tail: `--grep <ERE>` prints the matching lines with their line numbers, `--context <n>` adds surrounding lines and `--max-matches <n>` caps the matches, and `--from-line <n>` prints the `--lines` lines from a given line on; memory stays bounded by what is printed, and the pattern is matched before token redaction and masking, which still apply to every printed line (#1880)
+- The development-full sanity check also requires the build-node MCP server binary (#1972)
+- Phase 6 of the .NET rewrite (#252), third slice: session-outcome text heuristics in the tool
+- Phase 6 of the .NET rewrite (#252), second slice: permission-denial reads in the tool
+- Phase 9 of the .NET rewrite (#252), second slice: stop_ssh_agent can run in the tool
+- Phase 9 of the .NET rewrite (#252), first slice: Agents library queries ssh-agent keys
+- Phase 10 of the .NET rewrite (#252), first slice: oneshot can self-install the tool
+- The development-tools image installs clang and zlib1g-dev for Native AOT builds (#1861)
+- Install the kb MCP server in the development-full agent image, allowed as mcp__kb__* (#1791)
+- install-claude-hooks installs the kb MCP server on a developer machine too (#1791)
+- oneshot skips the tick while githubstatus.com reports an incident on a used component (#1846)
+- The development-tools image installs the CodeGraph CLI at a pinned, verified release (#1882)
+- Phase 1 of the .NET rewrite (#252): the Credfeto.Orchestrator.Cmd tool and fingerprints
+- Phase 2 of the .NET rewrite (#252), first slice: the GitHub library, an MCP client to cfwf
+- Add a changelog managed MCP server running the Credfeto.ChangeLog.Mcp tool (#403, #1936)
+- Add a build-node managed MCP server running the Credfeto.Build.Node.Server tool (#1970)
+- Phase 3 of the .NET rewrite (#252), predicates slice: port the lib/github-status predicates
+- Phase 2 of the .NET rewrite (#252), next slice: list the bot's open PRs through the tool
+- Phase 6 of the .NET rewrite (#252), first slice: the Podman library answers lib/podman queries
+- Phase 5 of the .NET rewrite (#252), first slice: the Git library answers checkout queries
+- Phase 3 of the .NET rewrite (#252), first slice: the Discovery library reads the feed
+- Phase 5 of the .NET rewrite (#252), second slice: porcelain status and stash reads in the tool
+- Phase 8 of the .NET rewrite (#252), first slice: the Discord library builds webhook payloads
+- Phase 8 of the .NET rewrite (#252), next slice: session-stalled and daily payloads in the tool
+- Phase 8 of the .NET rewrite (#252), third slice: item-status entries and no-work breakdown
+- Add a git managed MCP server running the Credfeto.Git.Mcp tool (read-only for now) (#2067)
+- Phase 2 of the .NET rewrite (#252), next slice: takeover, pivot and identity reads via the tool
+- Phase 4 of the .NET rewrite (#252), first slice: the Prompts library builds session CLAUDE.md
+- scripts/prompts/regenerate rebuilds the .NET prompt templates and parity fixtures (#252)
+- Phase 2 of the .NET rewrite (#252), next slice: PR comments and closing issues via the tool
+- Phase 7 of the .NET rewrite (#252), first slice: the State library answers lib/state queries
+- Phase 7 of the .NET rewrite (#252), second slice: the State library also writes state
+- cfwf run log can search a failed step's whole log with --grep and related options (#1880)
 ### Fixed
-- oneshot no longer logs the .NET tool's usage text on every cycle while the bash checkout is newer than the self-installed binary: the tool gains `--capabilities`, oneshot reads it once a run and runs any command the binary lacks in bash, logging at most one line (#2095)
-- The nuget-latest-versions action, which decides when the credfeto-tools and dotnet-tools images are rebuilt, now hashes each package's newest stable version and ignores pre-releases, so a pre-release push no longer triggers a rebuild that installs the same stable tool; a package with no stable release is hashed as `none` with a warning instead of failing the action (#2070)
-- A pull request whose merge state is UNKNOWN is compared with its base on the tick it is seen, instead of being treated as up to date until the state had stayed UNKNOWN for UNKNOWN_MERGE_STATE_TIMEOUT_MINUTES. A branch that is behind gets the non-agentic rebase straight away, and a dirty checkout on it is handed to the agent as BEHIND so it rebases before committing; UNKNOWN_MERGE_STATE_TIMEOUT_MINUTES now only sets how long a still-UNKNOWN pull request found not behind waits before it is compared again (#2055)
-- A dirty checkout whose only owner in the queue is Blocked (an on-hold (Blocked) PR, or an issue whose open PR on that branch is Blocked) is now autostashed instead of making every other item in the repository wait for a human (#2053)
-- A PR skipped because the checkout holds another queued item's uncommitted work no longer marks its repository as having active work, so the issue that owns those changes is not skipped as "repo already has active work" and the repository no longer deadlocks until someone clears the checkout by hand (#2051)
-- A dependency pull request assigned to a trusted maintainer and the pull request bot is adopted again instead of being stood off: the pull request bot and the orchestrator's own account are neutral assignees, left out before the adoption check, so the pull request is adopted when at least one assignee remains and every remaining assignee is a trusted maintainer. Only neutral assignees is not an adoption, any other assignee still means stand off, and assignees are never changed (#1981)
-- The build-dotnet, build-node and changelog MCP server wrappers are thin entries over one shared launcher, `dotnet-tool-mcp-launcher`, installed beside them in the image and by `install-claude-hooks`, so they can no longer drift apart. The local tool from the user's home tool manifest is still preferred, at exactly the version that manifest pins, but is now started from its package's entry point with the repository root as the working directory instead of through `dotnet tool run` from `$HOME`, so a server that does not read its `*_REPO_ROOT` variable (released changelog-mcp) no longer works on, or creates a CHANGELOG.md in, the home directory. A tool listed but not yet restored gets one `dotnet tool restore` from `$HOME`, and the launcher fails clearly when it is still missing; the global tool also starts from the repository root for every server (#1979)
-- A dependency pull request whose assignees are all trusted maintainers, which is how such a pull request is adopted, is treated as the agent's own: oneshot checks the assignees against the trusted logins it already holds (never its own account, the pull request bot or GitHub's own bots) and works it instead of standing off. Both dependency pull request prompts carry their own rule in place of the assign step: the pull request is already the agent's, so it runs no assign or claim step and changes no assignee, acts on the trusted maintainers' unaddressed comments, then follows the normal flow; a trusted comment on such a pull request gets the full flow so the agent acts on it. `cfwf --assign-self` is unchanged and still refuses any pull request assigned to someone else. A dependency pull request with any assignee who is not trusted is stood off before any session, a session that stopped because the pull request was claimed by someone else is not charged against the idle budget, and the idle-budget Blocked reason names an unaddressed trusted comment instead of saying there is no known blocking reason (#1977)
-- oneshot gives a handed-off pull request that is behind its base and waits only on a human review the same non-agentic rebase as any other behind pull request, instead of leaving it for auto-merge or a human to update, so where the base requires up-to-date branches it merges as soon as it has an approving review; it still gets no agent session unless the rebase conflicts (#1889)
-- The standard-labels parity test compares cfwf only with the labels every repository shares, leaving out the per-project labels the label sync writes for this repository's .NET projects, so shell-tests passes again on every pull request (#1951)
-- Agent sessions can no longer call ScheduleWakeup or the cron tools, and the session prompt says to end the turn when the phase is done: an unattended session that scheduled a wakeup sat idle holding the owner's container until the 90-minute timeout, so no other item ran (#1948)
-- The token broker allows a github.com issue or pull request URL as the `--url` of `gh project item-add`, which takes the item in no other form, so `cfwf` can put items on the Workflow board again; every other URL is still refused, now also when it is the value of a `--name=value` argument (#1907)
-- Agent image: the sanity check verifies again that the token broker is present and root-owned (`root:root 755`) (#1904). It was left out of #1899 only because CI built the agent image on the published base, which didn't have the broker yet
-- shell-tests installs bats 1.14.0 and shfmt 3.14.1 from their pinned upstream GitHub releases, each checked against a pinned SHA256, instead of from apt, with retrying downloads and a 5-minute step timeout, so an Ubuntu package mirror that hangs or fails to resolve no longer stalls or fails the check (#1372)
-- A per-container Podman secret (Claude OAuth, GH Enterprise token or kb token) left behind by a killed oneshot run is now removed on the next launch even when its token is no longer configured (#1791)
-- `cfwf pr edit`, `cfwf pr close` and `cfwf pr reopen` act on any pull request in the repository: the ownership refusal (only the agent's own, or a bot's whose commits were all the agent's) is gone, so a pull request a person opened, or a bot's one a person has pushed to, can have its title, body and priority set, the agent assigned, and be closed or reopened. The leak checks, the Conventional Commits title rule, the Security priority rule and the refusal of a merged pull request are unchanged, and neither the pull request's author nor its commits are read any more (#1845)
-- oneshot treats a required check that has not reported on the PR's head commit yet as CI pending when the required check names are known, so such a PR is neither invoked nor charged against its idle budget until the check reports (#1847)
-- oneshot treats a check run still running on the PR's head commit (queued, in progress, waiting, pending or requested, read from the commit's check runs) as CI pending, even when the PR's check rollup does not show it, both before invoking an agent and when deciding whether a session that made no progress is charged, so a running check never uses up the idle budget; a failed lookup warns and falls back to the rollup alone, and the CI-pending timeout still escalates a check that never finishes (#1860)
-- oneshot: the pre-commit pre-check runs with the agent marker (CLAUDECODE=1), so the global hook skips its installation freshness check as it does for the agent's own commits, and the pre-check no longer fails whenever the hooks have released since the image was built (#1843)
-- oneshot: the AI Coverage phase (PHASE G) and the COVERAGE.md conflict step of the rebase notice now have Code Tester measure coverage with the build MCP coverage tool. The main session, which has no build or coverage tools, used to run raw test commands itself, which gave figures that didn't match the baseline (#1868).
-- `install-claude-hooks` ignores every argument again instead of reading the first as an allowed-dirs file, so e.g. `install-claude-hooks --system` no longer fails with "Allowed directories file not found"; the host's `allowed-dirs.local` is now maintained by hand, and the script warns when it is missing (#1876)
-- shell-tests no longer depends on GNU coreutils' install error wording, so it passes on ubuntu-26.04 runners with uutils coreutils (#1879)
-- oneshot re-invokes a Blocked issue that has no posted `## Implementation Plan` comment to plan it, once per Blocked spell, and notifies Discord when it does, instead of skipping it forever; issues that already have a plan stay skipped (#1718)
-- oneshot charges the idle budget when it re-runs an unchanged BEHIND or DIRTY PR, so a session that pushes no rebase counts as no progress and a PR whose conflicts the agent cannot resolve is Blocked with a merge-conflict reason once the budget runs out, instead of being re-run on every tick; a pushed rebase, a board move or a new trusted comment still resets the budget. A BEHIND PR that is already handed off (not draft, auto-merge on, no failed or pending required check, review required, no unaddressed trusted comment) is now settled and gets no session; once approved it is rebased as before (#1654)
-- `cfwf run rerun` reruns the whole run, with no new option, when a completed run has no failed jobs and a check the pull request's base branch requires never ran on its head (the job that reports it was never created), printing `Rerunning all jobs of run <id> (attempt <n>): required check <name> never ran`; such a run whose required checks all have a result is refused (exit 8, nothing written). The attempt limit, default branch and open pull request head rules, their order and exit codes, and the failed-jobs rerun are unchanged (#1884)
-- `cfwf` accepts only a line that is exactly `lgtm` or `approved` (case-insensitive, whitespace around allowed) as an approval, so `not approved`, `LGTM!` and `LGTM but ...` no longer count (#1682)
-- oneshot returns a clean repository checkout to main before every item, even when the branch an earlier session left it on is still open, so the agent's pre-flight checks (such as the .NET SDK check against global.json) judge main rather than another item's branch; an open SDK-bump PR no longer fails, and gets Blocked, every other item in its repository. A checkout with uncommitted changes is still handed to the agent to recover (#1909)
-- oneshot checks out the branch an item needs before launching its container (a PR's head branch, tracking origin, or main for an issue), so the container pre-flight judges the item's own files. Local checkout state no longer gets an item marked Blocked: an item whose branch cannot be checked out, or whose checkout holds another item's uncommitted changes, is skipped for the tick without charging its budget, and an item whose own branch fails the pre-flight twice in a row on the same image and commit (for example an SDK the image does not have yet) is skipped until the agent image or the branch changes, then retried automatically (#1914)
-- The build-dotnet MCP server now starts through a root-owned wrapper that resolves the repo root and runs the credfeto-build-dotnet tool from each user's own dotnet-tools.json or global tools, with the .NET logo and preview SDK messages suppressed, so it works for every user on a host (#1894)
-- oneshot stashes a dirty checkout on a branch that no queued item owns, or on a detached HEAD (untracked files included, under an orchestrator-autostash message naming the branch, time and reason, keeping the newest 20 such stashes), and carries on with the item, instead of skipping every item in the repository on every tick; a dirty branch that another queued item owns is still left for that item (#1917)
-- Agent sessions may run `npm update` (allowed as `Bash(npm update *)`, the same shape as `npm install`), so an agent can bump a transitive dependency in `package-lock.json` with `npm update <pkg> --package-lock-only`; the existing `--prefix` and npm config-option refusals apply to it as to every npm subcommand (#1921)
-- development-dotnet-tools pins the PowerShell global tool to 7.6.10 through a POWERSHELL_VERSION build argument, and its sanity check verifies pwsh reports that version: PowerShell 7.7.0's linux-x64 tool package is not published, so the unpinned install failed and the image stopped building (#1923)
-- The development-full image build again fails if the inherited codegraph binary is missing from PATH or its --version check fails, now that the published base image chain carries it, so a broken CodeGraph install can no longer reach the agent image unnoticed (#1927)
-- The agent and pre-check containers' memory limit is sized from the host instead of a fixed 12g: MemTotal less the larger of ORCHESTRATOR_CONTAINER_MEMORY_RESERVE_MB (default 1536) and 10% of MemTotal, never below 2 GiB, with --memory-swap equal to --memory, so a runaway process is killed by the container's own cgroup OOM killer, not the kernel's global one. ORCHESTRATOR_CONTAINER_MEMORY sets the limit outright; the chosen value is logged once per run, and an unreadable MemTotal keeps 12g with a warning (#2089)
-- Issue plan mode posts the plan with cfwf issue post-plan, which adds Blocked and moves the board to Planning in the same call, instead of cfwf comment add followed by a separate label and board step that agents often skipped; the .NET prompt templates and parity fixtures are regenerated to match (#2092)
-- Allow the security-review skill in the managed settings so dontAsk sessions can run the security review phase through the Skill tool (#2066)
-- dontAsk sessions could not run the security review phase because the managed Claude settings did not allow the security-review skill, so Skill(security-review) is now allowed there and a bats test checks that the skill is allowed and passes the skill hook (#2066)
+- Stop logging the tool's usage text each cycle when the binary lacks a command (#2095)
+- nuget-latest-versions hashes only each package's newest stable version (#2070)
+- A PR in UNKNOWN merge state is compared with its base on the tick it is seen (#2055)
+- Autostash a dirty checkout whose only queued owner is Blocked (#2053)
+- A PR skipped for another item's dirty checkout no longer marks the repo as active (#2051)
+- Adopt a dependency PR assigned to a trusted maintainer and the PR bot again (#1981)
+- The build-dotnet, build-node and changelog MCP wrappers share one launcher (#1979)
+- Treat a dependency PR whose assignees are all trusted maintainers as the agent's own (#1977)
+- Give a behind, handed-off PR waiting only on review the non-agentic rebase (#1889)
+- The standard-labels parity test compares only labels every repository shares (#1951)
+- Agent sessions can no longer call ScheduleWakeup or the cron tools (#1948)
+- The token broker allows an issue or PR URL as the --url of gh project item-add (#1907)
+- Agent image: the sanity check verifies the token broker is present and root-owned (#1904)
+- shell-tests installs pinned, checksum-verified bats and shfmt releases instead of apt (#1372)
+- Remove a per-container Podman secret left by a killed run on the next launch (#1791)
+- cfwf pr edit, pr close and pr reopen act on any pull request in the repository (#1845)
+- Treat a required check not yet reported on the PR's head as CI pending (#1847)
+- Treat a check run still running on the PR's head commit as CI pending (#1860)
+- The pre-commit pre-check runs with CLAUDECODE=1, skipping the hook freshness check (#1843)
+- The AI Coverage phase has Code Tester measure coverage with the build MCP tool (#1868)
+- install-claude-hooks ignores every argument again, not reading an allowed-dirs file (#1876)
+- shell-tests no longer depends on GNU coreutils' error wording, so uutils runners pass (#1879)
+- Re-invoke a Blocked issue with no posted Implementation Plan to plan it, once per spell (#1718)
+- Charge the idle budget when re-running an unchanged BEHIND or DIRTY PR (#1654)
+- cfwf run rerun reruns the whole run when a required check never ran on the head (#1884)
+- cfwf accepts only a line that is exactly lgtm or approved as an approval (#1682)
+- oneshot returns a clean checkout to main before every item (#1909)
+- oneshot checks out the branch an item needs before launching its container (#1914)
+- The build-dotnet MCP server starts through a root-owned wrapper resolving the repo root (#1894)
+- Autostash a dirty checkout on a branch no queued item owns, or a detached HEAD (#1917)
+- Agent sessions may run npm update, e.g. to bump a transitive dependency (#1921)
+- development-dotnet-tools pins the PowerShell global tool to 7.6.10 (#1923)
+- The development-full build fails again if the inherited codegraph binary is broken (#1927)
+- Size the agent and pre-check containers' memory limit from the host, not a fixed 12g (#2089)
+- Issue plan mode posts the plan with cfwf issue post-plan in one call (#2092)
+- Allow the security-review skill in managed settings for dontAsk sessions (#2066)
+- Allow Skill(security-review) in managed settings, with a bats test checking it (#2066)
 ### Changed
-- cfwf `issue edit`, `pr edit` and `pr sync-labels` refuse `--assign-self` (exit 8, `assign refused: already assigned to another user`, nothing written) when the item already has an assignee other than the agent, so two workers can no longer both claim the same item; the prompts' "Assign yourself" steps tell the agent to stop on that refusal (#1962)
-- Agents can no longer run the raw .NET commands the build-dotnet MCP server covers: `dotnet build`, `test`, `restore`, `clean`, `cscleanup`, `buildcheck`, `format`, `reportgenerator` and `package search` (and `dotnet tool run` of those tools) moved from the managed settings' allow list to its deny list, plain and after `cd`, and `block-dotnet-tool-install` refuses them in any command shape, behind leading options or static quotes, naming the MCP tool to use; the bare `buildcheck` command is denied and blocklisted too. It also blocks `dotnet tool exec`. `enforce-background-for-long-running-commands` no longer lists `dotnet build`/`dotnet test`, and the session prompt sends .NET builds and tests to the build-dotnet MCP tools (#1958)
-- The default `CLAUDE_CODE_AUTO_COMPACT_WINDOW` is now 160000 (was 100000). A session starts with about 60k tokens of fixed context, so at 100k it had about 7k tokens of working room before auto-compaction, and sessions compacted within a few turns and could end with "Autocompact is thrashing". The environment override is unchanged (#1866)
-- The enforce-git-dash-c hook and its bats test are renamed to enforce-git-policy, with all references updated, so the name reflects everything the hook enforces (#1678)
+- cfwf issue edit, pr edit and pr sync-labels refuse --assign-self on another's item (#1962)
+- Agents can no longer run the raw .NET commands the build-dotnet MCP server covers (#1958)
+- The default CLAUDE_CODE_AUTO_COMPACT_WINDOW is now 160000 (was 100000) (#1866)
+- Rename the enforce-git-dash-c hook and its bats test to enforce-git-policy (#1678)
 - SDK - Updated DotNet SDK to 11.0.100
-- build-dotnet MCP docs: the build-dotnet-mcp wrapper comments, development-full README, Claude hooks guide and local instructions now describe the current server: a set but relative or blank BUILD_MCP_REPO_ROOT or BUILD_MCP_LOG_DIR stops it at startup, job logs default to the per-user state folder (in the container too, not the temp scratch mount), and its own git-root fallback does not replace the wrapper's root lookup (#1956)
-- oneshot's GitHub health gate reads githubstatus.com's status summary and skips the tick only for a serious incident on a component sessions use: major or critical impact, or the component in partial or major outage. A minor incident there (the component only degraded) logs `GitHub incident open (<name>, since <time>, <component>: <status>) — minor, continuing` and the tick goes ahead, so a GitHub slowdown no longer stops the fleet; the lookup still fails open; Actions is now a used component too, because CI on it gates PR merges (#1964)
+- build-dotnet MCP docs now describe the current server (#1956)
+- The GitHub health gate skips the tick only for a serious incident on a used component (#1964)
 ### Removed
-- `cfwf run rerun` no longer refuses a run on its third attempt or later: the `attempt limit` rule is gone, so a check whose cause was fixed elsewhere (a broken shared CI tool, say) can be rerun however many attempts it has used. The default branch, open pull request head and pending rules are unchanged (#1991)
-- The agent images no longer install PowerShell or the PSScriptAnalyzer module, now that the global pre-commit has dropped its PSScriptAnalyzer hook: the development-dotnet-tools PowerShell install and its version pin, the module install, their sanity and installed-versions checks, the pwsh and run-psscriptanalyzer checks in development-full and the agent image, and the run-psscriptanalyzer agent allow rules are gone (#1925)
+- cfwf run rerun no longer refuses a run on its third attempt or later (#1991)
+- The agent images no longer install PowerShell or the PSScriptAnalyzer module (#1925)
 
 ## [0.0.8] - 2026-11-04
 ### Fixed
-- The agent container's secret-file mask skips files git tracks (read once with `git ls-files -z`) and masks only untracked and ignored matches, logging one line with the tracked matches it left unmasked, so a committed placeholder such as `.database` no longer breaks every commit with `cannot hash`; if `git ls-files` fails every match is still masked. `.env.example` is never treated as secret by the mask or the block-secret-file-reads hook, wherever it is and whether or not it is tracked, while `.env.local` and other `.env.*` names stay masked and blocked (#1853)
-- The development-full image sanity check and the install-claude-hooks tests check only the required managed MCP servers: cfwf and build-dotnet must be present and correct, a kb server must follow cfwf's pattern when present, and any other server (such as the shipped rider and webstorm) is allowed and not checked, so adding a server no longer breaks the image build or the tests (#1850)
+- The agent container's secret-file mask skips files git tracks (#1853)
+- The image sanity check and install-claude-hooks tests check only required MCP servers (#1850)
 ### Changed
 - SDK - Updated DotNet SDK to 11.0.100-rc.3.26522.148
 
 ## [0.0.7] - 2026-11-04
 ### Security
-- `cfwf workflow-status --set --status Approved` is refused in an AI agent session (CLAUDECODE=1) with exit 10, before any gh call: only a human moves an item to Approved (#1608)
-- Redact every token form cfwf refuses (sk-proj-, discordapp.com webhooks, Bearer, AWS key IDs, Slack, sk-ant) in notify-unit-failure and lib/discord using a shared pattern list - #1616
-- The enforce-allowed-dirs hook now checks that the script given to node resolves under .github/actions and denies node options that load code from outside the script (such as --require, --import, --loader and --inspect), and the Bash(node *..*) deny rule is removed from claude-managed-settings.json now that the hook covers node paths - #1540
+- cfwf workflow-status --set --status Approved is refused in an AI agent session (#1608)
+- Redact every token form cfwf refuses in notify-unit-failure and lib/discord (#1616)
+- enforce-allowed-dirs keeps node scripts under .github/actions and denies loader flags (#1540)
 - Hooks: block git --config-env outright and make core.pager value check case-sensitive (#1529)
 - TBD - mask repo secret files in the container and add the block-secret-file-reads hook - #1419
-- Denied Edit access to ~/.claude/projects/** and */.claude/projects/** in the managed Claude settings (#1564)
+- Deny Edit access to ~/.claude/projects/** and */.claude/projects/** in managed settings (#1564)
 ### Added
-- `cfwf comment view --repo <owner/repo> --comment-id <id>` prints one top-level comment of an issue or a pull request by its id, from one read: fixed `id`, `author`, `association`, `created-at`, `updated-at`, `url`, `issue` and `lines` headers, then the body in the `|`-prefixed form `cfwf issue comments` prints, made safe the same way; exit 9 when the repository has no such comment (#1828)
-- `cfwf issue view --repo <owner/repo> --issue <n> --comments` prints the issue as before, then the separator line `section<TAB>comments`, then its comments exactly as `cfwf issue comments` prints them, oldest first; `--comments` takes no value and may be given once (#1826)
-- The development-full sanity check also requires the build-dotnet MCP server binary (the `credfeto.build.dotnet.server` package and an executable `credfeto-build-dotnet`), now that the published development-credfeto-tools image carries it (#1818)
-- `cfwf issue approve --repo <owner/repo> --issue <n> --body-file <file|-> [--keep-blocked]`, for humans only, approves an issue's implementation plan in one step: it posts the comment, sets the Workflow board to Approved (as `workflow-status --set` does) and removes Blocked unless `--keep-blocked` is given (never On Hold); in an AI agent session (CLAUDECODE=1) it exits 10 before any gh call, it refuses (exit 8) a pull request's number, a closed issue and an issue with no `## Implementation Plan` comment, and the agents' managed permissions deny `Bash(cfwf issue approve*)`, `Bash(cfwf issue unblock*)`, `Bash(cfwf pr unblock*)` and the cfwf MCP tools `issue_approve`, `issue_unblock`, `pr_unblock` and `workflow_status_set` (which could set Approved) (#1607)
-- The .NET build, test and coverage MCP server (Credfeto.Build.Dotnet.Server, command credfeto-build-dotnet) is installed in development-credfeto-tools behind the tools cache bust and registered for agent sessions as the build-dotnet stdio server in managed-mcp.json, by its absolute path with BUILD_MCP_REPO_ROOT=/workspace/repo, with its tools allowed by mcp__build-dotnet__* (#1818)
-- `cfwf issue unblock --repo <owner/repo> --issue <n> --body-file <file|->` and `cfwf pr unblock --repo <owner/repo> --pr <n> --body-file <file|->`, for humans only, post a comment, then remove Blocked (never On Hold); in an AI agent session (CLAUDECODE=1) both exit 10 before any gh call, and both exit 8 unless the item is at Approved or later on the repository's Workflow board, which they never set (#1600)
-- `cfwf repo file --repo <owner/repo> --path <path> [--ref <branch|tag|sha>]` prints a file's contents byte for byte, or lists a directory as `<type>\t<name>` lines, at a branch, tag or commit, read-only through the contents API; binary files, files over 1 MiB, long directories, submodules and unfollowed symlinks are refused (exit 8), and a missing repository, path or ref exits 9, so agents no longer need raw `gh api .../contents | base64 -d` (#1721)
-- `cfwf repo advisories --repo <owner/repo>` lists a repository's security advisories, one `<ghsa_id>\t<severity>\t<state>\t<summary>` line each, so the dependency updater's advisory check no longer needs raw `gh api` (#1598)
-- `cfwf run list`, `cfwf run view` and `cfwf run log`: list a branch's or a commit's GitHub Actions runs with no event filter, read one run and its latest attempt's jobs, and read the tail of its failed steps' logs (at most 2000 lines a step, 1000 bytes a line, 256 KiB in all) made printable, with token lines redacted and long hex and base64 runs masked, replacing raw `gh run` and `gh api` reads (#1586)
-- cfwf issue edit: change an issue's title or body, or assign the agent, with the body and title checked for leaks first (#1596)
-- `cfwf pr edit --repo <owner/repo> --pr <n> [--title <title>] [--body-file <file|->] [--assign-self]` changes a pull request's title or body, or assigns the agent, in one call: a Conventional Commits title and a body from a file, both leak-checked, `--assign-self` as the only assignee option, and a refusal (exit 8) for a pull request that is not the agent's own, so agents no longer need raw `gh pr edit` (#1589)
-- `cfwf pr checks-wait --repo <owner/repo> --pr <n> [--timeout-minutes <m>]` waits, in one call, for a pull request's checks to reach a final verdict (judged as `cfwf pr checks` does, with an all-pass confirmed on a second read of the same head) or for a time limit (default 30 minutes, at most 120), then exits once: 0 passed, 3 failed, 4 still pending, 5 still no checks, 6 a failed read, never confused with a failed check (#1626)
-- Container image vulnerability scans (trivy-scan) now list each finding (CVE, severity, package, installed and fixed version) in the build log and as annotations, write a findings table to the job summary, and post one comment per image on the PR, instead of only failing with "exit code 1"; the CRITICAL gate and the code scanning upload are unchanged (#1729)
-- `cfwf pr hand-off --repo <owner/repo> --pr <n> --body-file <file|->` hands a pull request off to human review in one call, in a fixed order: Human Review on the board, ready for review, a review record naming the head it read (`### AI Review Loop: reviewed <sha>`), then merge-commit auto-merge pinned to that head (never `--admin`). It refuses (exit 8, nothing written) a pull request that is not open, is Blocked or On Hold, or whose required checks are not green, and defers auto-merge (exit 7) until every check has a result from after the pull request was marked ready. Marking ready and enabling auto-merge are internal helpers, not agent commands (#1601, #1590, #1591)
-- `cfwf pr take-back --repo <owner/repo> --pr <n> --body-file <file|->` takes a pull request back from human review before new work is added to it, in a fixed order: auto-merge off (only when it is on; a failure stops before anything else), back to a draft, Development on the board, then a comment from the body file saying why. Each step is idempotent, a pull request that is not open is refused (exit 8, nothing written), and a failure part way names the steps already done (#1602)
+- cfwf comment view prints one top-level issue or PR comment by its id (#1828)
+- cfwf issue view --comments prints the issue followed by its comments (#1826)
+- The development-full sanity check also requires the build-dotnet MCP server binary (#1818)
+- cfwf issue approve, for humans only, approves an implementation plan in one step (#1607)
+- Install the .NET build, test and coverage MCP server and register it as build-dotnet (#1818)
+- cfwf issue unblock and pr unblock, for humans only, comment then remove Blocked (#1600)
+- cfwf repo file prints a file's contents, or lists a directory, at a ref (#1721)
+- cfwf repo advisories lists a repository's security advisories (#1598)
+- cfwf run list, run view and run log read GitHub Actions runs and failed-step logs (#1586)
+- cfwf issue edit changes an issue's title or body, or assigns the agent, leak-checked (#1596)
+- cfwf pr edit changes a pull request's title or body, or assigns the agent, in one call (#1589)
+- cfwf pr checks-wait waits in one call for a pull request's checks to reach a verdict (#1626)
+- trivy-scan lists each finding in the log, annotations, job summary and a PR comment (#1729)
+- cfwf pr hand-off hands a pull request off to human review in one call (#1601, #1590, #1591)
+- cfwf pr take-back takes a pull request back from human review before new work (#1602)
 - TBD - to be finalized after review
-- cfwf advisory view: look up a global security advisory by its GHSA id, printing its severity, summary, published and withdrawn times and each affected package with its vulnerable range and first patched version (#1746)
-- cfwf issue reopen, pr close and pr reopen to change an issue's or the agent's own pull request's state without merging, with an optional checked comment first (#1762)
-- cfwf issue comments to read an issue's or pull request's top-level comments with their bodies, filtered by --since and --author, capped and count-checked (#1764)
+- cfwf advisory view looks up a global security advisory by its GHSA id (#1746)
+- cfwf issue reopen, pr close and pr reopen change state without merging (#1762)
+- cfwf issue comments reads an item's top-level comments, with --since and --author (#1764)
 - cfwf pr list --label to list only the open pull requests carrying every given label (#1767)
-- cfwf pr finalise-dependency marks a bot dependency-update PR ready and enables auto-merge, without the AI hand-off's title, description, board or review-record steps; dependency prompts use it instead of raw gh (#1771)
-- cfwf issue add-sub-issue, label create and pr auto-merge-at: link a child issue to its parent, create a standard label (never changing one a repository has), and read when auto-merge was last enabled on a pull request and its last change (#1763, #1769, #1768)
-- cfwf label add and label remove change an issue's or a pull request's standard labels one gh call a label: priority and non-standard labels are refused, On Hold is never removed, and Blocked is removed only when the agent added it last (#1593)
+- cfwf pr finalise-dependency marks a bot dependency PR ready and enables auto-merge (#1771)
+- cfwf issue add-sub-issue, label create and pr auto-merge-at (#1763, #1769, #1768)
+- cfwf label add and label remove change an issue's or PR's standard labels (#1593)
 - cfwf label list lists a repository's label names (#1595)
-- cfwf issue close closes an issue with a reason (completed or not-planned) and an optional checked comment, refusing an issue on hold or one an open pull request will close (#1597)
-- cfwf repo list, repo search, pr search, code search and workflow list: read-only searching and listing for agents (#1765, #1766)
-- `cfwf pr status --repo <owner/repo> --pr <n>` prints the whole state of a pull request in one read-only call: its metadata, Workflow board status (empty when there is no board or it is not on it), ready time, required-checks verdict and the names of failed and pending checks, changed-file count, and comment, review and thread counts with the activity since it was marked ready. Each field is judged by the code of the single-purpose command, and it exits with the `pr checks` verdict (0, 3, 4 or 5), 9 when not found (#1782)
-- `cfwf issue edit --priority <priority>` and `cfwf pr edit --priority <priority>` (Security, Urgent, High, Medium or Low, in any case) set an item's priority, in the same single edit call as any title or body change: every other priority label is removed and this one added, so the item ends with exactly one; nothing is written when it already has only that one; a `Security` item is never given another priority (exit 8, nothing written); a `priority <old> -> <new>` line follows the URL when it changed (#1594)
-- oneshot runs `pre-commit-check` without an agent, inside the agent image (same mounts, environment and secrets, its own `PRECHECK_TIMEOUT_MINUTES` limit, default 20), on a pull request's head before its session and on main's tip before an approved issue's session, caches the result by SHA, and puts it in the agent's prompt: passed, or the failing hooks with up to `PRECHECK_SUMMARY_LINES` error lines each and the log path; issue sessions are told main's baseline is clean or which hooks were already failing; the service unit's start timeout default rises from 6300 to 7800 seconds to cover it (#1785)
-- `cfwf issue post-plan --repo <owner/repo> --issue <n> --body-file <file|->` posts an `## Implementation Plan` comment, then adds Blocked, then moves the board to Planning, in that order, refusing (exit 8, nothing written) a body without the exact heading, one that fails the leak check or holds a plan-approval keyword, a closed issue or one on hold; a failure after the comment names the comment URL and the steps done (#1604)
-- `cfwf issue block --repo <owner/repo> --issue <n> --body-file <file|->` and `cfwf pr block --repo <owner/repo> --pr <n> --body-file <file|->` post a blocking question or diagnosis as a comment, then add Blocked, in that order, leaving the board, the assignees and other labels alone; an item already Blocked still gets the comment; a body that fails the leak check, holds a plan-approval keyword outside a quote, or carries an environment-block marker on an issue or a malformed one on a PR is refused (exit 8, nothing written); a label failure after the comment names the comment URL (#1599)
-- `cfwf comment edit --repo <owner/repo> --comment-id <id> (--issue-comment | --review-comment) --body-file <file|->` replaces the body of one of the agent's own comments, read once and then patched at the one fixed REST path for its kind, and prints its URL; there is no delete; a comment by another login or one with a `## Implementation Plan` line is refused (exit 8, nothing written), as is a body that fails the leak check or holds a plan-approval keyword outside a quote; an id that is no comment of that kind is exit 9 (#1592)
-- `cfwf pr post-merge-runs --repo <owner/repo> --pr <n>` judges the Actions runs on a merged pull request's merge commit, on its base branch, listed in one read with no event filter (push and workflow_dispatch runs alike), each workflow by its newest run with the `pr checks` rules (cancelled, timed out, action required, stale and startup failure fail); an older run a newer one replaced is printed as `superseded` and not counted; exit 0 pass, 3 failed, 4 pending, 5 no runs yet, 6 not merged, 9 not a pull request, 1 any failed read (#1605)
-- `cfwf pr sync-labels --repo <owner/repo> --pr <n> [--assign-self]` adds the labels of the issues a pull request closes (each read from its own repository) to the pull request, one `--add-label` call a label in the repository's spelling, never removing one and never adding Blocked or On Hold; a label the repository does not have is skipped with a warning; a closing issue that cannot be read still has the others added, then exits 1; `--assign-self` assigns the agent as `pr edit` does; `closing-issue-labels` now leaves out On Hold and Blocked in any case, On Hold spelt with a space or a hyphen (#1603)
-- `cfwf pr review-comment --repo <owner/repo> --pr <n> --path <file> --line <n> [--start-line <n>] [--side RIGHT|LEFT] --body-file <file|->` posts one new inline review comment on a line, or a range, of a pull request's diff, on the head commit it reads itself, so the caller never passes `commit_id`; the body and `--path` are leak-checked and a plan-approval keyword outside a quote is refused (exit 8, nothing written), a missing pull request is exit 9, and a 422 for a line not in the diff is exit 1 with a clear message; it posts once and prints `inline` and `url` as `cfwf pr reply` does (#1631)
-- `cfwf pr comment --repo <owner/repo> --pr <n> --body-file <file|->` and `cfwf issue comment --repo <owner/repo> --issue <n> --body-file <file|->` are aliases of `cfwf comment add`, under the names gh uses, running the same code (leak check, plan-approval keyword rule, output and exit codes); gh's positional number and `--body`/`-b` are usage errors (exit 2) naming `--pr`/`--issue` or `--body-file` (#1820)
+- cfwf issue close closes an issue with a reason and an optional checked comment (#1597)
+- cfwf repo list, repo search, pr search, code search and workflow list for agents (#1765, #1766)
+- cfwf pr status prints the whole state of a pull request in one read-only call (#1782)
+- cfwf issue edit --priority and pr edit --priority set an item's priority (#1594)
+- oneshot runs pre-commit-check without an agent, inside the agent image, before sessions (#1785)
+- cfwf issue post-plan posts the plan, adds Blocked and moves the board to Planning (#1604)
+- cfwf issue block and pr block post a blocking comment, then add Blocked (#1599)
+- cfwf comment edit replaces the body of one of the agent's own comments (#1592)
+- cfwf pr post-merge-runs judges the Actions runs on a merged PR's merge commit (#1605)
+- cfwf pr sync-labels copies the labels of the issues a pull request closes to it (#1603)
+- cfwf pr review-comment posts one inline review comment on a line or range of a diff (#1631)
+- cfwf pr comment and issue comment are aliases of cfwf comment add (#1820)
 ### Fixed
-- oneshot: a pre-commit pre-check that `timeout` had to SIGKILL (exit 137) is reported and cached as timed out instead of failed, and the pre-check container is removed after any non-zero exit, so the agent launch no longer dies on a leftover running container and fails the unit (#1821)
-- cfwf pr hand-off and pr finalise-dependency enable auto-merge as soon as the PR is ready instead of deferring it (exit 7), which left PRs at Human Review with no auto-merge; a base branch that requires no check and no review is left ready and unarmed, and oneshot arms a missing auto-merge itself on a repository that allows auto-merge (#1798)
-- CI: workflow expressions in run and script bodies are passed through env, so the no-expressions-in-scripts check passes
-- CI: the remaining workflow expressions in run bodies (image summaries, dispatch-secret check, runner name) are passed through env
-- cfwf's standard never-close label description matches .github/labels.yml again, after the label sync replaced its em dash with a semicolon
-- A clean security review reported in words the clean-review patterns did not know ("no new attack surface", "no injection path") no longer burns the PR's idle budget until it is Blocked: PHASE E and PHASE F now end the session's final message with a `REVIEW RESULT: CLEAN` or `REVIEW RESULT: FINDINGS` line, which oneshot reads first (FINDINGS winning), keeping the patterns only as a fallback (#1749)
-- A code or security review session that reports a clean review but ends without moving the board no longer burns the PR's idle budget until it is Blocked: oneshot recognises a clean final report on an unchanged AI Review or AI Security Review board, advances the board itself and posts the status comment, and the PHASE E/F prompts now say the review's report is not the end of the phase (#1735)
-- enforce-allowed-dirs no longer blocks non-ASCII text (such as an em dash) in the body of a heredoc whose delimiter is quoted and alphanumeric (`<<'PLAN'`), so agents can post plans and comments with `--body-file -`; the delimiter, every word and redirection and the body of an unquoted-delimiter heredoc must still be plain ASCII when a writing command is present (#1658)
-- Planning sessions now post the implementation plan with one sanctioned command, `cfwf comment add --body-file -` fed by a quoted heredoc, from a plain-ASCII template, and only add Blocked and move the board to Planning once the plan is confirmed posted. Multi-line plan bodies had been denied in several shapes, and a failed post still left the issue Blocked with no plan, where oneshot skipped it for good (#1658)
-- setup-owner validates its inputs before provisioning anything (signing key must be exportable, systemd-journal group, polkit rules directory, clone target must not be a non-git directory), so a misconfiguration fails before any change is made; the GnuPG keyring is now only replaced once the new signing key has imported successfully, so ~/.gnupg is no longer wiped when the key is missing (#1693)
-- enforce-allowed-dirs hook: report offending byte offset and hex value when blocking non-ASCII commands, and add regression tests for plain-ASCII heredocs - #1677
-- Agent entrypoint now warns instead of failing when the pre-commit rules checkout SHA differs from the published SHA, comparing only the common prefix so abbreviated and full SHAs match (#1100)
+- A pre-check killed by timeout (exit 137) is reported as timed out, not failed (#1821)
+- cfwf pr hand-off and finalise-dependency enable auto-merge as soon as the PR is ready (#1798)
+- CI: workflow expressions in run and script bodies are passed through env
+- CI: the remaining workflow expressions in run bodies are passed through env
+- cfwf's never-close label description matches .github/labels.yml again
+- A clean security review in unfamiliar wording no longer burns the PR's idle budget (#1749)
+- A clean review session that doesn't move the board no longer burns the idle budget (#1735)
+- enforce-allowed-dirs allows non-ASCII text in a quoted alphanumeric heredoc body (#1658)
+- Planning sessions post the plan with one sanctioned cfwf comment add command (#1658)
+- setup-owner validates its inputs before provisioning anything (#1693)
+- enforce-allowed-dirs reports the offending byte offset and hex value of non-ASCII (#1677)
+- Agent entrypoint warns instead of failing on a pre-commit rules SHA mismatch (#1100)
 - Block POSIXLY_CORRECT and multi-match --target-directory globs in cp, mv and ln hook checks - #1698
-- Close gaps in Claude hooks found while reviewing #1620 (symlinked repo claude config, absolute vendored block-no-verify hook, empty git -C, dead xargs allowlist entry, git worktree quoting/move, env-var blocklist bypasses, instruction file issue references)
-- Claude hooks (block-git-worktree, block-dotnet-tool-install, reject-obfuscated-commands, enforce-curl-host, enforce-ssh-host-and-key, enforce-git-identity) now compare unquoted words as bash passes them (backslash escapes removed), so `inst\all`, `work\tree` and `d\otnet` no longer bypass the hooks - #1683
-- Hooks pass command words as JSON with per-word base64, so words containing tabs, newlines or empty strings no longer desync - #1530
+- Close gaps in Claude hooks found while reviewing #1620
+- Several Claude hooks compare unquoted words as bash passes them (#1683)
+- Hooks pass command words as JSON with per-word base64, so odd words no longer desync (#1530)
 ### Changed
-- `cfwf comment add`, `pr comment` and `issue comment` refuse `--body`, `--body=<text>` and `-b` with exit 2 and no gh call, naming the fix: put the comment in `--body-file`, or read it from stdin with a quoted heredoc (`--body-file - <<'EOF'`), shown for the command and selector called; cfwf takes bodies only from `--body-file` because inline text is shell-expanded, trips the command hooks and is exposed in transcripts and the process list before the leak check runs. The inline `--body` added earlier in this release is withdrawn (#1827)
-- Dependency-PR sessions are now told to start with `cfwf pr status --repo <owner/repo> --pr <n>` as their own Bash call, decide from its exit code instead of a separate `cfwf pr checks` call, and run one `cfwf` command per call, from the same text as the full PR prompt (#1800)
-- Raw `gh` is denied to agents, so every GitHub operation goes through `cfwf` (run `cfwf help`) or the cfwf MCP server: claude-managed-settings.json drops its 14 `Bash(gh ...)` allow entries and denies `Bash(gh)` and `Bash(gh *)` (replacing the narrower `Bash(gh auth setup-git*)` deny), and `gh` moves from command-allowlist to command-blocklist, where a refused call says "gh is not permitted - raw gh is not available to agents; use cfwf (run `cfwf help`)". cfwf still runs `gh` as its own subprocess, which the deny does not reach; reading a file's contents at a ref has no cfwf command yet (#1721) and is refused until it has (#1805)
-- PR sessions are told to start with `cfwf pr status --repo <owner/repo> --pr <n>` as their own Bash call and to run one `cfwf` command per call, since a chained `cfwf` command is refused in unattended runs; the permission-denial rule now says to split a refused `cfwf` chain or use `cfwf pr status` (#1787)
-- The shell testing instructions now say to run only the bats files covering the change, and to leave the full suite to CI, running it locally (with `bats --jobs 4 test/`, in the background) only for changes to shared test infrastructure, so sessions on this repository no longer run out of time on full-suite runs (#1744)
-- `cfwf pr hand-off` now takes two mandatory options, `--title <title>` (a Conventional Commits title, leak-checked) and `--description-file <file|->` (leak-checked and refused for a plan-approval keyword, as the record body is; there is no text form), and sets the pull request's title and description as its first write, before the board, ready, record and auto-merge steps, so a pull request reaches human review saying what it holds instead of the placeholder it was opened with (#1755)
+- cfwf comment add, pr comment and issue comment refuse --body, --body= and -b (#1827)
+- Dependency-PR sessions start with cfwf pr status and run one cfwf command per call (#1800)
+- Raw gh is denied to agents; every GitHub operation goes through cfwf (#1721, #1805)
+- PR sessions start with cfwf pr status and run one cfwf command per call (#1787)
+- Shell testing instructions say to run only the bats files covering the change (#1744)
+- cfwf pr hand-off now takes mandatory --title and --description-file options (#1755)
 - Cleaned up ai/local instruction files (em dashes, load conditions, issue references)
-- The development-tools base image now installs shellcheck and devscripts from trixie-backports, and the build fails if shellcheck is older than 0.11, so lint results match developer machines and super-linter (#1547)
-- The development-tools base image now installs ansible-lint, flake8, pre-commit, pylint and yamllint from pip instead of trixie apt, so linter findings match the releases developers and super-linter use (#1547)
-- The development-tools base image installs shfmt from Debian apt again rather than the upstream mvdan/sh release binary: the release binary is built with a Go standard library that had a CRITICAL vulnerability, which failed the Trivy scan of every image. Debian's package is rebuilt and patched with the distribution (#1729)
-- The development-tools base image now installs bats from a pinned bats-core release instead of trixie apt, and verifies the release commit before installing (#1547)
-- The development-tools README describes where each tool comes from (apt, trixie-backports, pip or upstream release) and how each one is verified (#1547)
-- The docker login and docker buildx setup action pins in the build-development-tools workflow are bumped to their latest releases (#1547)
+- The development-tools image installs shellcheck and devscripts from trixie-backports (#1547)
+- The development-tools image installs ansible-lint, flake8 and other linters from pip (#1547)
+- The development-tools image installs shfmt from Debian apt again, not upstream (#1729)
+- The development-tools image installs bats from a pinned, verified bats-core release (#1547)
+- The development-tools README says where each tool comes from and how it is verified (#1547)
+- Bump the docker login and buildx setup action pins in build-development-tools (#1547)
 - Agent prompts use cfwf instead of raw gh wherever cfwf covers the operation (#1761)
-- cfwf pr hand-off's --body-file is optional, so a hand-off is one call with the description on stdin and no review-record file (#1775)
-- cfwf issue plan-status --approval is now the single plan-approval check for repositories without a Workflow board, and the agent prompt runs it instead of its own gh issue view check. The rule is the stricter of the two it replaces: the approval must follow the latest plan (any revised one included), come from a human collaborator or the owner who is not a bot, the agent, the PR creator or the plan's author, and hold approved or lgtm as a whole word on a non-quoted line with no negation, condition or question. go ahead and looks good no longer count. The orchestrator's host-side check applies the same rule (#1772)
-- The agent prompts mark items Blocked with cfwf label add instead of raw gh issue edit and gh pr edit (#1593)
-- test/oneshot.bats is split into 17 per-concern test/oneshot-<concern>.bats files with the shared setup, teardown and fixture helpers in test/oneshot_helper.bash, so bats can run them in parallel; no test is added, removed or changed (#1579)
-- Five slow bats tests no longer wait on avoidable delays: the real retry sleep in a count_pr_comments_matching test, real gh calls in two notify_discord_work_item waiting-latch tests, a per-guide rescan of every script in the development-guides check, and 20 read-backs in a project_status_convert mismatch test; no assertion is changed (#1580)
+- cfwf pr hand-off's --body-file is optional, so a hand-off is one call (#1775)
+- cfwf issue plan-status --approval is the single plan-approval check without a board (#1772)
+- The agent prompts mark items Blocked with cfwf label add instead of raw gh (#1593)
+- Split test/oneshot.bats into 17 per-concern files so bats can run them in parallel (#1579)
+- Five slow bats tests no longer wait on avoidable delays (#1580)
 - Dependencies - Updated trufflehog to 3.99.8
 
 ## [0.0.6] - 2026-10-26
 ### Security
-- Agents can no longer change Claude Code configuration (`.claude` settings, hooks, agents, skills, `.mcp.json` and `/etc/claude-code`) through Bash: enforce-allowed-dirs now works out every Bash write target and denies by default, classifying every command-allowlist entry as a writer or read-only, and it checks Edit, Write and NotebookEdit paths against the same rules (#1554)
+- Agents can no longer change Claude Code configuration through Bash (#1554)
 ### Added
-- cfwf task wait waits in one blocking call for a background command (run_in_background) to finish, by watching whether any process still holds its output file. It exits 0 when finished, 4 at the timeout and 9 for a missing file, and prints the end of the output. The background-commands rule now tells agents to wait with it and never to poll with ps, pgrep or repeated Reads, which had used up whole sessions without a commit (#1710)
-- Added the block-config-skills hook, which blocks the skills that edit Claude Code's settings, permissions, hooks, keybindings or skill definitions (update-config, fewer-permission-prompts, keybindings-help, init, plugin-authoring and skill-creator), as a second layer beside the Skill permission denies (#1554)
-- cfwf run rerun reruns only the failed jobs of one GitHub Actions run of an open pull request, given with --repo <owner/repo> and --run <id>, so a flaky check can be retried without rerunning passing jobs or a whole workflow; it refuses, with exit 8 and nothing written, a run on the repository's default branch, a run that is not the current head of an open pull request, and a run on its third attempt or later; a run still in progress exits 4 and a missing run exits 9 (#1587)
+- cfwf task wait waits in one blocking call for a background command to finish (#1710)
+- Add the block-config-skills hook, blocking skills that edit Claude Code configuration (#1554)
+- cfwf run rerun reruns only the failed jobs of one Actions run of an open PR (#1587)
 ### Fixed
-- PHASE A now names the allowed way to continue a rebase after resolving conflicts (`git -C <repo> add`, then `git -C <repo> rebase --continue` on its own), and says no editor override is needed. Agents had tried GIT_EDITOR=true or -c core.editor=true first, which the hooks deny, and wasted a denied call on every conflicted PR (#1716)
-- A dependency-update PR that is still behind its base when it reaches the agent (BEHIND) is now worked through the normal flow, which rebases it and recovers a dirty working tree, instead of the verify-only prompt. A leftover uncommitted change in the checkout skipped the non-agentic rebase, so the verify-only prompt reported "no action needed" on every tick and the PR looped without ever being rebased (#1714)
-- PHASE C now tells the agent to find a failed check's cause in the failing step's ##[error] lines (not warnings or recovered retries) and quote them, to fix errors that already exist on the base branch or in untouched files so the build passes, and to call a failure infrastructure only when the error line shows it, re-running the failed jobs once with cfwf before blocking. Agents had blocked fixable dependency PRs by blaming a harmless runtime-download warning
-- A dependency-update PR with merge conflicts (DIRTY) is now worked through the normal flow, which resolves the conflict, instead of the verify-only prompt, which has no rebase steps and reported "no action needed" on every tick while the PR stayed conflicted
-- A dependency-update PR (depends/ or dependabot/ branch) whose required check failed is now worked through the normal flow (PHASE C, fix the failed check) instead of the CI-verify-only prompt, which forbade code changes and could only comment and add Blocked. Bumps that break the build get fixed instead of parked for a human
-- A PR whose merge state GitHub keeps reporting as UNKNOWN is no longer treated as settled forever: once it has stayed UNKNOWN for UNKNOWN_MERGE_STATE_TIMEOUT_MINUTES (default 60) and the branch is behind its base, it gets the same non-agentic rebase as a BEHIND PR (#1701)
-- A PR whose required check was cancelled, timed out or failed to start, with auto-merge armed, is no longer treated as settled and skipped forever: every unsuccessful check conclusion now counts as a failed check, so the orchestrator works on the PR or blocks it for a human (#1432)
+- PHASE A names the allowed way to continue a rebase after resolving conflicts (#1716)
+- A dependency PR that is still BEHIND is worked through the normal flow (#1714)
+- PHASE C tells the agent to find a failed check's cause in the step's ##[error] lines
+- A dependency PR with merge conflicts (DIRTY) is worked through the normal flow
+- A dependency PR whose required check failed is worked through the normal flow (PHASE C)
+- A PR stuck in UNKNOWN merge state is rebased once the timeout passes and it is behind (#1701)
+- Every unsuccessful check conclusion now counts as a failed check (#1432)
 ### Changed
-- The Claude Code hooks and managed settings are installed root-owned under `/etc/claude-code` by install-claude-hooks, so the agent's user can no longer rewrite the guardrails that govern it; the user settings.json now only carries preferences (#1554)
+- install-claude-hooks installs hooks and managed settings root-owned in /etc/claude-code (#1554)
 - SDK - Updated DotNet SDK to 10.0.403
 
 ## [0.0.5] - 2026-10-23
 ### Security
-- Fixed several fail-open bugs in the block-git-worktree Claude Code hook: a word-extraction transport that could desync on embedded tab bytes or non-literal arguments, unguarded jq calls that silently disabled the hook on failure, an EnterWorktree tool_name dispatch with no fail-closed default, and an empty-string EnterWorktree name treated the same as an absent one
-- Extend enforce-git-dash-c to block git-hook-bypass flags (long and short form, scoped correctly per subcommand) and the HUSKY=0 environment override on git commands (#1399)
-- Added a repo-owned block-github-mcp-write-tools Claude Code hook that blocks GitHub MCP write tools (create/update/delete file, push files, merge pull request, update pull request branch), so they cannot bypass local git hooks
-- Claude Code sessions in the development-full container now start as the credfeto-orchestrator agent, so a session is limited to that agent's delegating tool set, and the image build fails if that agent is not installed
-- Ban podman, docker and nerdctl execution outright in agent Bash calls: removed from containers/base/development-full/claude-hooks/command-allowlist and the claude-settings.json permissions.allow list, and added to command-blocklist with a named message, closing the bypass where a host-written script mounted into a container and run as the container's command could execute arbitrary shell despite the existing sh/bash sub-shell ban (#1539)
-- enforce-background-for-long-running-commands's checks for git commit, dotnet build/test, npm test and bun test could previously be bypassed by a command using a dynamic argument, a backslash-escaped subcommand name, or an argument containing certain special bytes, letting a long-running command run in the foreground without being backgrounded; all three are now closed (#1526)
-- enforce-background-for-long-running-commands now fails closed if AST analysis by jq fails: if the word-extraction pipeline errors on an unexpected AST shape, the hook blocks the command with a clear diagnostic instead of silently falling through to allow it unbackgrounded (opposite of the documented contract); literal nodes with no value key resolve as opaque like other unrecognized shapes, instead of empty fields that would shift argument indices and bypass subcommand detection (#1526)
+- Fix several fail-open bugs in the block-git-worktree Claude Code hook
+- enforce-git-dash-c blocks git hook-bypass flags and the HUSKY=0 override (#1399)
+- Add a block-github-mcp-write-tools hook so GitHub MCP writes can't bypass local git hooks
+- development-full sessions start as the credfeto-orchestrator agent
+- Ban podman, docker and nerdctl execution outright in agent Bash calls (#1539)
+- Close bypasses of enforce-background-for-long-running-commands (#1526)
+- enforce-background-for-long-running-commands fails closed if jq AST analysis fails (#1526)
 ### Added
-- Idle-exhaustion and runaway/total-invocation Blocked comments on a PR or Issue now include the last session's own diagnostic (a permission-denials summary, or a short diagnostic-refusal result) when one was recorded, fenced and truncated, instead of only the generic reason text - closing the gap where that diagnostic previously only ever reached Discord, deduplicated, and never the PR/Issue a human is actually looking at (#1448)
-- Link dotnet/skills plugins (dotnet, dotnet-advanced, dotnet-diag, dotnet-msbuild, dotnet-nuget, dotnet-test, dotnet-upgrade) into the development-full container image
-- cfwf, a workflow helper baked into the development-full image, replaces the multi-step gh scripts agents kept re-deriving with single flat commands (one allowlist entry covers them): workflow-status --set moves an issue or PR on the Workflow board (trusting gh's exit status, without reading the value back), workflow-status --check reads its status, and closing-issue-labels lists the labels of the issues a PR closes (#1346)
-- Development guides under docs/development: a general guide (repository layout, how the shell scripts are written and tested, the change workflow, and the GitHub API behaviour that has caught us out such as reads lagging writes and the missing single-item read in gh project), one guide for each of the twelve scripts, and pages on the lib modules and the Claude Code hooks; a local AI rule tells agents to read the relevant guide before changing a script and to update it with the change, and test/development-guides.bats fails when a script has no guide or a link is broken (#1495)
-- cfwf issue create creates an issue and puts it on the Workflow board as Not Started in one step, so the board write can no longer be forgotten: it takes a mandatory priority (Security, Urgent, High, Medium or Low) and refuses a priority given as a label, reads the body from a file or stdin and rejects an empty one, creates any missing label first (standard labels get their colour and description from a copy of .github/labels.yml kept in step by a test), and checks everything, including that a Workflow board is linked, before creating anything; the unparseable rate-limit tracking issue the orchestrator files now goes through it too (#1502)
-- The development-full image makes the credfeto-ai-skills agents available to Claude Code, read-only to the developer user, and the build fails if no agent is installed or any agent cannot be linked
-- check-credfeto-tools-updates.yml polls nuget.org hourly for development-credfeto-tools' 5 tracked first-party Credfeto.*/FunFair.* NuGet packages (Credfeto.Changelog.Cmd, Credfeto.DotNet.Code.Analysis.Overrides.Cmd, FunFair.BuildCheck, FunFair.BuildVersion, Credfeto.DotNet.Repo.Formatter) and dispatches an immediate rebuild only when a resolved version hash differs from the one baked into the currently-published image, instead of waiting up to a day for the scheduled run (#1404)
-- development-full container: allow node --check and running a .js file directly under .github/actions/<action>/ (scoped to that directory in both forms) in the Claude Code hooks, so GitHub Actions JS scripts can be syntax-checked or run locally without waiting on CI; node -e/-c/--eval/-p/--print/-i/--interactive remain blocked as interpreter re-invocation (-p/-i exactly matched for node only, so a shell's privileged or interactive mode is not misreported), glued forms such as -e"code" and --eval="code" are blocked too, and permissions.deny blocks node's code-loading flags (-r/--require/--import/--loader/--experimental-loader/--inspect) and .. path traversal as defence in depth; a script argument that looks like an inline-code flag (-config, -env, -p) is still rejected for every interpreter, a known fail-closed limitation tracked in #1545 (#1533)
-- Persist Claude Code session transcripts with 14-day file-age retention for work items, 7-day retention for interactive sessions, symlinks from pivoted PRs to the lowest-numbered Issue, and session resumption capability
-- A 'Session stalled' Discord alert, routed to the permissions channel, sent once per item per hour when an agent session ends saying Bash is denied or disabled and that it gave up, or when a PR session hits permission denials and makes no progress; a message that also says how the session carried on is not a quit, but negated wording such as 'nothing was pushed' or 'not completed' does not count as carrying on; payload carries only the denied command names (comma-separated) and a masked excerpt (first 240 chars) of the final message (#1561)
-- A per-owner per-day session-denials log (one tab-separated line per session: timestamp, repo, item type, item id, denial count, stalled flag, quit flag, denied command names), stored in ~/.local/state/orchestrator/<owner>/session-denials.YYYY-MM-DD, and a daily Discord digest sent lazily on the first tick of each day that summarises the previous day's denials and stalled sessions per repository, with top-five denied command names and counts against the day before; after the host has been down across several midnights, one digest goes out for each missed day, oldest first, each compared with the day before it, reaching back at most SESSION_DENIALS_RETENTION_DAYS (default 30), which is also how long the per-day files are kept (#1561)
-- cfwf body leak check: `cfwf issue create` checks titles, bodies and labels; `cfwf body check` checks bodies only. Both refuse tokens, host paths, C0/C1 control characters (including carriage return), non-UTF-8 bytes, bodies longer than 65536 characters, and (on public targets) references to private repositories, with exit code 8 before posting (scan errors and unresolvable target repositories exit 1); refusals name the refused field and (for bodies only) the line number, never the matched text; visibility lookups are cached per run; each body is copied once from file or stdin, validated and posted; usage errors no longer echo option values or unrecognised arguments (#1583)
-- cfwf pr checks judges required checks from branch protection and rulesets: (name, app) pairs grouped byte-exact, newest run per group across check suites (a skipped run replaces only a stored skipped or cancelled run); takes --repo <owner/repo> and one of --pr <n>, --sha (40-hex) or --branch, optional --all; tab-separated output with check lines and summary; treats a rulesets-read 403 with "Upgrade to GitHub Pro..." as no rulesets; exits 0 all passed, 3 failed, 4 pending, 5 no checks, 1 error, 2 usage error; requires only read access (#1584)
-- cfwf comment add: a command to post a top-level comment on a PR or issue, with leak checks and a plan-approval keyword rule (refused outside Markdown quotes, with exit 8) to prevent misreading as human approval (#1585)
-- Local instruction requiring agents to report clock times in the local time zone with abbreviation, never UTC from date -u - #1619
-- cfwf issue view: a command that prints an issue's title, state, labels, assignees and body as fixed fields (#1496)
-- cfwf issue plan-status: a command that reports whether an issue has an implementation plan comment, who posted the latest one and when, whether Blocked is set, and for each later comment its author, association, URL and whether it carries a plan sign-off keyword (#1496)
-- cfwf pr view prints a pull request's fields as tab-separated name and value lines (state, draft, title, url, base, head, head-sha, auto-merge, review-decision, merge-state, mergeable, created-at, merged-at, merge-commit, labels, assignees, author, commit-authors); takes --repo <owner/repo> --pr <n> and an optional, repeatable --field <name> to print only the named fields; files and body print only when asked for alone; exits 0 printed, 9 pull request not found, 1 error including a truncated files list, 2 usage error (#1497)
-- cfwf pr list lists a repository's open pull requests, one line each, as tab-separated fields (number, head, base, author, draft or ready, flags, url, title); takes --repo <owner/repo>, an optional --issue <n> that flags each pull request whose branch holds that issue number, and an optional --head <branch> that lists only that branch's pull requests; also flags pull requests opened by app/github-actions and those from a fork; control characters in a value print as spaces; exits 0 listed (an empty list included), 1 error including more than 1000 pull requests returned, 2 usage error (#1498)
-- cfwf pr comments prints everything said on a pull request (top-level comments, reviews, review threads with their inline comments, and the review decision) from one read that cfwf pages itself, and prints nothing unless every page was read and the items match GitHub's own counts; output is blocks of tab-separated key and value header lines, body lines each starting with a vertical bar, and a final summary line; authors print as the login for a user, app/<slug> for a bot and empty for a deleted account. cfwf pr reply answers an inline review comment from --body-file only, after the body leak check, posts once and never retries; takes --repo <owner/repo> --pr <n> --comment-id <id>; exits 0 done, 9 pull request or inline comment not found, 8 body refused, 1 error, 2 usage error (#1499)
-- cfwf release view prints a repository's latest release as tab-separated tag, published-at, url and name lines, cfwf release list lists up to 1000 of its releases newest first, one line each, without drafts and flagging the latest and pre-releases, and cfwf tag view --repo <owner/repo> --tag <tag> prints the commit SHA a tag points to and whether the tag is lightweight or annotated, so a uses: version can be audited and pinned; all three are read-only, take --repo <owner/repo>, exit 0 printed or listed, 9 when the repository has no latest release or the tag is not found, 1 error including more than 1000 releases returned, 2 usage error (#1500)
-- Issue title convention for this repository: every issue title starts with the tool or component it affects, using a `<scope>: <rest>` format (#1581)
-- cfwf repo view and cfwf repo collaborators print a repository's default branch, visibility, allowed merge methods and description, and its collaborators with their roles sorted by login, as tab-separated lines; cfwf auth status prints the authenticated login, the host and the gh version, and with --rate-limit the REST and GraphQL rate limits, never a token; all are read-only, exiting 0 when printed, 1 on error (including a repository not found, no push access to list collaborators, more than 1000 collaborators, or not authenticated) and 2 on a usage error (#1501)
-- cfwf pr create creates a draft pull request from a pushed head branch and puts it on the Workflow board as Development in one step, so the board write can no longer be forgotten: it takes a Conventional Commits title and a body from a file, checks the title and body for leaks before anything is created, and when the head branch already has an open pull request in the repository it prints that pull request's URL instead, moving its board status forward only when it is behind Development and leaving its title and body alone (#1513)
-- cfwf issue list lists a repository's open issues, highest priority first, one tab-separated line each with the number, priority, flags (blocked, on-hold), assignees, title and labels; cfwf issue search searches one repository's issues by words in their titles or bodies, sending punctuation as spaces so no search qualifier can be added, and refusing AND, OR and NOT only in upper case, the only form GitHub reads as operators, so a search never leaves the named repository (#1535)
-- cfwf issue create refuses an issue title that is not "prefix: text" or "prefix(name): text" with a lower-case prefix when the repository is owned by credfeto or funfair-tech, exiting 2 before any GitHub call; pull request titles are not shape-checked (`cfwf pr create` validates them as Conventional Commits instead) and no policy file is read (#1637)
-- cfwf branch required-checks prints the status checks a branch requires, from its classic branch protection and every ruleset that applies to it, merged and de-duplicated, one name a line, and nothing when none; it takes --repo <owner/repo> --branch <name>, is read-only and exits 9 when the repository has no branch of that name (#1537)
-- cfwf issue label-history prints every label added to or removed from an issue or pull request, oldest first, as tab-separated lines giving the change, the time, who made it and the label, with an optional --label filter; cfwf pr ready-at prints when a pull request was last marked ready for review, or when it was created if it never was, and says which; both take --repo <owner/repo>, exit 0 when printed or nothing to print, 9 when the issue or pull request is not found, 1 on error and 2 on a usage error (#1536)
-- cfwf pr diff: print a pull request's unified diff, its changed files with a status letter (--name-only) or each file's added and deleted line counts (--stat), paging the files list and refusing a diff over 1 MiB or more than 3000 files whole, replacing raw gh pr diff and gh api pulls/<n>/files (#1588)
+- Idle-exhaustion and runaway Blocked comments include the last session's diagnostic (#1448)
+- Link the dotnet/skills plugins into the development-full container image
+- cfwf, a workflow helper in the development-full image, replaces multi-step gh scripts (#1346)
+- Add development guides under docs/development (#1495)
+- cfwf issue create creates an issue and puts it on the Workflow board in one step (#1502)
+- The development-full image makes the credfeto-ai-skills agents available to Claude Code
+- check-credfeto-tools-updates.yml polls nuget.org hourly for tracked tool packages (#1404)
+- Allow node --check and running .js files under .github/actions/<action>/ (#1545, #1533)
+- Persist Claude Code session transcripts with retention, pivot symlinks and resumption
+- Add a 'Session stalled' Discord alert for sessions that give up on denied tools (#1561)
+- Add a per-owner, per-day session-denials log (#1561)
+- cfwf body leak check for issue create and body check (#1583)
+- cfwf pr checks judges required checks from branch protection and rulesets (#1584)
+- cfwf comment add posts a top-level comment with leak and approval-keyword checks (#1585)
+- Local instruction: report clock times in the local time zone, never UTC (#1619)
+- cfwf issue view prints an issue's title, state, labels, assignees and body (#1496)
+- cfwf issue plan-status reports an issue's implementation plan and approval state (#1496)
+- cfwf pr view prints a pull request's fields as tab-separated name and value lines (#1497)
+- cfwf pr list lists a repository's open pull requests, one line each (#1498)
+- cfwf pr comments prints everything said on a pull request from one paged read (#1499)
+- cfwf release view and release list print a repository's releases (#1500)
+- Issue titles in this repository start with the affected tool or component (#1581)
+- cfwf repo view, repo collaborators and auth status (#1501)
+- cfwf pr create opens a draft PR and puts it on the Workflow board in one step (#1513)
+- cfwf issue list and issue search list and search a repository's issues (#1535)
+- cfwf issue create refuses a non-conventional title in credfeto and funfair-tech repos (#1637)
+- cfwf branch required-checks prints the status checks a branch requires (#1537)
+- cfwf issue label-history prints every label change on an issue or PR (#1536)
+- cfwf pr diff prints a PR's diff, changed files or per-file line counts (#1588)
 ### Fixed
-- PHASE H and the dependency-PR prompt now mark a PR ready before enabling auto-merge, because GitHub refuses auto-merge on a draft PR; previously the auto-merge attempt always failed on a still-draft bot PR and the fallback only marked it ready, so auto-merge was never enabled (#1651)
-- PR idle-invocation budget exhaustion now escalates to a Blocked label and explanatory comment even when CI is green and there is no changes-requested review, closing the one gap #1075's two escalation paths didn't cover - a healthy-looking PR sitting idle at a workflow phase boundary no longer silently rots forever with zero signal (#1463)
-- PR idle-invocation budget no longer counts a tick against the idle cap when a required CI check is still genuinely pending after the session ended - closes a race where the orchestrator's own pre-session pending-check missed a check that the agent's own later, slower check still found running, silently burning the idle budget on nothing but CI-wait time (#1463)
-- A Blocked pull request linked to an Issue is now recognized as such during the Issue-to-PR pivot lookup, instead of being filtered out and silently misread as 'no PR yet' - closing the gap where blocking a PR did not actually stand off its linked Issue, which kept getting re-invoked against its own idle budget for a session that could only ever find the same blocked PR and stop (#1463)
-- PR idle-invocation budget no longer counts a tick against the idle cap when the session made real forward progress with no commit - a Workflow Status board move (a clean phase advance) or a new top-level comment (a reply-only round) now resets the idle counter the same way a genuine commit already does, instead of being charged the same as literal idleness - closing the gap where a healthy PR working through the review pipeline could hit idle-budget-exhausted and get falsely Blocked after only a few clean phase advances (#1474)
-- Harden the runaway-invocation-cap reset against a stale read-after-write of the Blocked label - a tick observing a marker-present item as unblocked now re-confirms with a live GitHub check before discarding the invocation budget, so a read that lags behind an earlier tick's own verified Blocked write can no longer silently reopen the cap (#1310)
-- Pending CI checks are detected again: an in-progress check with an empty-string conclusion (as gh reports it) no longer reads as finished, so a PR waiting on CI is deferred instead of burning its idle budget and being blocked (#1483)
-- A PR that has finished its review pipeline but sits on a repo where auto-merge isn't supported is now correctly recognized as settled (via the Workflow Status board's Human Review substatus), so it stops burning agent invocations with nothing to do and correctly gets the review-needed notification (#1479)
-- The stop_ssh_agent decoy test no longer fails and hangs the test run on hosts where ssh-agent is not visible to pgrep; it takes the decoy's pid from ssh-agent's own output and skips with an explanation when the decoy cannot be seen (#1487)
-- cfwf workflow-status --check no longer says an item that was just added is 'not on project': it now reads the single item directly with a read-only GraphQL query (the only place cfwf uses gh api graphql; every write stays on native gh project commands) instead of listing the whole board, which lags behind writes and stopped at 1000 items, and falls back to listing up to 10000 items with a warning if the query fails (#1491)
-- cfwf workflow-status --set no longer reads the value back after writing it, so it can no longer report a false 'did not persist' failure for a write that had persisted: it succeeds when gh project item-edit does and prints 'Set <url> to <status>', in line with the shared rule that a write whose call succeeded is done and a read that disagrees straight afterwards is lag (#1491)
-- Choose the dependency-update pull request prompt by branch prefix (depends/ or dependabot/) instead of the dependencies label, and never auto-merge, mark ready or treat as settled a pull request that still carries the .deleteme.now placeholder, and only give the verify-only dependency prompt to a same-repository pull request (a fork PR on a depends/ branch gets the full phase flow); the full flow removes a placeholder left next to the real change instead of stopping, and an auto-merge already armed on a placeholder-only pull request is disarmed
-- create-project no longer swallows a failed Status field create or option update: each substitution in ensure_status_field that wraps a die-calling function now exits 1 on failure, so the script stops with the real error instead of printing 'Status field added' and exiting 0, and it dies if it ends with no field id (#1503)
-- An invalid CI_CHECK_TIMEOUT_MINUTES in the environment (not a positive integer) now falls back to the same 1440 minutes as when it is unset, instead of silently dropping to 120, and both come from one constant so they cannot diverge again (#1504)
-- The orchestrator now recognises the pull requests opened by the PR create bot (prpixie, set with PR_CREATOR_LOGIN) as its own work, so an issue whose pull request a human is developing is reported as human-driven, and a pull request from a person or a dependency bot no longer stops it working on other issues in the same repository, because only one active pull request per user applies (#1517)
-- Board conversion now waits up to about five minutes (20 reads, 15 seconds apart) for GitHub to show the copied Status values before giving up (#1523)
-- Allow the buildcheck and buildtest commands in the development-full container's claude-settings.json permissions, matching their command-allowlist entries
-- The development-full image build now fails on a duplicate skill name under any skills root, not only the last one
-- enforce-background-for-long-running-commands now recognises quoted-but-static subcommands like dotnet "restore" as literals instead of treating them as dynamic content, widening literal recognition to one layer of ordinary quoting with no expansion (matching enforce-ssh-host-and-key's pattern), whilst genuinely dynamic and ANSI-C/locale quoting remain opaque, preventing misleading unresolved subcommand blocks (#1526)
-- Shell scripts and bats tests now pass the agent container's ShellCheck 0.10 pre-work baseline as well as ShellCheck 0.11, and lib/* sourced libraries now pass the global pre-commit hooks' shellcheck --check-sourced validation (#1546)
-- lib/state report_unparseable_rate_limit no longer swallows gh/jq lookup failures, avoiding duplicate rate-limit comments - #1213
-- Oneshot-generated container CLAUDE.md files (issue, PR, and dependency-PR variants) now tell agents that a 'don't ask mode' permission denial refuses only the one command it names; Bash is still available, so they must retry in the rule-compliant form and never end the session or report Bash as disabled (#1559)
-- The orchestrator's own comments are excluded from progress and unaddressed-comment detection; the comment-seen marker only advances to comments the agent was given; board moves and pushed commits count as progress; comment-age comparison is strictly later-than, not equal-or-later; a failed post-session re-read no longer charges idle (#1557)
-- Required-check status is now resolved from the same GraphQL source as `gh pr checks --required`, with the base branch's protection and rulesets resolving an empty list; a failed lookup warns and the Blocked reason explains that a failed required check could not be ruled out (#1557)
-- Unchanged PRs now get the next review-loop phase named instead of being skipped (a Complete board no longer prevents invocation); BEHIND and DIRTY PRs are re-invoked on the issue-pivot path too; the PR session prompt processes trusted comments first and stashes rather than discards uncommitted changes when left on the PR's own branch (#1557)
-- development-full container: delete pre-commit install and install-deps-* scripts after the acceptance test suite passes instead of beforehand, fixing the build failure with newer upstream tests that require these files (#1583)
-- test/oneshot.bats teardown now calls cleanup_repo_fixtures, so test runs no longer leave test/.fixture.ceiling-guard-* directories behind (#1585)
-- cfwf reads a --pr or --issue number given with leading zeros as that number, so workflow-status --set, workflow-status --check, closing-issue-labels, pr checks and comment add no longer pass the zeros on to GitHub (#1585)
-- A PR that oneshot rebases non-agentically now has its idle invocation counter reset to 0 (its lifetime total is kept), so idle sessions charged before the rebase no longer count towards an idle-exhaustion block; a rebase that conflicts and is handed to the agent resets nothing (#1664)
-- oneshot: PR prompts no longer tell the agent to sync linked-issue labels with an `IFS=`/`while read` shell loop that the command hooks always deny; the orchestrator already syncs them before every PR session, so the prompt now says so instead (#1657)
-- oneshot: prompts no longer require the Monitor tool to wait for backgrounded commits, builds and tests, since it is usually unavailable in agent sessions. Agents use it only when available, otherwise re-read the command's output file with Read, and are told not to fall back to shell wait loops (sleep/until/timeout/pgrep) that the hooks deny (#1656)
-- oneshot: automated CI summary comments (SARIF findings tables, the Super-linter summary) no longer count as unaddressed trusted comments or change the PR fingerprint, so they no longer start no-op sessions or stop an auto-merge-armed, green PR from being treated as settled (#1660)
-- A PR's Workflow-board card is no longer lowered to Development when the board's items listing leaves it out: a missed item's own card is read before it is treated as off the board, the floor status is written only when the PR has no card or no status, a failed read leaves the card alone, and an empty listing page mid-walk is logged; previously a short listing during a GitHub incident reset a PR from AI Review to Development every tick, and the agent's move back counted as progress, so the PR looped through the review phases indefinitely (#1688)
-- The bump-pinned-tool-versions workflow passes `assignees` to the create-pull-request action, matching its renamed input, so actionlint passes again (#1694)
+- PHASE H and the dependency-PR prompt mark a PR ready before enabling auto-merge (#1651)
+- Idle budget exhaustion escalates to Blocked even when CI is green (#1075, #1463)
+- A tick with a required check still pending is no longer charged to the idle budget (#1463)
+- A Blocked PR linked to an issue is recognised during the issue-to-PR pivot lookup (#1463)
+- A tick with progress but no commit is no longer charged to the idle budget (#1474)
+- Harden the runaway-invocation-cap reset against a stale read of the Blocked label (#1310)
+- Pending CI checks are detected again when gh reports an empty-string conclusion (#1483)
+- A finished PR on a repo without auto-merge is recognised as settled via Human Review (#1479)
+- The stop_ssh_agent decoy test no longer fails or hangs where pgrep can't see ssh-agent (#1487)
+- cfwf workflow-status --check no longer says a just-added item is 'not on project' (#1491)
+- cfwf workflow-status --set no longer reads back, so no false 'did not persist' failure (#1491)
+- Choose the dependency-PR prompt by branch prefix instead of the dependencies label
+- create-project no longer swallows a failed Status field create or option update (#1503)
+- An invalid CI_CHECK_TIMEOUT_MINUTES falls back to 1440 minutes, as when unset (#1504)
+- The orchestrator recognises pull requests opened by the PR create bot as its own work (#1517)
+- Board conversion waits up to about five minutes for GitHub to show copied Status values (#1523)
+- Allow buildcheck and buildtest in development-full's claude-settings.json permissions
+- The development-full build fails on a duplicate skill name under any skills root
+- The long-running-commands hook treats quoted static subcommands as literals (#1526)
+- Shell scripts and bats tests pass both ShellCheck 0.10 and 0.11 (#1546)
+- report_unparseable_rate_limit no longer swallows lookup failures, avoiding duplicates (#1213)
+- Generated CLAUDE.md files say a dontAsk denial refuses only the one named command (#1559)
+- Exclude the orchestrator's own comments from progress and unaddressed-comment detection (#1557)
+- Resolve required-check status from the same GraphQL source as gh pr checks --required (#1557)
+- Unchanged PRs get the next review-loop phase named instead of being skipped (#1557)
+- development-full deletes pre-commit install scripts after the acceptance tests (#1583)
+- test/oneshot.bats teardown cleans up its ceiling-guard fixture directories (#1585)
+- cfwf reads a --pr or --issue number with leading zeros as that number (#1585)
+- Reset a PR's idle invocation counter when oneshot rebases it non-agentically (#1664)
+- PR prompts no longer ask the agent to sync linked-issue labels with a denied loop (#1657)
+- Prompts no longer require the Monitor tool to wait for backgrounded commands (#1656)
+- Automated CI summary comments no longer count as unaddressed trusted comments (#1660)
+- A PR's board card is no longer lowered to Development when the items listing omits it (#1688)
+- bump-pinned-tool-versions passes assignees to create-pull-request, so actionlint passes (#1694)
 ### Changed
-- install-claude-hooks now installs cfwf into /usr/local/bin for every user on the host, using sudo when it cannot write there (printing the command to run if sudo is unavailable or declined), and refuses to install when any tool the hooks depend on is missing, instead of only checking for jq, since a hook whose tool is missing blocks every command (#1346)
-- The Workflow board's built-in Status field now carries the ten workflow states, replacing the separate Workflow Status field and the coarse Todo, In Progress and Done set alongside it; create-project and the orchestrator convert each board in place, keeping GitHub's own board automations working, setting anything already closed or merged to Complete, and deleting the Workflow Status field only once every item's value has been copied across and read back, and a board that cannot be converted gets a Discord alert and its repository is skipped until it can; cfwf workflow-status --check prints just the status name, and cfwf follows whichever field a board uses while boards are converted (#1519)
-- enforce-background-for-long-running-commands now also blocks buildtest unless run_in_background is true, and enforce-git-dash-c allows git -C <dir> ls-files and ls-tree with any flags (#1526)
-- The fleet health check now reports stalled and quit sessions from the per-day session-denials logs, to the private Discord channel only, and no longer excludes a denial that ended a session as known-by-design (#1561)
-- cfwf body leak check also refuses npm tokens, Google API keys, an Authorization or Proxy-Authorization header with a value after its colon or equals sign, a password in the user:password@ part of a URL, x-access-token Git URLs, legacy OpenAI keys and AWS temporary access key IDs (#1614)
-- The `Locally Maintained` marker now appears only in the local instruction index; it was removed from the individual local instruction files (#1581)
+- install-claude-hooks installs cfwf into /usr/local/bin for every user on the host (#1346)
+- The Workflow board's built-in Status field now carries the ten workflow states (#1519)
+- Background-only buildtest, and git -C ls-files and ls-tree allowed with any flags (#1526)
+- The fleet health check reports stalled and quit sessions from the session-denials logs (#1561)
+- cfwf body leak check refuses more token, credential and header forms (#1614)
+- The Locally Maintained marker now appears only in the local instruction index (#1581)
 - SDK - Updated DotNet SDK to 10.0.402
-- The tracking issue that oneshot files when it cannot parse a Claude rate-limit reset time is now titled oneshot: Unparseable Claude rate-limit reset time, so it follows the repository's issue title format, and the lookup for an open tracking issue uses the same title (#1609)
-- Generated issue and pull request CLAUDE.md files now give the agent the Workflow status names and the exact cfwf workflow-status --set and --check commands for its item, inline at every step that moves the board, instead of raw project, field and option ids it had to turn into GraphQL itself, and say never to update the board with gh project or gh api graphql; an idle-exhausted pull request's Blocked comment now also gives its board status and the phase that was due next (#1650)
-- oneshot now sends the GitHub login it is authenticated as, URL-encoded, as the optional user query parameter on the priorities request so the feed can leave out items assigned to other users, and fetches without it when the login cannot be resolved (#1570)
-- Owner provisioning and removal now run as root via 'sudo ./setup-owner' and 'sudo ./teardown-owner'; the scripts no longer call sudo internally, install-timer/uninstall-timer are replaced by shared systemd unit handling, the owner joins the systemd-journal group and gets a per-owner polkit rule (#1649)
+- Retitle the unparseable rate-limit reset tracking issue to match the title format (#1609)
+- Generated CLAUDE.md files give the exact cfwf workflow-status commands inline (#1650)
+- Send the authenticated GitHub login as the user parameter on the priorities request (#1570)
+- Owner provisioning and removal run as root via sudo ./setup-owner and ./teardown-owner (#1649)
 ### Removed
-- src/FunFair.props, which only applies to funfair-tech repositories; the global pre-commit hook forbids it outside funfair-tech repos
-- Removed the interactive script with its tests, documentation and utilities, transcripts/_shared directory handling, and the PRUNE_DANGLING_IMAGES and PODMAN_REPLACE_CONTAINER settings; dangling-image pruning and podman run --replace are now unconditional, and all agent container launches require a work item
+- Remove src/FunFair.props, which only applies to funfair-tech repositories
+- Remove the interactive script, its tests, docs and related settings
 
 ## [0.0.4] - 2026-09-17
 ### Security
 - Denied Claude Code Read/Write/Edit access to /tmp in development-full's claude-settings.json
-- Restricted git -C <dir> Bash calls to an explicit subcommand allowlist enforced by enforce-git-dash-c, closing the gap where the blanket Bash(git -C *) permission implicitly allowed any git subcommand (e.g. filter-branch, daemon, credential, submodule)
-- Scoped claude-settings.json's blanket ~/.claude Edit denies down to explicit sensitive files (settings*.json*, .credentials.json, hooks/**, sessions/**, history.jsonl, CLAUDE.md, skills/**, plugins/**) and added matching Read denies for the literal-path entries, freeing plans/** and other non-sensitive paths for normal access
-- development-tools' apt install layer now refreshes daily (apt-get dist-upgrade, plus every explicitly-named package), so all its packages, including perl-base (fixing CVE-2026-13221), stay current with Debian's own security patches instead of whatever snapshot the upstream debian:trixie-slim image was last built with
+- Restrict git -C <dir> Bash calls to an explicit subcommand allowlist (enforce-git-dash-c)
+- Scope claude-settings.json's ~/.claude Edit denies to sensitive files and add Read denies
+- development-tools' apt layer refreshes daily, so packages get Debian security patches
 ### Added
-- Code review and security review phases (PHASE E/F) now self-detect non-convergence from the PR's prior review-comment history and exit early without blocking (unlike hitting the numeric cap, which still blocks), instead of only relying on a shared MAX_REVIEW_ITERATIONS cap; that cap is split into independent MAX_CODE_REVIEW_ITERATIONS and MAX_SECURITY_REVIEW_ITERATIONS budgets (default 15 each, up from 3) now that early-exit does the everyday convergence work. That early exit only fires once at least MIN_REVIEW_CONVERGENCE_ROUNDS rounds (default 3, mirroring the existing SIMPLIFY_THRASH_LIMIT) have run, so a single repeat after one failed fix attempt cannot end the phase early. Coverage (PHASE G) gets its own MAX_COVERAGE_ITERATIONS budget (default 6) and a percentage-trend early exit that DOES block, requiring a PR comment stating the agent's reasoning, since coverage is a release gate with no downstream re-check. MAX_PR_TOTAL_INVOCATIONS default rises from 30 to 57 (the sum of the four per-phase budgets plus a flat +11 headroom for phases with no itemised budget of their own, replacing an earlier percentage-based multiplier whose relative headroom shrank as those budgets grew). MAX_SIMPLIFY_ITERATIONS also gains the same regex validation as the other three budgets (previously any override, including 0 or non-numeric, passed through unchecked)
-- Cache the agent container's resolved GitHub login under a persistent ~/.cache/orchestrator/global/user.json (seeded by entrypoint.sh, self-healed and served by a new cache-gh-lookups PreToolUse hook) instead of repeatedly calling gh api user
-- Discord start/resume notifications now surface round-vs-cap progress for Simplify/code-review/security-review/coverage (with coverage's own measured percentages), the priorities feed's real numeric priority instead of an approximate label-derived one, a Progress field distinguishing actively-running from parked-waiting-on-CI/human-review (also sent for parked PRs, which previously produced no per-item notification at all), and an Overall invocation-count-vs-cap field
-- Add an enforce-allowed-dirs PreToolUse hook to the development-full container, run immediately after reject-obfuscated-commands, that restricts every directory- or path-taking argument of cd/pushd, git -C, npm --prefix, find starting points and rm/mv/cp operands to a configurable allowlist of directory roots (claude-hooks/allowed-dirs, shipped with the agent container's /workspace/repo, /workspace/rules and /workspace/tmp mounts; a hand-written ~/.claude/hooks/allowed-dirs.local takes precedence on a host, and install-claude-hooks says so when it is missing), resolving symlinks and .. so a path cannot escape a root, and denying the flags on those same commands that turn a path argument into code execution (git --exec-path/--git-dir/--work-tree/--namespace/--super-prefix and every git -c key outside a short allowlist of inert display/behaviour keys, npm --script-shell/--userconfig/--globalconfig, find -exec/-execdir/-ok/-okdir/-delete/-D/-O, rm --no-preserve-root) - the check claude-settings.json's own rule syntax cannot express, since it has no typed placeholder for a directory (#1385)
-- Alert in Discord when a podman pull of the development-agent image takes disproportionately longer than the owner's own recent history (a rolling per-owner baseline, not a fixed threshold), and when a pull fails outright with no cached image to fall back to - previously indistinguishable from a genuine Claude application error (#1400)
-- Add a scheduled bump-pinned-tool-versions workflow (#1413) that checks the six curl-installed, SHA256-pinned CLI tools in development-tools/Dockerfile (hadolint, dotenv-linter, sqlcmd, actionlint, trufflehog, trivy) against their latest GitHub release daily, and opens a PR with the recomputed version and checksums when one is behind - closing the gap where these pins, unlike Dependabot-tracked dependencies, only ever moved reactively when a stale pin's own CVE started failing CI
-- Add an interactive script that runs the development-agent container as a live, attached Claude Code session against the git checkout containing the current directory, with the same image, mounts, resource limits, secrets, GPG/SSH wiring and baked-in permission settings oneshot uses: the checkout at /workspace/repo, the host cs-template checkout (INTERACTIVE_RULES_DIR, default ~/work/personal/cs-template) read-only at /workspace/rules, a fresh XDG_RUNTIME_DIR scratch directory at /workspace/tmp, and the Claude state directories shared with oneshot under ~/.orchestrator/<owner>/<repo> (transcripts are not mounted, so sessions are not resumable). The container entrypoint's refusals are run on the host first, naming host paths: a linked worktree or submodule, an origin URL or pushurl not in git@github.com: SSH form, a url.*.insteadOf rule in the checkout's .git/config, a checkout that is or contains $HOME, a .claude/settings.json, .claude/settings.local.json or .mcp.json differing from origin/main, a missing ssh-agent socket, gpg-agent or signing key, or a .env with no GH_HOST/GH_TOKEN pair (the container has no gh config of its own); .git/config (minus branch.* tracking entries) and .git/hooks (following symlinks, contents in fixed order) are digested before the session and a warning names them if they changed. interactive never passes podman run --replace (a second unlocked launch for the same checkout fails on the name rather than killing the first) and never posts launch failures to a Discord webhook found in .env. Commits use the identity git would use in that checkout (git -C <checkout> config, so includeIf and .git/config are honoured) rather than the shared .env's. On first run it bootstraps ~/.config/orchestrator itself (.env from that identity plus GH_HOST and the host's gh auth token, written once and only when the token is available; tokens/<owner> via claude setup-token) so a developer machine needs no hand-staged config; the short-lived token in ~/.claude/.credentials.json is deliberately not used because it cannot be refreshed from inside the container. invoke_claude and the new invoke_claude_interactive share the container pre-flight and argument assembly (ensure_agent_container_ready/prepare_claude_container_args) so the two launch modes cannot drift in what they mount or expose; Podman secrets are now named after the container (claude-oauth-<container>, gh-enterprise-token-<container>) so co-located oneshot and interactive launches cannot delete each other's, GH_HOST is normalised (lower-case, api.github.com folded to github.com) and the gh token is passed as GH_TOKEN rather than GH_ENTERPRISE_TOKEN when GH_HOST is github.com, on the host as well as in the container (making the documented unproxied escape hatch work for oneshot too), secrets left under the pre-rename names by a crashed run are swept on every launch, and podman image prune is gated on a new PRUNE_DANGLING_IMAGES global that interactive sets to 0 so a developer's own image store is never pruned (#1409)
-- Preflight-check the target repo's pinned .NET SDK (src/global.json) against what is installed in the agent container before starting a Claude session, dying fast with both the requested and installed SDK versions when they mismatch instead of only failing deep inside the pre-commit build step after a full session has already run (#1371)
+- Code and security review phases detect non-convergence and exit early without blocking
+- Cache the agent container's GitHub login in a persistent user.json via a hook
+- Discord start and resume notifications show round-vs-cap progress and the real priority
+- Add an enforce-allowed-dirs hook restricting directory and path arguments (#1385)
+- Alert in Discord when an agent image pull is unusually slow or fails (#1400)
+- Add a scheduled bump-pinned-tool-versions workflow for curl-installed tools (#1413)
+- Add an interactive script running the agent container as a live Claude Code session (#1409)
+- Pre-flight check the repo's pinned .NET SDK against the agent container's SDKs (#1371)
 - README status badges for each development container build workflow
-- New enforce-curl-host PreToolUse hook restricts curl to a closed grammar: an exact-spelling flag allowlist (-fsSL, -sf, -f/-s/-S/-L, -v, --fail/--silent/--show-error/--location, -o/--output, -w/--write-out, -m/--max-time - confirmed via a repo-wide grep plus a scan of this repo's own past interactive session transcripts for real curl usage) plus exactly one literal http(s):// URL argument, whose host is checked against the same domains claude-settings.json already denies to WebFetch (api.github.com, github.com, registry.npmjs.org, raw.githubusercontent.com, api.nuget.org, kept in sync via a parity test). Any flag not on the allowlist, any second URL-shaped argument, or any non-literal shell-variable-expansion argument is rejected outright. A quote-aware check rejects an argument containing an unquoted brace/tilde/glob/backslash character, or a quoted escape bash itself still acts on, while correctly allowing curl's own quoted percent-brace write-out format codes and other safely-quoted metacharacters; the URL argument specifically is also rejected if it contains a brace or square-bracket character regardless of quoting, since curl performs its own URL-globbing on those independent of shell quoting entirely. wget is removed entirely (Bash(wget *) dropped from permissions.allow and command-allowlist) rather than given a matching hook, having zero real usage anywhere in this repo. http_proxy/https_proxy/all_proxy/ftp_proxy are added to env-var-blocklist, closing a separate destination-redirection route (a per-command proxy env-var prefix) that curl honours regardless of its own flags
-- Register ai-skills-updated as a repository_dispatch event type on build-development-full.yml, alongside the existing pre-commit-updated, so credfeto-ai-skills can dispatch an immediate rebuild the same way credfeto-global-pre-commit already does (#1403)
-- Blocked, Awaiting Approval, Permissions, and Slow Image Pull Discord notifications can each be routed to their own webhook by setting DISCORD_WEBHOOK_BLOCKED, DISCORD_WEBHOOK_AWAITING_APPROVAL, DISCORD_WEBHOOK_PERMISSIONS, and/or DISCORD_WEBHOOK_SLOW_PULL in .env, instead of everything sharing the single DISCORD_WEBHOOK. Any category left unset falls back to DISCORD_WEBHOOK, so this is fully backward compatible with a single-webhook setup
+- New enforce-curl-host hook restricts curl to a closed flag and host grammar
+- Register ai-skills-updated as a repository_dispatch event on build-development-full (#1403)
+- Blocked, Awaiting Approval, Permissions and Slow Image Pull alerts can use their own webhooks
 ### Fixed
-- Register CONTAINER_RULES_PATH as a third --add-dir alongside CONTAINER_REPO_PATH/CONTAINER_SCRATCH_PATH, so the read-only /workspace/rules mount is inside Claude Codes own file-access trust boundary; cat/find/ls on files under it were being denied despite those commands being allowlisted (#1342, #1377)
-- Install bubblewrap (bwrap) in the development-tools base image, so it survives into development-agent. Claude Codes own Linux Bash-tool sandbox is built on bwrap; without it, sandbox initialization fails closed and denies every command needing an escape from the sandbox (a redirect or write outside the registered directories, dangerouslyDisableSandbox) regardless of path, command, or flags, which was being misdiagnosed as an --add-dir/--userns problem (#1351)
-- claude_result_indicates_background_stall (the #1326/#1335 self-healing warning for a session that ends its turn backgrounding a build/commit/test and expecting a later Monitor notification) now also catches an anchored 'I'll pick this up / resume / continue this' phrasing tied to a background/monitor/notification mention nearby, closing a gap that let a real stall recur undetected on credfeto-dispatcher#222 and recommendations-defi-dashboard#419 (#1374)
-- A pivoted (Issue-to-PR) PR's 'waiting on CI'/'waiting on human review' Discord notification (#1375) never actually fired - it was wired to a code path in oneshot's shared Work block that pivoted PRs can never reach, since their CI-pending/settled state is always already resolved by an earlier check first; moved the notification to that earlier, actually-reachable check and removed the now-confirmed-dead duplicate
-- entrypoint.sh now also exports CLAUDE_CODE_TMPDIR (alongside the existing TMPDIR/TMP/TEMP/XDG_RUNTIME_DIR) pointed at WORKSPACE_TMP_DIR, so Claude Code v2.1.5+'s own internal temp-file writes land inside the registered --add-dir scratch mount instead of falling back to unregistered /tmp (upstream tracked at anthropics/claude-code#31024)
-- Fixed an intermittent 'signing test failed' error from the agent entrypoint's SSH/GPG self-tests, and a related bats test-stub race, both caused by a pipe write racing a fast-exiting reader under CPU contention
-- development-agent and its base-image chain were being rebuilt and re-pushed on independent per-stage schedules even with no content change, moving the published image's digest every 15-30 minutes and forcing the orchestrator host to re-pull it before nearly every agent invocation; reduced to a single daily schedule on the root image with the workflow_run chain still propagating real changes immediately, scoped the GitHub Actions build cache per image so it stops evicting itself, and the orchestrator host now pulls the image at most once per run instead of once per work item
-- Fix bump-pinned-tool-versions' 'Check for an existing bump branch' step crashing under bash's errexit whenever a pinned tool actually has a newer release available (#1417) - it always failed for exactly the tools the workflow needed to act on, while up-to-date tools passed trivially by skipping the step
-- Removed the `Read(**/.database)` and `Edit(**/.database)` deny globs from development-full's claude-settings.json and made the cat/grep/find text-match denies require a slash before the name (`Bash(cat */.database*)` etc.): a `**` deny made the permission checker escalate every directory-wide Bash search (grep -r, find, cd) to the user because it could not prove no .database lay under the directory, and the old text form hard-denied the cs-template search-exclusion rule's own `--exclude='.database'`. The Read tool still denies `~/.database`, and the cat/grep/find text denies still match the `~/.database`, `$HOME/.database` and `/home/<user>/.database` spellings; inside the container the enforce-allowed-dirs hook already keeps cd and find starting points under /workspace, so the relative-name and find -exec forms the old text denies also caught cannot reach the home directory. A repo-local .database holds only the database name. The path-aware hook and container-side masking for .env and .database, which also cover symlinked and renamed copies, stay tracked in #1419 (#1419)
-- development-full was built from a stale development-credfeto-tools image because GitHub's workflow_run trigger does not chain more than 3 hops deep, silently dropping the chain before it reached credfeto-tools; development-dotnet-tools now explicitly dispatches the development-credfeto-tools build when reached via the workflow_run chain, resetting the hop budget for the rest of the chain (#1424)
-- An Issue that gets Blocked by the agent before any implementation plan is posted (e.g. a pre-work environment failure) never resumes once a human unblocks it - oneshot's fingerprint-unchanged decision tree only forces a re-invocation for plan-approved or plan-awaiting-approval Issues, silently parking a never-planned one forever (#1427)
-- A CheckRun with a terminal conclusion but a stale non-COMPLETED status (a persistent GitHub-side data inconsistency, confirmed live) permanently wedged pr_json_has_pending_ci_checks, keeping approved PRs with fully green CI stuck logging "CI checks pending - deferring" forever and re-blocking them on the idle-invocation timeout every time a human unblocked them (#1426)
-- development-tools base image: install the .NET SDK by exact resolved version (LTS/STS, plus whichever release currently carries a Microsoft go-live licence) instead of by channel name, so daily builds actually pick up new SDK releases instead of replaying a stale Docker cache layer indefinitely
-- development-full/development-agent base images never rebuilt after development-credfeto-tools changed: the explicit workflow_dispatch used to work around GitHub's workflow_run chain-depth limit was using the default GITHUB_TOKEN, whose dispatched runs are exempt from triggering further downstream workflow_run listeners; switched to the SOURCE_PUSH_TOKEN PAT already used elsewhere in this repo for the same reason
-- Self-heal root-owned /home/<owner>/.local ownership before each orchestrator run so a reboot-induced permission drift no longer wedges rootless Podman (#1232)
-- A host-side gpg-agent or ssh-agent failure (dead agent, missing signing key, no keys loaded) no longer mislabels whichever unrelated GitHub issue/PR the orchestrator happened to be processing that tick with a misleading Blocked comment; verify_gpg_signing_ready and preload_ssh_keys now page the operator via a deduplicated Discord notification instead (#1101)
-- Blocked PR and Issue items now reset their invocation budget as soon as a human clears the Blocked label, regardless of why they were blocked, instead of only once automation next observes the item, so an early unblock no longer immediately re-triggers the same block
-- An edit to an already-seen top-level PR comment is now detected as unaddressed trusted activity: pr_json_latest_trusted_comment_timestamp/pr_json_has_unaddressed_trusted_comment now also consult a new fetch_pr_issue_comments REST fetch (repos/<owner>/<repo>/issues/<n>/comments), since gh pr view --json comments never populates updatedAt for an edited comment (#1309)
-- Draft PRs now reset their idle-invocation counter the same way non-draft PRs already do, so a draft PR stuck with no real progress is now caught by the fast MAX_PR_IDLE_INVOCATIONS check instead of only the much looser lifetime invocation cap; pr_json_is_terminal also now treats a draft PR as non-terminal even when autoMergeRequest is still set, since GitHub does not document that converting an armed PR back to draft clears it
-- Resuming a PR with no new commit no longer resets the Workflow board status to Development, avoiding an unnecessary full re-review cycle (#1311)
+- Register CONTAINER_RULES_PATH as a third --add-dir for the rules mount (#1342, #1377)
+- Install bubblewrap in the development-tools image for Claude Code's Bash sandbox (#1351)
+- The background-stall check also catches an anchored 'I'll pick this up' phrasing (#1374)
+- Fix the pivoted PR's waiting-on-CI or review Discord notification, which never fired (#1375)
+- entrypoint.sh exports CLAUDE_CODE_TMPDIR pointed at WORKSPACE_TMP_DIR
+- Fix an intermittent 'signing test failed' entrypoint error and a related bats stub race
+- Stop rebuilding and re-pushing the agent image chain on schedules with no content change
+- Fix bump-pinned-tool-versions' existing-branch check crashing under errexit (#1417)
+- Narrow development-full's .database deny rules so they stop blocking unrelated paths (#1419)
+- Fix development-full building from a stale credfeto-tools image (workflow_run depth) (#1424)
+- An issue Blocked before any plan was posted resumes once a human unblocks it (#1427)
+- A check run with a terminal conclusion but stale status no longer reads as pending (#1426)
+- development-tools installs the .NET SDK by exact resolved version, not channel name
+- Fix development-full and development-agent never rebuilding after credfeto-tools changed
+- Self-heal root-owned ~/.local ownership before each run so rootless Podman works (#1232)
+- A host gpg-agent or ssh-agent failure no longer mislabels the current item as Blocked (#1101)
+- Blocked items reset their invocation budget as soon as a human clears Blocked
+- An edit to an already-seen top-level PR comment is detected as unaddressed activity (#1309)
+- Draft PRs reset their idle-invocation counter the same way non-draft PRs do
+- Resuming a PR with no new commit no longer resets the board status to Development (#1311)
 ### Changed
-- development-dotnet-tools' baked-in NuGet.Config renames the api.nuget.org cache source to "Cache: Nuget" and adds explicit packageSourceMapping, routing FunFair.BuildCheck/FunFair.BuildVersion/FunFair.CodeAnalysis/FunFair.Test.* (plus everything else via the catch-all) through the Nuget cache while other FunFair.* packages continue to resolve via the FunFair and FunFair (Prerelease) feeds
-- Remove the per-subcommand wildcard allow rules from claude-settings.json (find * -exec cat *, the ten git -C * config ... entries and the three npm --prefix * ... entries) that Claude Code warned about at every startup because the * in the directory position also matched injected options, now that enforce-allowed-dirs checks that position properly, and add permissions.deny entries for the same code-execution and destructive flags in both the first and a later argument position (a * only matches one-or-more characters, so a single later-position deny misses the flag-first form), plus the exact rm -rf / spellings, as a second layer (#1385)
-- Split the enforce-git-dash-c hook's hardcoded git subcommand allowlist into three named policy arrays, making it clear where a subcommand belongs when the list is next extended
-- Add git cherry-pick back to enforce-git-dash-c's subcommand allowlist (#1411), after a confirmed live need for it; the other subcommands #1394 dropped for having no confirmed use (am, mv, remote, restore, revert, rm, tag) stay blocked
+- development-dotnet-tools' NuGet.Config renames the cache source and adds source mapping
+- Remove the per-subcommand wildcard allow rules Claude Code warned about at startup (#1385)
+- Split enforce-git-dash-c's subcommand allowlist into three named policy arrays
+- Add git cherry-pick back to enforce-git-dash-c's subcommand allowlist (#1411, #1394)
 - SDK - Updated DotNet SDK to 10.0.401
-- Session/fingerprint state now lives under the XDG Base Directory Specification compliant ${XDG_STATE_HOME:-$HOME/.local/state}/orchestrator/<owner>/<repo> instead of the hard-coded ~/.orchestrator/<owner>/<repo> (a new ORCHESTRATOR_STATE_DIR variable replaces every ~/.orchestrator reference across lib/git, lib/state, lib/discord and oneshot's lock directory); a non-destructive, idempotent migration step runs once at startup, from both oneshot's and interactive's entry points, and moves any existing ~/.orchestrator tree to the new location the first time either is run after upgrading (#52)
+- Session and fingerprint state now lives under the XDG state directory (#52)
 
 ## [0.0.3] - 2026-08-19
 ### Security
-- development-node base image installs Node.js via a pinned NodeSource apt repository and the Bun runtime from a checksum-verified release archive instead of piping curl output straight to bash, and pins the markdownlint-cli2, markdownlint-cli, stylelint, stylelint-config-standard and eslint npm globals to explicit versions instead of 'latest' (#1106)
-- Pin npm to 11.18.0 in the development-node base image, overriding whatever version ships bundled with the NodeSource nodejs apt package, to fix CVE-2026-59873 (a critical denial-of-service vulnerability in npm's bundled tar dependency, fixed upstream in tar 7.5.19, first shipped in npm 11.18.0)
-- Base images now publish an SBOM and mode=max SLSA provenance attestation to ghcr.io on every push build, improving supply-chain auditability of the images the agent runs from.
-- Expand claude-settings.json's permissions.allow Bash entries to match every command already trusted by the reject-obfuscated-commands hook's command-allowlist, so Claude Code's own permission system does not newly block a hook-permitted tool once anything other than --dangerously-skip-permissions is in use
+- development-node installs Node.js and Bun from pinned, verified sources (#1106)
+- Pin npm to 11.18.0 in the development-node image to fix CVE-2026-59873
+- Base images publish an SBOM and mode=max SLSA provenance attestation on every push build
+- Expand claude-settings.json's Bash allow entries to match the hook's command-allowlist
 - Allow base64 through the reject-obfuscated-commands hook allowlist
-- Remove sqlcmd from the reject-obfuscated-commands hook allowlist - it was still hook-permitted despite claude-settings.json already denying it, and that deny rule has no effect while --dangerously-skip-permissions is passed, so the hook layer was the only one actually blocking it
-- Extend the block-git-worktree Claude Code hook to also cover the native EnterWorktree tool, which previously bypassed the guardrail entirely since it performs the equivalent of git worktree add directly with no shell command for the hook to inspect, and type-check its name/path arguments rather than relying on length alone, which had let a non-string value slip past the allow check (#1322)
-- Remove gpg from the reject-obfuscated-commands hook allowlist and claude-settings.json's permissions.allow - the agent's own Bash tool never legitimately invokes gpg directly, since commit signing goes through git's internal gpg invocation and the enforce-git-identity hook's own subprocess check is unaffected by permissions.allow (#1315)
-- Drop scp entirely from command-allowlist and permissions.allow - no legitimate need for the agent's own Bash tool to transfer files directly; rename enforce-ssh-scp-host-and-key to enforce-ssh-host-and-key and restrict ssh to exactly the form 'ssh user@host command...' (no flags, user@ mandatory, host must end in .lan, validated by a strict positive-charset regex instead of a growing character blocklist), replacing the tab/newline-joined AST-to-bash transport (found to have a complete, unauthenticated bypass via a real tab/newline byte inside a quoted word) with a delimiter-collision-free base64-per-word transport (#1315)
-- enforce-ssh-host-and-key now also blocks the word immediately after the ssh target if it is a flag, non-literal, or could expand into more than one word at runtime (backslash, brace, tilde, or glob characters) - real ssh does not stop parsing its own options at the destination, so a re-injected -o/-J/-F there (directly, or via a brace-expansion word shfmt parses as a single ordinary literal) previously bypassed both the host restriction and the key precondition entirely (local command execution via ProxyCommand, or connection redirection via ProxyJump), confirmed against real ssh's own argv parsing and bash's own word-splitting behaviour (#1315)
+- Remove sqlcmd from the reject-obfuscated-commands hook allowlist
+- block-git-worktree also covers the native EnterWorktree tool (#1322)
+- Remove gpg from the hook allowlist and claude-settings.json's permissions.allow (#1315)
+- Drop scp entirely and rename the ssh hook to enforce-ssh-host-and-key (#1315)
+- enforce-ssh-host-and-key blocks a flag or non-literal word after the ssh target (#1315)
 ### Added
-- Add a block-git-worktree Claude Code hook to the development-full container, blocking git worktree add (worktree creation) while leaving list/remove/prune and other worktree subcommands allowed
-- Add an install-claude-hooks script that installs the development-full container's Claude Code settings.json and hooks into the current host user's ~/.claude (hooks symlinked back into the repo, settings.json path-rewritten for the host), so hooks can be exercised outside the container
-- Add a development-dotnet-tools base image (stable third-party .NET global tools + claude-code) between development-python and development-full, cache-busted via a NuGet freshness check instead of a blind daily reinstall
-- Add a development-credfeto-tools base image (first-party Credfeto.*/FunFair.* .NET global tools) between development-dotnet-tools and development-full, cache-busted via the same NuGet freshness check
-- Add plain-English documentation covering the full orchestrator architecture and every major subsystem (docs/architecture.md, oneshot.md, workflow-board.md, agent-container.md, base-image-chain.md, github-integration.md, discord-notifications.md, deployment-and-setup.md), each including its own assumptions
+- Add a block-git-worktree hook to the development-full container, blocking git worktree add
+- Add install-claude-hooks to install the container's settings and hooks into ~/.claude
+- Add a development-dotnet-tools base image with stable third-party .NET global tools
+- Add a development-credfeto-tools base image with first-party .NET global tools
+- Add plain-English documentation for the orchestrator architecture and subsystems
 - Link each new architecture/subsystem doc directly from README.md's Documentation section
-- Added a Claude Code hook (block-dotnet-tool-install) to the development-full container that blocks `dotnet tool install` (local or global) and `dotnet new tool-manifest`, since this container's .NET global tools are pinned and baked into the image at build time
-- Added an 'AI Coverage' stage to the Workflow board state machine, the last automated gate before Human Review, intended to ratchet whole-repo test coverage so it cannot drop below main's; currently ships as an inert passthrough pending per-language measurement instructions (credfeto/cs-template#992).
-- Add dotnet-reportgenerator-globaltool to the pinned dotnet tool set in development-dotnet-tools, so coverage reports can be generated without runtime tool installs
-- Re-verify dotnet-reportgenerator-globaltool in development-full's build-time sanity check now that the registry chain has republished with the tool present
-- Added a PreToolUse hook (enforce-background-for-long-running-commands) to the development-full container that blocks git commit, a directly-invoked pre-commit, dotnet build, dotnet test, npm test, and bun test unless the Bash tool call sets run_in_background: true, since these five commands have no bounded duration and a foreground run that outlives the tool's own timeout is killed mid-run, skipping the target process's own cleanup (#1251)
-- Trust GitHub's Advanced Security (code scanning) bot as an automated reviewer/commenter, alongside the existing Copilot review bot
-- Container-build workflow job summaries now show the versions of each explicitly-installed tool (e.g. dotnet SDK LTS/STS versions), not just the pushed image tag.
-- Add test/command-allowlist-parity.bats, asserting every reject-obfuscated-commands command-allowlist entry has a matching claude-settings.json permissions.allow entry (unless blocklisted or explicitly denied); catches the class of drift a simplify-pass review found already shipped once in this same change
-- The orchestrator now detects when a session ends by backgrounding a local check (build/test/pre-commit) and stopping its turn to wait for a notification that will never arrive - every invocation is fresh and non-resumed, so the check and its container die with the turn. When detected, the next session's prompt gets an explicit warning quoting the exact mistake instead of silently repeating the same idle-invocation churn (confirmed live incident: credfeto-dotnet-repo-tools#215 repeated this six times over 5.5 hours before being wrongly auto-Blocked)
-- Orchestrator now parses and surfaces permission_denials from each Claude run: a log summary and a Discord notification when a run had at least one denied tool call, so a denial no longer requires reading journald to notice (#1328)
-- pre-commit-check and querydb helper scripts in the development-full image, installed to /usr/local/bin, so agents can run the full pre-commit hook chain on demand (pre-commit-check) and query SQL Server databases directly using the .database settings-file convention (querydb)
+- Add a block-dotnet-tool-install hook blocking dotnet tool install and tool-manifest
+- Add an AI Coverage stage to the Workflow board, before Human Review (#992)
+- Add dotnet-reportgenerator-globaltool to the pinned tools in development-dotnet-tools
+- Re-verify dotnet-reportgenerator-globaltool in development-full's sanity check
+- Add an enforce-background-for-long-running-commands hook for long builds and tests (#1251)
+- Trust GitHub's Advanced Security bot as an automated reviewer, alongside Copilot
+- Container-build job summaries show the versions of each explicitly installed tool
+- Add command-allowlist-parity.bats, checking hook allowlist and settings allow entries match
+- Detect a session that ends by backgrounding a check and waiting for a notification (#215)
+- Parse and surface permission_denials from each Claude run in logs and Discord (#1328)
+- Add pre-commit-check and querydb helper scripts to the development-full image
 ### Fixed
-- Make every build-development-*.yml workflow always report its required status check on pull requests, skipping the real build when the PR doesn't touch anything relevant, instead of silently never running and permanently blocking merge
-- Drop the job-level name override on every build-development-*.yml job so its check-run name matches the job id branch protection requires, instead of silently never satisfying the required status check
-- Send a Discord alert when the priorities API is unreachable after exhausting all retry attempts, instead of failing silently in the orchestrator's journal
-- Review round on the priorities-unreachable Discord alert (#1171): the dedup timestamp is no longer recorded when the Discord webhook POST itself fails (previously a coincident webhook outage silently suppressed the next hour of real alerts), a JSON-parse failure is no longer misreported as a connectivity outage with a fabricated retry-attempts count, and the dedup state is now shared across owners instead of per-owner since the priorities API is one global endpoint
-- Issue fingerprinting now accounts for Workflow-board plan approval, so an Issue approved purely via the board (rather than a new label or comment on the issue itself) is no longer skipped as 'unchanged' forever; also introduces an explicit FINGERPRINT_SCHEMA_VERSION prepended to every fingerprint so future schema changes force a deliberate, one-line, fleet-wide recheck instead of relying on incidental hash-text drift
-- Fix fingerprint_issue_json masking jq failures behind a bare pipeline, which let a stable wrong hash silently park an issue forever (#1102)
-- Harden pr_json_has_blocked_label/issue_json_has_blocked_label against the same jq-failure-masking pattern as #1102, and add an empty-canonical defensive guard to both fingerprint functions
-- Fixed the development container's baked-in Claude Code hook settings pointing at a hardcoded developer machine path instead of the container's dev user, which broke local hook testing via install-claude-hooks for any user other than that one machine.
-- PR fingerprinting now hashes legacy StatusContext checks' actual .state (e.g. Codecov-style commit statuses), instead of treating every such check as an unchanging 'none', closing a gap in the same class of bug fixed for Issue board-approval in #1204
-- enforce-git-identity checks the --global git identity instead of resolving -C paths, so commands using shell variables like $REPO are no longer misreported as having no user.email
-- duplicate git config --global --get user.signingkey allow rule corrected to the intended --local variant
-- Wired the AI Coverage board phase to the real coverage-ratchet decision procedure instead of an inert placeholder that always advanced straight to Human Review, so a PR whose branch coverage regresses below main's (or has no captured baseline) is now sent back to Development or blocked instead of skipping the check.
-- Coverage gate no longer blocks on a missing baseline: PHASE G now reads a committed COVERAGE.md live from main (bootstrapping it on first use) and skips measurement entirely for dependency-only branches, instead of getting stuck behind an ephemeral PR comment that may never have been posted
-- A dependency-bump PR (or any PR) that GitHub reports as mergeStateStatus BLOCKED with auto-merge enabled - most commonly because a required branch-protection check has never posted any status at all - is no longer misclassified as terminal/settled and silently skipped as 'unchanged' forever; it is now escalated to Blocked once the idle-invocation budget is exhausted, same as an explicitly failed or pending required check (#1250)
-- Fixed PR fingerprint computation failing with "jq: Argument list too long" for PRs with a large volume of inline review comments
-- Fixed oneshot invoking a fresh agent session for PRs that are merely waiting on CI or a required human review, since mergeStateStatus/statusCheckRollup feed the fingerprint and can flap on their own even though nothing about the PR's content changed
-- An Issue whose agent session pushed a branch and died before opening a pull request no longer sits skipped as 'unchanged' forever; oneshot now detects a branch matching the issue's naming convention with commits ahead of main and no open PR, and resumes work on it instead (#1262)
-- The generated Issue-session CLAUDE.md now only advances the Workflow board status from Approved to Development once the draft pull request has actually been created, instead of at the start of implementation, so a session that dies mid-flow no longer leaves the board looking further along than the work really is (#1262)
-- Stopped escalating a PR to the orchestrator's own Blocked label just because GitHub's mergeStateStatus reports BLOCKED with no failed/pending required check visible - GitHub's own merge-readiness computation is not a signal that a human needs to look at the PR, and blocking it pulled it out of the priorities queue entirely, letting it go stale and more likely to conflict with other in-flight work
-- A plan-approved Issue whose last agent invocation produced no durable change (no new comment, branch, or Pull Request) no longer sits at 'unchanged - skipping' forever; it is now re-invoked up to an idle-invocation budget (mirroring the existing PR-side mechanism) and escalated to Blocked for a human once that budget is exhausted with still no progress. Confirmed live: three Issues across different repos were stuck this way for 3-5 days after their pre-work-baseline blocker merged and Blocked was cleared, with no automation ever noticing (#1264)
-- Reconciled the PR/Issue session prompt's own instructions with the enforce-background-for-long-running-commands hook (#1253): git commit/pre-commit/dotnet build/dotnet test/npm test/bun test are now correctly told to run via run_in_background and be waited on to completion via the Monitor tool, instead of the old contradictory 'always run in the foreground' guidance that the hook was actively blocking - every session needing to commit or build was hitting a permission denial and making zero progress
-- Mirror a PR's Workflow board status forward from its linked issue's, so a PR-phase session no longer misreads a card left at "Not Started" as an unmet approval gate
-- Allow the bracket ('[') test idiom on the reject-obfuscated-commands allowlist, so a backgrounded command's PID-liveness check (e.g. `[ -d /proc/$PID ]`) no longer strands agent sessions that use it
-- Issues whose plan comment was posted but never marked Blocked are now self-healed: oneshot detects a plan with no genuine human approval since and applies Blocked itself, so a missed label no longer leaves an issue silently unactionable forever. Bounded to fire at most once per drift episode so a human clearing Blocked without approving is never fought.
-- Discord notification when a settled PR (auto-merge armed, all required checks green) has no approving review, so a human is alerted instead of the PR sitting invisibly mergeable-but-unapproved indefinitely (#1278)
-- Install python3-venv in the development-tools base image, so python3 -m venv no longer fails with ensurepip missing (#1289)
-- Bot-authored PRs and issues no longer briefly misclassified as human-driven when GitHub's commit-author identity resolution lags right after a push - the bot-authorship check now also matches the raw commit-author email against the orchestrator's own configured GIT_USER_EMAIL, which needs no GitHub-side resolution and is present immediately
-- Container-facing instructions now explain that a PreToolUse hook denial means a command never ran (retry immediately) instead of leaving agents to misread it as accepted and wait for a completion notification that a single-shot session can never receive - includes a concrete combined git -C <dir> commit / run_in_background: true example
-- recover_orphaned_branch now warns with a status summary before discarding uncommitted or untracked changes on an orphaned branch, instead of silently force-checking-out main with no trace of what was lost
-- The self-update step no longer wedges forever on a stale git lock: the merge now retries once after clearing known stale lock files, and oneshot itself detects and refuses to run when its checkout is still behind origin/main, alerting Discord and exiting non-zero instead of silently continuing on stale code.
-- Debugging recipe no longer reowns an owner's .git/index to root, and setup-owner self-heals ownership drift before pulling
-- Trusted PR comments left while a PR is BEHIND main or already settled (auto-merge armed, checks green) are no longer silently swallowed by the non-agentic rebase path or the terminal-state skip; both now force a real agent invocation until an actual agent turn has read the comment (#1307)
-- Fixed oneshot silently re-blocking issues and PRs whose Workflow board card had already progressed past Approved, and stopped it from silently re-adding a removed Blocked label to a PR every tick
-- An open PR occupying a repository's single active-branch slot no longer causes a plan-approved Issue to be wrongly marked Blocked once its idle-invocation budget runs out; the orchestrator now checks broadly for any occupying PR (any author, including Blocked ones) before blocking and defers silently instead
-- The enforce-background-for-long-running-commands Claude Code hook now also blocks pre-commit-check (this repo's wrapper that runs pre-commit against the existing checked-out repo) from running any other way than run_in_background: true, matching the existing enforcement for git commit, a direct pre-commit invocation, dotnet build/test, npm test, and bun test - it shares the same unbounded hook-chain duration and was previously the one path through which the agent could still run pre-commit's full check foregrounded
-- claude-settings.json's permissions.allow was missing Bash(gh api graphql*) and had no Bash(gh project *) entry at all, making both effectively unusable under --permission-mode dontAsk (#1331) - including gh api graphql, which the mandated Workflow-board-update sequence depends on. Added Bash(gh api graphql*), Bash(gh api repos/*/pulls/*) (narrowed from a broader repos/* per review), and Bash(gh project *); kept the existing Bash(gh api repos/*/releases*) entry that ai/global/github-workflows.instructions.md's GitHub Actions version-pin check depends on. Confirmed via live production denials (#1344)
-- Widen claude-settings.json's permissions.allow to cover npm --prefix <dir> run <script> (a standard invocation for a subdirectory package.json) and npm --version, both previously unmatched and denied under --permission-mode dontAsk (#1331). Confirmed via live production denials (#1344)
-- install-timer's generated systemd unit now includes a privileged, failure-tolerant ExecStartPre step that detects and reasserts ownership under REPO_DIR before its self-update fetch/merge, so the automatic self-update path self-heals the same root-reowning corruption setup-owner's manual path already handles (#1300), instead of leaving the unit reporting failed indefinitely until a human notices (#1302)
-- Agent containers now start with podman --replace, so a container name left reserved in podman's storage layer by an unclean shutdown can no longer wedge the orchestrator - a host reboot previously stranded the name and every invocation failed for 19.5 hours across ~3,000 cycles with no alert at all. oneshot now also exits non-zero when a container fails before Claude starts, so systemd marks the unit failed and a new OnFailure= handler unit (notify-unit-failure) posts a Discord alert - it runs as a separate unit so it still works when oneshot itself is too broken to report anything, and redacts token-shaped strings from the journal excerpt it forwards. ExecStop now removes the agent container on shutdown, targeting the correct owner-derived container name, so the originating condition stops recurring (#1361)
-- enforce-git-dash-c and reject-obfuscated-commands Claude Code hooks no longer silently drop run_in_background/timeout (and any other sibling field) from a Bash tool call when they auto-correct or normalise the command - a backgrounded git commit missing -C, or one containing benign Unicode punctuation, previously downgraded silently to a foreground run and hit the default timeout with no denial message (#1367)
+- Every build-development-*.yml workflow always reports its required check on PRs
+- Drop the job name overrides so check-run names match the required job ids
+- Send a Discord alert when the priorities API is unreachable after all retries
+- Review fixes for the priorities-unreachable Discord alert (#1171)
+- Issue fingerprinting accounts for Workflow-board plan approval
+- Fix fingerprint_issue_json masking jq failures behind a bare pipeline (#1102)
+- Harden the Blocked-label checks against jq-failure masking, as in #1102
+- Fix the container's hook settings pointing at a hardcoded developer machine path
+- PR fingerprinting hashes legacy StatusContext checks' actual state (#1204)
+- enforce-git-identity checks the --global git identity instead of resolving -C paths
+- Correct a duplicate git config --global --get user.signingkey allow rule to --local
+- Wire the AI Coverage board phase to the real coverage-ratchet decision procedure
+- The coverage gate no longer blocks on a missing baseline
+- A BLOCKED PR with auto-merge on and a never-reported required check isn't settled (#1250)
+- Fix PR fingerprinting failing with 'Argument list too long' on PRs with many review comments
+- Stop invoking a fresh session for PRs merely waiting on CI or a required human review
+- Detect an issue whose session pushed a branch but died before opening a PR (#1262)
+- The issue-session CLAUDE.md moves the board to Development once the draft PR exists (#1262)
+- Stop marking a PR Blocked just because mergeStateStatus reports BLOCKED
+- Re-invoke an approved issue whose last session made no durable change, within budget (#1264)
+- Reconcile the session prompt with the long-running-commands background hook (#1253)
+- Mirror a PR's Workflow board status forward from its linked issue's
+- Allow the bracket ('[') test idiom on the reject-obfuscated-commands allowlist
+- Self-heal issues whose plan comment was posted but never marked Blocked
+- Notify Discord when a settled PR has no approving review (#1278)
+- Install python3-venv in the development-tools base image (#1289)
+- Bot-authored items are no longer briefly misread as human-driven after a push
+- Container instructions explain that a PreToolUse hook denial means the command never ran
+- recover_orphaned_branch warns with a status summary before discarding changes
+- The self-update step no longer wedges forever on a stale git lock
+- The debugging recipe no longer reowns .git/index to root; setup-owner self-heals ownership
+- Trusted PR comments on a BEHIND or settled PR now force a real agent invocation (#1307)
+- Stop re-blocking items whose board card is past Approved, and re-adding a removed Blocked
+- An open PR in the single active-branch slot no longer gets an approved issue Blocked
+- The long-running-commands hook also requires pre-commit-check to run in the background
+- Allow gh api graphql and gh project in claude-settings.json permissions (#1331, #1344)
+- Allow npm --prefix <dir> run <script> and npm --version in permissions (#1331, #1344)
+- install-timer's unit reasserts REPO_DIR ownership before self-update (#1300, #1302)
+- Start agent containers with podman --replace so a stale container name can't wedge it (#1361)
+- Hooks no longer drop run_in_background or timeout when they rewrite a Bash command (#1367)
 ### Changed
-- Retarget development-full's FROM to development-credfeto-tools and trim its Dockerfile of the NuGet.Config baking, claude-code install, all twelve dotnet tool installs, alias symlinks, and PSScriptAnalyzer install that moved into development-dotnet-tools/development-credfeto-tools
-- Exempt `git clone` and read-only `git config --global|--system --get/--get-all/--get-regexp/--list` from the enforce-git-dash-c Claude hook's `-C <dir>` requirement
-- reject-obfuscated-commands now auto-corrects a fixed set of known-benign Unicode punctuation (em/en dash, curly quotes, non-breaking space, arrows, ellipsis) instead of blocking, when doing so fully resolves the command to plain ASCII
-- Simplified install-claude-hooks: claude-settings.json now ships with the literal $HOME token in hook paths instead of a hardcoded /home/developer placeholder, so no path rewriting is needed on install; the template and image build both guard against a hardcoded path being reintroduced
-- Update interactive-session instructions to the placeholder-first, two-mode Changelog workflow (credfeto/cs-template#994), including a Changelog correction step after each AI Review Loop phase and the previously-missing AI Simplify board status
-- enforce-git-dash-c makes git config strictly read-only - every config write is blocked at local, global and system scope, while --get reads remain allowed
-- Pinned all GitHub Actions workflow and composite-action uses: references to full commit SHAs so upstream tag repointing cannot inject unreviewed action code
-- Simplify phase (PHASE D) no longer shares MAX_REVIEW_ITERATIONS with the other review phases and no longer blocks the PR on non-convergence: it now uses dedicated MAX_SIMPLIFY_ITERATIONS and SIMPLIFY_THRASH_LIMIT budgets, and gives up by posting a PR comment and advancing to code review instead of adding the Blocked label
-- Allowed cd and scp in the development agent container's baked-in claude-settings.json permissions and the reject-obfuscated-commands hook's command-allowlist
-- No-work Discord notification now lists every skipped item individually (repo, issue/PR number and link, and status), not just the aggregate counts, so a human can see exactly what was skipped without checking the journal
-- Widen claude-settings.json's permissions.allow to cover every non-Bash tool the mandated workflow needs (Monitor, Task/Agent, NotebookEdit, KillShell, SlashCommand, Glob, Grep, BashOutput, WebFetch, WebSearch, TodoWrite), set permissions.defaultMode to dontAsk to match the mode #1327 targets, and extend test/command-allowlist-parity.bats to catch a missing entry - inert until the --dangerously-skip-permissions flag is dropped, but a missing entry then would deadlock every build/test cycle (Monitor is required for all mandated background-command polling)
-- Agent container now runs claude with --permission-mode dontAsk instead of --dangerously-skip-permissions (#1331) - tool calls not covered by claude-settings.json's permissions.allow or an approving PreToolUse hook are now denied rather than silently permitted, with denials surfaced via the existing permission_denials telemetry (#1328)
-- Widen claude-settings.json permissions.allow with Bash(gh api repos/*/issues/*), symmetric with the existing pulls/* and releases* entries, so resolving an issue's node_id for GraphQL Workflow-board lookups no longer requires a raw unlisted gh api call (#1342)
-- Allow 'set -e' as a narrow, argument-scoped carve-out in the reject-obfuscated-commands hook and claude-settings.json permissions.allow (Bash(set -e), no trailing wildcard) - only the exact, argument-free-except-'-e' invocation is permitted at either layer; set +e, set -x, set -o ..., set --, and bare set all remain blocked (#1349)
-- Register a second per-invocation --add-dir at /workspace/tmp, a fresh throwaway scratch directory bind-mounted read-write; the agent container's entrypoint.sh now exports TMPDIR/TMP/TEMP/XDG_RUNTIME_DIR pointing at it, so the agent has somewhere writable and registered with Claude Code's own file-write trust boundary to redirect scratch output to instead of an unregistered /tmp path (#1351 - an experiment testing whether that boundary respects --add-dir for output-redirect targets)
-- enforce-git-dash-c now auto-corrects a missing 'git -C <dir>' instead of blocking, injecting the hook's own $PWD (never the resolved repo toplevel, so a call with a relative pathspec run from a subdirectory keeps operating on that subdirectory) when git rev-parse --show-toplevel confirms $PWD sits inside a writable git repository and no directory-changing call (cd/pushd/popd, plain, wrapped, or backslash-escaped) appears anywhere in the command - both cases where it cannot be confident of the correct target directory (a preceding directory change, no enclosing repository, or an unwritable/foreign checkout) still block exactly as before (#1357)
+- Retarget development-full's FROM to development-credfeto-tools and trim its Dockerfile
+- Exempt git clone and read-only git config --global/--system reads from the -C requirement
+- reject-obfuscated-commands auto-corrects known-benign Unicode punctuation instead of blocking
+- Simplify install-claude-hooks: settings ship with a literal $HOME token in hook paths
+- Update interactive-session instructions to the two-mode changelog workflow (#994)
+- enforce-git-dash-c makes git config strictly read-only
+- Pin all GitHub Actions uses: references to full commit SHAs
+- The Simplify phase has its own iteration budgets and no longer blocks on non-convergence
+- Allow cd and scp in the agent container's settings permissions and hook allowlist
+- The no-work Discord notification lists every skipped item individually
+- Allow every non-Bash tool the mandated workflow needs in claude-settings.json (#1327)
+- Run claude with --permission-mode dontAsk instead of skipping permissions (#1331, #1328)
+- Allow Bash(gh api repos/*/issues/*) in claude-settings.json permissions (#1342)
+- Allow 'set -e' as a narrow, argument-scoped carve-out in the hook and settings (#1349)
+- Register a per-invocation scratch --add-dir at /workspace/tmp and point TMPDIR at it (#1351)
+- enforce-git-dash-c auto-corrects a missing 'git -C <dir>' instead of blocking (#1357)
 - SDK - Updated DotNet SDK to 10.0.400
 
 ## [0.0.2] - 2026-07-16
 ### Security
-- Replace host ~/.gitconfig volume mount in invoke_claude with a generated minimal gitconfig built from the host git global config, avoiding exposure of the full host gitconfig inside the container
-- Replace ~/.gitconfig volume mount with git identity env vars (GIT_USER_NAME, GIT_USER_EMAIL, GIT_SIGNING_KEY) passed into the container; entrypoint.sh now configures git from those vars and dies if any required value is absent
-- Replace ~/.gnupg read-write volume mount with GPG agent extra-socket forwarding; a public-key-only gnupghome tmpdir is created per invocation so no private key material enters the container
-- Verify SHA-256 checksums for hadolint, dotenv-linter, and sqlcmd binary downloads in development-tools container to detect supply chain tampering at build time
-- Replace curl|bash installer patterns for actionlint and trufflehog in development-tools container with direct binary downloads and pinned SHA-256 verification
-- Pin all external GitHub repository clones in development-full container to specific commit hashes; build fails if upstream HEAD diverges from the expected SHA
-- Add CPU, memory, and PID resource limits to agent container invocation to prevent a compromised container from exhausting host resources
-- Added Trivy vulnerability scanning to development base image build workflows to detect CVEs in pushed Docker images
-- Replace ~/.ssh volume mount with SSH agent socket forwarding so private key files are never exposed inside the agent container
+- Replace the host ~/.gitconfig mount with a generated minimal gitconfig
+- Replace the ~/.gitconfig mount with git identity env vars passed into the container
+- Replace the ~/.gnupg mount with GPG agent extra-socket forwarding
+- Verify SHA-256 checksums for hadolint, dotenv-linter and sqlcmd downloads
+- Replace curl|bash installers for actionlint and trufflehog with pinned, verified binaries
+- Pin all external repository clones in development-full to specific commit hashes
+- Add CPU, memory and PID limits to the agent container
+- Add Trivy vulnerability scanning to development base image build workflows
+- Replace the ~/.ssh mount with SSH agent socket forwarding
 - Bump sqlfluff from 4.1.0 to 4.2.2 to resolve CVE-2026-46374
-- Skip sqlcmd, actionlint, and composite-action-lint in Trivy scan until upstream releases new builds compiled against the patched Go stdlib (CVE-2026-42504, CVE-2026-39820, CVE-2026-33810, CVE-2026-32280 et al.)
-- Validate SSH agent is forwarded and can sign commits at container startup — fails fast if SSH_AUTH_SOCK is missing, agent has no keys, or signing test fails
-- Disable Trivy secret scanning for image scans to eliminate false positive from gcp-service-account pattern in /opt/pre-commit/.gitleaks.toml (secret scanning already covered by TruffleHog in pre-commit hooks)
-- Skip trufflehog in Trivy scan until upstream releases a build compiled against the patched Go stdlib (same Go CVEs as sqlcmd/actionlint/composite-action-lint)
+- Skip sqlcmd, actionlint and composite-action-lint in Trivy until patched Go builds ship
+- Validate at container start that the forwarded SSH agent has keys and can sign
+- Disable Trivy secret scanning for image scans to avoid a gitleaks config false positive
+- Skip trufflehog in the Trivy scan until a build with the patched Go stdlib ships
 - Replace rooted Docker with rootless Podman for agent container execution
 - Revoke sudo access granted by setup-owner — no longer required with rootless Podman
 - Remove insecure ~/.gnupg:rw fallback mount — hard-fail when GPG agent extra socket is absent
-- Pass Claude OAuth token via Podman secret (claude-oauth-<owner>) instead of --env flag to hide it from podman inspect
-- Add NoNewPrivileges, PrivateTmp, ProtectSystem, CapabilityBoundingSet, AmbientCapabilities, LockPersonality, and MemoryDenyWriteExecute hardening to systemd service unit
-- Pass GH_ENTERPRISE_TOKEN via Podman secret (gh-enterprise-token) instead of --env flag to hide it from podman inspect
-- stop_ssh_agent used a bare, unscoped 'pkill ssh-agent' that could kill any process named ssh-agent system-wide — including an unrelated interactive login agent belonging to the same user — instead of only the one the orchestrator's own service instance started. It is now scoped by user and by the specific socket path, mirroring the scoping install-timer's own ExecStartPre already uses (#1122)
-- Bake GitHub's SSH host key into the agent image at build time (regenerated fresh on every rebuild) so the container no longer relies on a runtime ssh-keyscan network call, closing the known_hosts host-key-rotation trap
-- Close git config guardrail bypass via the git -C form the agent hooks force, and harden enforce-git-dash-c against pipe/chained-command/command-substitution bypasses (#1105)
-- Close a bypass in the reject-obfuscated-commands Claude Code hook where ${IFS} word-splitting (e.g. git${IFS}push) and brace-expansion (e.g. {git,push}) could reconstruct a bare git invocation without ever containing a literal whitespace-delimited "git" token, evading detection (#1105)
-- Replace the per-technique bad-construct denylist in the reject-obfuscated-commands hook with a positive allowlist on the command-name token, categorically closing the redirection-prefix and interpreter-re-invocation (bash -c/python3 -c/perl -e/...) bypasses and rejecting any non-printable or non-ASCII byte in the command; close a git-config guardrail bypass where omitting the --local/--global scope flag (which defaults to local) fell through the claude-settings.json deny rules (#1105)
+- Pass the Claude OAuth token via a Podman secret instead of --env
+- Add NoNewPrivileges and other systemd hardening options to the service unit
+- Pass GH_ENTERPRISE_TOKEN via a Podman secret instead of --env
+- stop_ssh_agent kills only the orchestrator's own ssh-agent, not any system-wide (#1122)
+- Bake GitHub's SSH host key into the agent image at build time
+- Close a git config guardrail bypass via git -C and harden enforce-git-dash-c (#1105)
+- Close ${IFS} and brace-expansion bypasses in reject-obfuscated-commands (#1105)
+- reject-obfuscated-commands uses a positive allowlist on the command name (#1105)
 - Allow podman, docker and sqlcmd through the reject-obfuscated-commands hook allowlist
 - Allow curl, wget and ping through the reject-obfuscated-commands hook allowlist
 - Allow the querydb repo-local script through the reject-obfuscated-commands hook allowlist
@@ -482,347 +482,347 @@ Releases that have at least been deployed to staging, BUT NOT necessarily releas
 - Allow ps through the reject-obfuscated-commands hook allowlist
 - Allow df and du through the reject-obfuscated-commands hook allowlist
 ### Added
-- ai/local/docker-images.instructions.md: documented agent container image hierarchy, build contexts, and the SSH rewriting strategy
-- oneshot: include Git transport information in agent prompts to provide context on how git is configured in the environment
-- Generate per-item CLAUDE.md and mount it read-only at /home/developer/.claude/CLAUDE.md in the agent container so each invocation gets structured role and work-item context without polluting the bootstrap prompt
-- SSH agent validation on container start: verify SSH_AUTH_SOCK socket exists, agent has keys loaded, and signing with the loaded key succeeds
-- GPG agent validation on container start: verify gpg-agent is responding, GIT_SIGNING_KEY is present in the keyring, and a test sign with the key succeeds
-- Set limit-severities-for-sarif on Trivy scan so exit-code 1 only fires when CRITICAL findings exist in the SARIF; without this, non-critical dotnet/gh findings filled the SARIF and triggered a false failure
-- Mount $HOME/.database read-only into the agent container at /home/developer/.database so database credentials are available to the agent; warns and skips if the file is absent
-- setup-owner script to provision a system user for the orchestrator with sudo, dotfiles, repo clone, and systemd timer
-- setup-owner: validate required config files (.config/gh, .config/orchestrator/.env, .config/orchestrator/tokens/<owner>) before provisioning and copy them into the new user's home
-- oneshot: validate required config at startup (.config/orchestrator/.env, gh/hosts.yml, per-owner token) with clear errors before starting work
-- document absolute path requirement and gpg socket permission rationale as comments in generated systemd service unit
+- Document the agent container image hierarchy, build contexts and SSH rewriting
+- oneshot: include Git transport information in agent prompts
+- Generate a per-item CLAUDE.md and mount it read-only in the agent container
+- Validate the SSH agent on container start: socket, loaded keys and a test signature
+- Validate the GPG agent on container start: responding, key present and a test signature
+- Set limit-severities-for-sarif on Trivy so only CRITICAL findings fail the scan
+- Mount $HOME/.database read-only into the agent container; skip it when absent
+- Add a setup-owner script to provision a system user for the orchestrator
+- setup-owner validates and copies the required config files before provisioning
+- oneshot validates required config at startup with clear errors
+- Document the absolute path and gpg socket permission rationale in the systemd unit
 - Run git clean -fdX after each work session to remove build artefacts
 - Sync PR labels from all linked closing issues before each work session, adding any missing labels
-- Suppress repeated Discord no-work notifications: same message is suppressed within 1 hour; different message sends immediately; re-sends hourly at most
-- Dependency PRs now enable auto-merge (or mark Blocked on CI failure) instead of leaving a stale comment; autoMergeRequest added to PR fingerprint to force one-time re-run of stuck PRs
-- Disk space guard: check available space before launching a container and notify Discord when below 10 GB
-- Prune dangling (untagged) container images before each pull and after each container run to reclaim disk space; preserves the current tagged image so the next pull requires only new layers
-- Plan-first approval workflow, AI review loop, and Workflow board (GitHub Projects v2) integration for issue orchestration
-- Board-based plan approval: orchestrator queries Workflow board for issues in Approved status and passes plan_approved flag to agent; comment-based approval comment fallback when no board is configured
-- Whitelist trusted commenters: only comments and reviews from the repo owner, collaborators, GitHub Copilot, or WHITELISTED_USERS are included when computing issue/PR fingerprints
-- Auto-report unparseable Claude 429 rate-limit reset messages to a GitHub tracking issue so the parser can be extended
-- Auto-invite trusted collaborators as Writers when a new Workflow project is created so they can set board status to Approved
-- Log git SHA provenance of each Docker image layer at agent startup so the exact orchestrator commit baked into each layer is visible in logs for debugging
-- create-project script to idempotently provision a repo's Workflow GitHub Project, and an auto-filed issue prompting the owner to run it when the orchestrator cannot obtain one
+- Suppress repeated Discord no-work notifications, re-sending hourly at most
+- Dependency PRs enable auto-merge, or are marked Blocked on CI failure
+- Disk space guard: notify Discord when space is below 10 GB before launching a container
+- Prune dangling container images before each pull and after each run
+- Add the plan-first approval workflow, AI review loop and Workflow board integration
+- Board-based plan approval, with a comment-based fallback when there is no board
+- Only trusted commenters' comments and reviews feed issue and PR fingerprints
+- Auto-report unparseable Claude 429 rate-limit reset messages to a tracking issue
+- Invite trusted collaborators as Writers when a new Workflow project is created
+- Log the git SHA provenance of each Docker image layer at agent startup
+- Add a create-project script to provision a repo's Workflow GitHub Project
 - create-project seeds a newly created Workflow board with all open issues and PRs set to Not Started
-- create-project: --force-bootstrap flag to re-seed the board on an already-provisioned project, recovering from an interrupted first run without affecting human-curated items
-- document GitHub Projects v2 provisioning rules, API correctness, and hasProjectsEnabled prerequisite in ai/local
-- create-project: automatically enable Projects on the repo when hasProjectsEnabled is false so oneshot can discover the board via repository.projectsV2
-- Pre-agentic CI gate: oneshot now waits for CI checks to complete before invoking the agent, and flags PRs as Blocked when checks remain pending past a configurable timeout (CI_CHECK_TIMEOUT_MINUTES, default 60)
-- Link Claude Code skill repos cloned in development-full into ~/.claude/skills so they are actually discoverable, and bake in settings.json, policy-limits.json, and hooks read-only for the developer user
-- Persist Workflow-project discovery (project/status-field/option IDs) to a disk cache with a configurable TTL (PROJECT_CACHE_TTL, default 3600s) to eliminate redundant per-run GraphQL calls (#298)
-- development-full now clones credfeto/credfeto-ai-skills and links every skill under its ai/skills/ folder into the developer user's read-only ~/.claude/skills, tracking live main HEAD since it is credfeto-owned and its skill set is expected to grow and shrink over time (#1054)
-- Agent container now logs the URL of the Issue or PR it is working on at startup, right after the image-layer provenance dump; oneshot passes it via WORK_ITEM_URL, which entrypoint.sh treats as optional so old-image/new-oneshot and new-image/old-oneshot combinations during the ~30 minute agent image build lag both degrade gracefully (#1056)
-- Install procps (ps, pkill, free) in the development-tools base image, needed by .NET benchmark tooling used in downstream repos (e.g. funfair-server-code-analysis#463) (#1061)
-- HEALTHCHECK instruction to development-agent Dockerfile so Docker/Podman reports accurate container health rather than always reporting healthy (#170)
-- Auto-clear the Blocked label on a PR the agent diagnosed as blocked by an environment/infrastructure failure (a structured marker in its comment) once a newer agent container image has been built — bounded by MAX_PR_ENV_AUTO_UNBLOCKS so a wrong diagnosis cannot loop forever unblocking itself (#1118)
-- oneshot's generated per-item CLAUDE.md now instructs the containerized agent to never pass a tool-level timeout that could truncate pre-commit, a git commit in a repo with pre-commit enabled, dotnet test, npm test, or bun test — these must run to completion, using the maximum available timeout or run_in_background/Monitor instead of accepting a truncated run. A killed run skips the target process's own cleanup and can leave orphaned state behind (#942)
-- Discord work-item and blocked-item notifications now show Priority (from the item's Security/Urgent/High/Medium/Low labels), a coarse Status (To Do/In Progress/Done/Blocked), and the fine-grained Workflow-board Sub-status, replacing the old New/Resume status field that had become meaningless once every session became a single fresh phase - all derived from already-tracked GitHub state at zero additional agentic cost
-- Add an `enforce-git-identity` Claude Code hook to the development-full container, blocking commit/fetch/pull/rebase/merge/cherry-pick/revert/am until git identity and GPG signing are correctly configured
-- Add a build-only (no push) `pull_request` trigger to each of the five `build-development-*.yml` container image workflows, so a broken Dockerfile is caught on a branch/PR before merge; the downstream `workflow_run` chain no longer advances from a pull_request-triggered build, so PR validation builds never cascade into publishing images
-- Install trivy in the development-tools base container image so the trivy dependency-vulnerability pre-commit hook can run
+- create-project: --force-bootstrap re-seeds the board on an already-provisioned project
+- Document GitHub Projects v2 provisioning rules and prerequisites in ai/local
+- create-project enables Projects on the repo automatically when they are disabled
+- Pre-agentic CI gate: wait for CI before invoking the agent, Blocked after a timeout
+- Link skill repos into ~/.claude/skills and bake in settings, limits and hooks read-only
+- Cache Workflow-project discovery on disk with a configurable TTL (#298)
+- development-full clones credfeto-ai-skills and links its skills into ~/.claude/skills (#1054)
+- The agent container logs the URL of the issue or PR it is working on at startup (#1056)
+- Install procps (ps, pkill, free) in the development-tools base image (#1061)
+- Add a HEALTHCHECK to the development-agent Dockerfile (#170)
+- Auto-clear Blocked on an env-failure PR once a newer agent image is built (#1118)
+- The per-item CLAUDE.md tells the agent never to set a timeout on long commands (#942)
+- Discord notifications show priority, a coarse status and the Workflow-board sub-status
+- Add an enforce-git-identity hook that blocks git writes until identity and signing are set
+- Add a build-only pull_request trigger to each build-development-*.yml workflow
+- Install trivy in the development-tools base image for the pre-commit hook
 ### Fixed
-- oneshot: fix duplicate tracking issue creation for unparseable rate limits and missing workflow projects by moving the repo filter into the search query string, bypassing a `gh` bug in some environments
-- oneshot: prevent spam by de-duplicating reports of unparseable rate-limit messages against existing issue bodies and comments
-- oneshot: extend rate-limit reset time parser to handle Claude CLI's new date format (e.g. `Jul 3, 10pm (UTC)`)
-- oneshot: force origin URL to SSH and unset `pushurl` before push attempts to ensure agent pushes use SSH even if the host environment has HTTPS configured
-- development-full: baked SSH rewriting rules for GitHub, GitLab, and Bitbucket into the image at `/etc/gitconfig` to ensure all agent git operations use SSH
-- containers/agent/entrypoint.sh: added startup validation to verify all repository remotes use SSH and no `url.*.insteadOf` rules are present in the user's git config to prevent conflicts with system-wide SSH enforcement
-- oneshot: reset origin remote URL to SSH before every host-side fetch so that HTTPS URLs the agent may have stored in .git/config do not break the service-user fetch
-- development-full system-gitconfig: add pushInsteadOf alongside insteadOf so push operations are also rewritten to SSH when the agent stores an HTTPS push URL
-- oneshot: prefer XDG_RUNTIME_DIR gpg-agent extra socket over the gpgconf-listed path; prevents stale socket files left in ~/.gnupg by a SIGKILL'd agent being mounted into the container where they appear live but are unresponsive
-- oneshot: fix rate-limit reset time parsing to handle minutes and colons (e.g. 7:10pm), ensuring backoff correctly persists when Claude returns a non-hour-aligned reset time
-- oneshot: fix subshell leak in invoke_claude when handle_claude_is_error fails; now correctly exits the subshell instead of continuing to subsequent jq calls on a deleted temp file
-- oneshot: suppress repeated rate-limit skip messages in the main loop, only reporting once per owner per run
-- setup-owner: write ~/.gitconfig for the owner with user identity and GPG signing config from .env so non-agentic git operations (e.g. rebase) can commit without requiring global git config on the host
-- setup-owner: remove stale gpg-agent socket files from ~/.gnupg after killing the agent so they cannot be mistaken for live sockets by subsequent oneshot runs
-- setup-owner: sync GPG keyring by export/import rather than directory copy; avoids keyboxd database lock (source PID embedded in lock file) that caused owner keyboxd to hang indefinitely
-- setup-owner: replace .gnupg by killing owner keyboxd/gpg-agent then doing a clean directory copy, bypassing keyboxd import which fails when systemd socket-activates the daemon before the write completes
-- setup-owner: use sudo -u to check clone directory existence so permission checks run as the owner user (fixes false negative when owner home dir is mode 700)
-- Docker .claude directory created as root-owned causing EACCES on every Bash tool call — now mounted as a host-owned temp directory
-- Issue comment changes ignored when linked PR fingerprint was unchanged — orchestrator now re-runs when the issue fingerprint changes even if the PR has not
+- oneshot: fix duplicate tracking issues by moving the repo filter into the search query
+- oneshot: de-duplicate reports of unparseable rate-limit messages
+- oneshot: parse Claude CLI's new rate-limit reset date format (e.g. Jul 3, 10pm (UTC))
+- oneshot: force the origin URL to SSH and unset pushurl before pushing
+- development-full: bake SSH rewriting rules for GitHub, GitLab and Bitbucket into the image
+- entrypoint.sh: verify at startup that remotes use SSH and no insteadOf rules conflict
+- oneshot: reset the origin URL to SSH before every host-side fetch
+- development-full system gitconfig adds pushInsteadOf so pushes are rewritten to SSH
+- oneshot: prefer the XDG_RUNTIME_DIR gpg-agent extra socket over stale ~/.gnupg sockets
+- oneshot: parse rate-limit reset times with minutes (e.g. 7:10pm)
+- oneshot: fix a subshell leak in invoke_claude when handle_claude_is_error fails
+- oneshot: report repeated rate-limit skips only once per owner per run
+- setup-owner writes the owner's ~/.gitconfig with identity and GPG signing config
+- setup-owner removes stale gpg-agent socket files after killing the agent
+- setup-owner syncs the GPG keyring by export and import, avoiding a keyboxd lock hang
+- setup-owner replaces .gnupg by stopping keyboxd and gpg-agent, then copying the directory
+- setup-owner checks the clone directory as the owner user (home directory mode 700)
+- Mount the container's .claude directory as a host-owned temp dir, fixing EACCES errors
+- Re-run when the issue fingerprint changes, even if the linked PR's has not
 - Dirty main in working tree now hands off to agent instead of aborting
-- Dirty working tree on any branch now hands off to agent with full state context including branch name and merge state
+- A dirty working tree on any branch is handed to the agent with full state context
 - Agent now explicitly checks out PR branch as first git action, preventing accidental changes on main
 - Issue agent now explicitly required to create branch before making any repo changes
 - PR with BEHIND or DIRTY merge state no longer skipped when fingerprint is unchanged
-- Rebase and dirty-branch recovery instructions embedded directly in numbered steps rather than floating IMPORTANT blocks
-- Orchestrator now automatically recovers when a managed repo is left on a branch that has been deleted from origin, instead of silently skipping the work item on every subsequent run
+- Embed rebase and dirty-branch recovery instructions in the numbered steps
+- Recover automatically when a repo is left on a branch deleted from origin
 - Add jq to development-tools container image so bats tests and scripts that require it do not fail
-- Add /opt/pre-commit/src/scripts to PATH in development-full so run-bats and other hook helpers are found by pre-commit
-- Handle docker pull subcommand in bats test stubs so invoke_claude tests pass after PR #155 added a pull before every run
-- Validate session ID read from file in load_session; discard and reset if content is not a valid UUID to prevent corrupted session files from causing repeated failures
-- recover_orphaned_branch now uses git checkout -f to discard unstaged changes when switching to main, preventing indefinite retry loops when the working tree is dirty
-- Fix dotenv-linter ARM64 asset name from arm64 to aarch64 to match the actual release filename on the dotenv-linter GitHub releases page
-- Pass CREDFETO_PRECOMMIT_COMMIT build arg from workflow to development-full Dockerfile so the supply chain commit hash check uses the dynamically fetched HEAD rather than the stale hardcoded default
-- Add systemctl stub to install-timer and uninstall-timer bats tests so they pass in environments without systemd
-- Start gpg-agent before running oneshot in the systemd service so that commit signing works in headless scheduled-task environments
-- Fast-fail before launching the agent container if gpg-agent is not running or the signing key is absent, and post a Blocked comment on the GitHub work item
+- Add /opt/pre-commit/src/scripts to PATH in development-full for hook helpers
+- Handle docker pull in bats test stubs so invoke_claude tests pass after PR #155
+- Validate the session ID in load_session and reset it when it is not a valid UUID
+- recover_orphaned_branch uses git checkout -f to discard unstaged changes
+- Fix the dotenv-linter ARM64 asset name from arm64 to aarch64
+- Pass the CREDFETO_PRECOMMIT_COMMIT build arg to the development-full Dockerfile
+- Add a systemctl stub to the install-timer and uninstall-timer bats tests
+- Start gpg-agent before oneshot in the systemd service so commit signing works
+- Fail fast before launch if gpg-agent or the signing key is missing, and mark Blocked
 - Die at startup if GIT_SIGNING_KEY is configured but the key is absent from the GPG keyring
-- Require all four environment variables (CLAUDE_CODE_OAUTH_TOKEN, GIT_USER_NAME, GIT_USER_EMAIL, GIT_SIGNING_KEY) in the agent entrypoint — die immediately if any are missing
-- Check pre-commit rules freshness in agent entrypoint on startup; die if the installed SHA in /workspace/rules/.env differs from the published SHA at pre-commit.markridgwell.com so stale hooks are caught before any work begins
-- Regenerate pre-commit hook script at image build time using the container's own pre-commit binary so the embedded version SHA always matches the installed package; prevents "Hooks installation is out of date" errors caused by the upstream-committed hook being stale after a pre-commit package update
-- Build development-agent image immediately when development-full finishes even when the Trivy scan fails — the base image is already pushed before Trivy runs so the conclusion=failure check was incorrectly suppressing the chain
-- Trigger development-full image rebuild immediately via repository_dispatch when credfeto-global-pre-commit is pushed to main, eliminating the up-to-one-hour delay from the hourly schedule
-- Add .github/actions/trivy-scan/** to paths trigger for all image build workflows so trivy action changes trigger image rebuilds
-- systemd service unit embedded wrong UID in SSH_AUTH_SOCK and ssh-agent socket path: %U in a system service expands to the service manager UID (root=0), not the User= directive UID; install-timer now embeds the real UID via id -u at install time and cleans any stale socket before starting ssh-agent
-- systemd service unit cleanup step used rm -f which cannot remove a directory; changed to rm -rf so a stale directory at the ssh-agent socket path (created by docker when a bind-mount source went missing mid-run) is cleared before each ssh-agent start
-- validate all docker bind-mount source paths exist with the correct type immediately before calling sudo docker run; docker silently creates missing sources as root-owned directories which then block ssh-agent from binding a socket at the same path on the next service start
-- two owner services on the same host raced on the shared ssh-agent socket path; each owner now gets a dedicated socket at /run/user/<uid>/ssh-agent-<owner>.socket so simultaneous starts cannot interfere
-- Docker build: clone pre-commit hook repo directly and wire shims from it rather than regenerating the hook script via a temp install
-- Output helpers (info/success/die/warn) now suppress ANSI escape codes when stdout/stderr is not a terminal, fixing grep-based task-completion polling inside Docker containers
-- agent-entrypoint pre-seeds ~/.claude.json on startup to suppress the configuration-file-not-found warning from Claude Code
-- Update pids-limit test assertion from 1024 to 4096 to match the increased resource limit, and replace run ! negation syntax with compatible two-line equivalents to fix bats version compatibility
-- ssh-agent socket path now uses systemd RuntimeDirectory so the service starts correctly when no user session is active
-- Monitor loop no longer hangs forever when the branch name contains a slash — the generated CLAUDE.md now explicitly warns agents that poll patterns derived from branch prefixes (e.g. \[perf\]) cannot match branches like perf/my-branch, and instructs agents to run git commit/push in the foreground
-- Agent container is now bounded by a configurable timeout (default 90 minutes, overridable via AGENT_TIMEOUT_MINUTES); on expiry the container is killed, Discord is notified, and the orchestrator exits cleanly so the next timer tick retries
-- setup-owner: always overwrite config files on re-run so token rotation and .env changes propagate; die with clear error when clone destination exists but is not a git repo
-- oneshot tests: stub validate_config in setup_main_mocks and supply full env in GPG keyring test so tests pass with the new startup validation
-- use 0660 group permissions on gpg-agent extra socket and pass owner GID to container via --group-add for secure socket access
+- Require all four identity and token environment variables in the agent entrypoint
+- The agent entrypoint dies at startup if the pre-commit rules SHA is stale
+- Regenerate the pre-commit hook script at image build time with the image's pre-commit
+- Build development-agent when development-full finishes even if the Trivy scan fails
+- Rebuild development-full via repository_dispatch when the global pre-commit changes
+- Rebuild images when .github/actions/trivy-scan/** changes
+- install-timer embeds the real UID in the SSH_AUTH_SOCK and ssh-agent socket paths
+- The service unit cleanup uses rm -rf to clear a stale ssh-agent socket directory
+- Validate all docker bind-mount sources exist with the correct type before docker run
+- Give each owner a dedicated ssh-agent socket so two services can't race
+- Docker build: clone the pre-commit hook repo directly and wire shims from it
+- Output helpers suppress ANSI escape codes when output is not a terminal
+- agent-entrypoint pre-seeds ~/.claude.json to suppress a config-not-found warning
+- Update the pids-limit test to 4096 and replace run ! syntax for bats compatibility
+- The ssh-agent socket uses systemd RuntimeDirectory, working with no user session
+- The generated CLAUDE.md warns that branch-prefix poll patterns can't match slashes
+- Bound the agent container by a configurable timeout (default 90 minutes)
+- setup-owner overwrites config files on re-run and checks the clone destination
+- oneshot tests stub validate_config and supply full env for the GPG keyring test
+- Use 0660 group permissions on the gpg-agent extra socket and --group-add the owner GID
 - abort setup-owner with a clear error when run as root
 - abort install-timer with a clear error when run as root
-- use absolute home directory path in service unit chmod instead of %h specifier which expands to root home
-- Rootless Podman now works in system services: added Delegate=yes for cgroup delegation and configured overlay driver on btrfs ~/work mounts (vfs fallback for ext4)
+- Use the absolute home path in the service unit chmod instead of %h
+- Rootless Podman works in system services: Delegate=yes and overlay storage on btrfs
 - containers config directory is now owned by the service user so Podman can read storage.conf
-- GPG agent socket path in install-timer now resolved dynamically via gpgconf rather than a hardcoded ~/.gnupg path, preventing failures when loginctl enable-linger relocates sockets to XDG_RUNTIME_DIR
-- setup-owner now calls loginctl enable-linger so the service owner always has a persistent systemd user session available for rootless Podman
-- XDG_RUNTIME_DIR in the systemd service unit now points to the real user session (/run/user/<uid>) so rootless Podman can locate the systemd cgroup manager socket; the ssh-agent socket stays isolated in RuntimeDirectory via SSH_AUTH_SOCK
-- Podman storage uses fuse-overlayfs (overlay driver) when available, falling back to vfs — removes the incorrect btrfs-detection logic that caused overlay-over-btrfs failures on the hardened kernel
-- setup-owner: place Podman graphroot in ~/work/.containers/storage when ~/work is a btrfs mount, avoiding VFS layer copies from filling the ext4 home partition
-- setup-owner: write containers.conf with cgroup_manager=cgroupfs; the systemd cgroup manager requires runc to create libpod scope units via D-Bus which is denied from inside a system service even with Delegate=yes
-- install-timer: add DBUS_SESSION_BUS_ADDRESS to generated service unit so Podman finds the user session D-Bus socket for other D-Bus operations
-- setup-owner: set cgroup_parent in containers.conf to user@<uid>.service so cgroupfs containers have write permission to their cgroup directory
-- rootless Podman container launch from system service: move oneshot into a cgroup leaf before running podman so resource limits work without cgroup permission errors
-- enable pids/memory/cpu/io controllers in service cgroup subtree_control after moving to proc leaf so container cgroups get resource-limit files
-- use Delegate=cpu memory pids io in service unit so systemd enables cgroup domain controllers before process starts and places it in a leaf sub-cgroup; update setup_cgroup_leaf to strip the systemd leaf suffix from the cgroup path
-- Restore process-to-leaf-cgroup move in setup_cgroup_leaf so containers can be created under the service cgroup
-- Write cpu memory pids io to service cgroup subtree_control after leaf move so container cgroups have resource limit files
-- Move all service cgroup processes (not just $$) to init leaf so subtree_control write succeeds even with left-over processes
-- fix rootless Podman user namespace mapping so container developer user can access host-owned GPG and SSH agent sockets
-- Correctly handle HTTP 429 rate-limit when Claude CLI exits non-zero but has written valid error JSON, so the rate-limit file is persisted and Discord is notified
-- Kill any existing ssh-agent process before starting a new one in the service unit to prevent left-over process warnings on every timer firing
-- Kill ssh-agent via EXIT trap in oneshot so the service cgroup is clean before the next timer firing, preventing systemd left-over process warnings
-- Create bind-mounted temp directories under XDG_RUNTIME_DIR instead of /tmp so they remain visible to rootless podman when PrivateTmp=yes is set in the service unit
+- install-timer resolves the GPG agent socket path via gpgconf
+- setup-owner enables linger so the owner always has a systemd user session
+- XDG_RUNTIME_DIR in the service unit points to the real user session
+- Podman storage uses fuse-overlayfs when available, falling back to vfs
+- setup-owner puts Podman graphroot on ~/work when it is a btrfs mount
+- setup-owner writes containers.conf with cgroup_manager=cgroupfs
+- install-timer adds DBUS_SESSION_BUS_ADDRESS to the generated service unit
+- setup-owner sets cgroup_parent to user@<uid>.service in containers.conf
+- Move oneshot into a cgroup leaf before running podman from the system service
+- Enable pids, memory, cpu and io controllers in the service cgroup subtree_control
+- Use Delegate=cpu memory pids io and strip the systemd leaf suffix in setup_cgroup_leaf
+- Restore the move to a leaf cgroup in setup_cgroup_leaf so containers can be created
+- Write cpu memory pids io to subtree_control after the leaf move
+- Move all service cgroup processes to the init leaf so subtree_control writes succeed
+- Fix rootless Podman user namespace mapping so the container can use agent sockets
+- Handle an HTTP 429 when Claude exits non-zero but writes valid error JSON
+- Kill any existing ssh-agent before starting a new one in the service unit
+- Kill ssh-agent via an EXIT trap in oneshot so the service cgroup is left clean
+- Create bind-mounted temp directories under XDG_RUNTIME_DIR instead of /tmp
 - Pre-populate ~/.ssh/known_hosts with github.com host key on container startup if not already present
-- Corrected plan self-approval from boilerplate 'proceed' text; enforced temporal ordering for plan approval detection; fixed Workflow project cache poisoning on transient API failure; added plan-approval unblock path when open PR already exists; fixed CI gate text; fixed heredoc blank-line separator before Steps; fixed SC2016 shellcheck warnings in GraphQL query strings; fixed update_workflow_status test stub
-- Removed automatic plan-approval detection and Blocked-label removal from orchestrator — removing Blocked is always a human action; simplified main loop blocked handling; updated agent instructions to make clear that humans remove the Blocked label to approve a plan
-- Include trusted commenters list in generated CLAUDE.md for both issue and PR agents, instructing the agent to ignore comments from untrusted users
-- oneshot: remove the per-invocation temp file on Claude rate-limit and error paths so it is no longer leaked into TMPDIR when the run aborts
-- Log GitHub Projects GraphQL errors with actual error content and call update_workflow_status before invoking Claude
-- Use 'Workflow Status' field name instead of 'Status' to avoid conflict with GitHub's auto-created Status field, and replace invalid TEAL color with PINK
-- Move ensure_github_known_hosts before verify_ssh_signing so the GitHub SSH auth probe does not fail with a host-key error on fresh containers
-- Skip board status reset to 'Not Started' when resuming a Claude session so previously advanced statuses are preserved
-- Use separate stderr temp files for org and user owner-node-id lookups so both errors are preserved when both fail
-- Guard against jq outputting the string 'null' when the org GraphQL query returns null data, ensuring the user-account fallback always runs
-- Capture stderr from createProjectV2Field and repo-node-id lookup calls so auth errors in those paths are surfaced
-- Add ssh stub to entrypoint test helper and test for GitHub auth failure so verify_ssh_signing tests pass in CI without network access
-- Use --unset-all instead of --unset when clearing remote.origin.pushurl so multiple push-URL entries are all removed, preventing a stale git@github-api.markridgwell.com: push URL from surviving the reset
-- Also use --unset-all for remote.origin.url before writing the canonical fetch URL so any extra entries added with --add are fully removed
-- Workflow project creation now falls through to user-account query when the org lookup exits non-zero or returns a JSON error blob instead of a node ID
-- Write prompt to a file before starting the agent container and redirect stdin from that file, eliminating the race where printf closes the pipe before the container process reads from it
-- Die immediately with a clear message when the prompt is empty rather than launching a container that wastes tokens and then fails
-- Use git config --local instead of git remote -v in verify_repo_ssh_remotes so that system-level pushInsteadOf rules do not cause false-positive SSH URL check failures
-- Bake git_protocol: ssh into the gh CLI config in the container image so that gh pr checkout always uses SSH remote URLs rather than HTTPS
-- Add insteadOf and pushInsteadOf rules for git@github-api.markridgwell.com: in system-gitconfig and setup-owner so git operations are transparently redirected to git@github.com: when the proxy hostname is stored by gh
-- Add enforce_gh_git_protocol_ssh entrypoint check that verifies gh has git_protocol=ssh set for every known host and GH_HOST, and resets it automatically if it was overwritten
-- Fix code review findings: provenance logged before required-env-var checks, agent Dockerfile ARG/ENV moved after ENTRYPOINT, workflow_run SHA uses head_sha of parent run, unknown-SHA test explicitly unsets vars and checks all five
-- Ensure agent-generated PRs always include Closes #N in the body so GitHub automatically closes the linked issue when the PR is merged
-- SSH stdin drain: pass -n to ssh -T git@github.com so the agent prompt is not consumed before claude runs
-- create-project: die instead of silently falling back to /dev/null when mktemp fails in gh_graphql, preventing device-node deletion when running as root
-- create-project: ensure_bot_collaborator now warns instead of dying when the bot user ID cannot be resolved or the collaborator grant fails, so re-runs complete successfully
-- create-project: bootstrap_board_items warns and caps at 1000 items per type when a repo has more than 1000 open issues or PRs
-- oneshot: report_missing_workflow_project now only updates _WF_REPORTED_REPOS after successfully filing or finding an existing issue, so a failed creation attempt is retried for subsequent items in the same run
-- oneshot: report_missing_workflow_project returns early instead of filing when the gh issue list check fails, preventing duplicate issues on transient API errors
-- oneshot: report_missing_workflow_project is no longer called when _WF_PROJECT_ID is empty due to a missing status field or auth error — only when project creation itself failed
-- create-project: resolve_owner_node_id now rejects JSON error blobs returned by gh when an organisation does not exist, so a personal-account owner correctly falls through to the user query instead of passing garbage as the project owner ID
-- create-project: provision_project now propagates failures from command substitutions, so a die inside resolve_owner_node_id or create_project exits the script rather than continuing with an empty project ID
-- create-project: pass repositoryId to createProjectV2 so the project is repo-scoped and has a default repository set from creation, removing the need for a separate linkProjectV2ToRepository call
-- create-project: ensure_project_description sets the project short description to 'Workflow for <owner>/<repo>' on every run (idempotent), fixing projects that were created without a description
-- create-project: correct GraphQL type in ensure_bot_collaborator from ProjectV2CollaboratorInput to ProjectV2Collaborator and add required pagination on collaborators return — the mutation was silently failing on every project due to the wrong type name
-- oneshot: _wf_create_project now passes repositoryId to createProjectV2 so projects are repo-scoped and appear in repository.projectsV2 on the next discovery run, removing the separate linkProjectV2ToRepository call
-- oneshot: discover_or_create_workflow_project now enables Projects on the repo when hasProjectsEnabled is false so the discovery query never returns empty for a linked project
-- Restore CAP_SETUID/CAP_SETGID to the orchestrator systemd unit and disable NoNewPrivileges so rootless Podman's newuidmap/newgidmap can map subuid/subgid ranges (fixes 'newuidmap: Could not set caps' container start failure)
-- Drop PrivateTmp from the orchestrator systemd unit; under it rootless Podman's persistent pause process captured an empty private /var/tmp, breaking image pulls with 'mkdir /var/tmp/...: no such file or directory'
-- oneshot: reject CI_CHECK_TIMEOUT_MINUTES=0 in .env (regex now requires a positive integer) to prevent immediate timeout-blocking of all pending-CI PRs
-- oneshot: clear CI pending state after checks complete so a manually re-triggered CI run on the same commit does not inherit a stale first-observation timestamp
-- oneshot tests: add missing load_env_config coverage for CI_CHECK_TIMEOUT_MINUTES (valid, invalid, and zero values)
-- oneshot: filter pr_json_has_pending_ci_checks to required checks only so optional or informational checks cannot gate agent invocation
-- oneshot: clear CI pending state file after blocking a PR on timeout so a human who removes the Blocked label can retry without being immediately re-blocked
-- oneshot: clear CI pending state file in unchanged-fingerprint skip paths so a manually re-triggered CI run on the same commit is not spuriously timed out
-- oneshot: reject CI_CHECK_TIMEOUT_MINUTES=0 supplied via environment variable at script initialisation to prevent every pending-CI PR from being immediately blocked
-- oneshot: guard clear_pr_ci_pending_state in "unchanged, skip" paths so the CI timeout clock is not reset on every iteration when CI is still pending (would have prevented the timeout from ever firing)
-- oneshot: call clear_pr_ci_pending_state after blocking in the work-block timeout path so that a human who removes the Blocked label is not immediately re-blocked due to a stale state file
-- oneshot: treat pending checks without an explicit `isRequired` field as required in the CI gate so the gate cannot be silently disabled by older `gh` CLI versions that omit the field
-- oneshot: guard `ci_checks_timed_out` against a null or absent `headRefOid` field in the PR JSON, which would have started the timeout clock with an empty OID and caused a false-positive Blocked label after `CI_CHECK_TIMEOUT_MINUTES`
-- oneshot: defer BEHIND/DIRTY and draft PRs in the unchanged-fingerprint path while CI checks are pending, preventing an infinite deferral loop where the work-block CI gate kept saving the fingerprint and the unchanged-fingerprint path kept falling through to re-run
-- test: stub `sync_pr_labels_from_linked_issues` in `setup_main_mocks` so integration tests that reach the work block do not fork a real `gh` subprocess
-- oneshot: guard ci_checks_timed_out against a corrupted state file where the timestamp field is absent, preventing bash arithmetic from coercing a hex OID to zero and causing an immediate false-positive CI timeout that blocks the PR
-- oneshot: move sync_pr_labels_from_linked_issues to after the CI pending gate in the work block so that the fingerprint saved during deferral is not stale from pre-sync labels, avoiding one unnecessary work-block re-entry on the next iteration
-- Clean up url pushInsteadOf rules written to local .git/config by agent sessions before launching container
-- oneshot only sends a blocked-item Discord notification on the transition into the blocked state (and re-arms when un-blocked), instead of re-notifying on every run
-- fetch_board_approved_items now paginates through all board items using cursor-based pagination so issues beyond position 100 are no longer silently missed; fieldValues limit raised from 10 to 50 to avoid truncating items with many custom fields
+- Fix plan self-approval, approval ordering, cache poisoning and the unblock path
+- Remove automatic plan-approval detection and Blocked removal: humans remove Blocked
+- Include the trusted commenters list in the generated CLAUDE.md for issues and PRs
+- oneshot removes the per-invocation temp file on rate-limit and error paths
+- Log GitHub Projects GraphQL errors and update the workflow status before Claude runs
+- Use a 'Workflow Status' field instead of 'Status', and replace invalid TEAL with PINK
+- Run ensure_github_known_hosts before verify_ssh_signing on fresh containers
+- Don't reset the board status to 'Not Started' when resuming a Claude session
+- Use separate stderr files for org and user owner-node-id lookups
+- Guard against jq printing 'null' for null org data, so the user fallback runs
+- Capture stderr from createProjectV2Field and repo-node-id lookups
+- Add an ssh stub and a GitHub auth failure test so verify_ssh_signing tests run offline
+- Use --unset-all when clearing remote.origin.pushurl so every push URL is removed
+- Use --unset-all for remote.origin.url before writing the canonical fetch URL
+- Workflow project creation falls back to the user query when the org lookup fails
+- Write the prompt to a file and redirect stdin from it, fixing a pipe race
+- Die with a clear message when the prompt is empty instead of launching a container
+- verify_repo_ssh_remotes uses git config --local instead of git remote -v
+- Bake git_protocol: ssh into the container's gh CLI config
+- Add insteadOf and pushInsteadOf rules redirecting the proxy hostname to github.com
+- Add an entrypoint check that gh has git_protocol=ssh for every host, resetting it if not
+- Fix code review findings in provenance logging, Dockerfile order and workflow SHAs
+- Agent-generated PRs always include Closes #N in the body
+- Pass -n to ssh -T git@github.com so the agent prompt isn't consumed from stdin
+- create-project dies when mktemp fails instead of falling back to /dev/null
+- create-project's ensure_bot_collaborator warns instead of dying on failure
+- create-project's bootstrap_board_items warns and caps at 1000 items per type
+- report_missing_workflow_project records a repo only after filing or finding an issue
+- report_missing_workflow_project returns early when the gh issue list check fails
+- report_missing_workflow_project is called only when project creation itself failed
+- create-project's resolve_owner_node_id rejects JSON error blobs from gh
+- create-project's provision_project propagates failures from command substitutions
+- create-project passes repositoryId to createProjectV2 so the project is repo-scoped
+- create-project sets the project description to 'Workflow for <owner>/<repo>'
+- create-project fixes the GraphQL type and pagination in ensure_bot_collaborator
+- oneshot's _wf_create_project passes repositoryId so projects are repo-scoped
+- discover_or_create_workflow_project enables Projects on the repo when disabled
+- Restore CAP_SETUID/CAP_SETGID and disable NoNewPrivileges for rootless Podman
+- Drop PrivateTmp from the systemd unit, which broke rootless Podman image pulls
+- oneshot rejects CI_CHECK_TIMEOUT_MINUTES=0 in .env
+- oneshot clears the CI pending state after checks complete
+- oneshot tests cover load_env_config for CI_CHECK_TIMEOUT_MINUTES values
+- pr_json_has_pending_ci_checks considers required checks only
+- oneshot clears the CI pending state file after blocking a PR on timeout
+- oneshot clears the CI pending state file in the unchanged-fingerprint skip paths
+- oneshot rejects CI_CHECK_TIMEOUT_MINUTES=0 from the environment at startup
+- Guard clear_pr_ci_pending_state in skip paths so the CI timeout clock isn't reset
+- Call clear_pr_ci_pending_state after blocking in the work-block timeout path
+- Treat pending checks without an isRequired field as required in the CI gate
+- Guard ci_checks_timed_out against a null or absent headRefOid
+- Defer BEHIND, DIRTY and draft PRs while CI is pending, ending a deferral loop
+- test: stub sync_pr_labels_from_linked_issues in setup_main_mocks
+- Guard ci_checks_timed_out against a state file missing its timestamp
+- Move sync_pr_labels_from_linked_issues after the CI pending gate
+- Clean up url pushInsteadOf rules left in .git/config before launching the container
+- Send a blocked-item Discord notification only on the transition into Blocked
+- fetch_board_approved_items paginates all board items and reads up to 50 field values
 - fix: Update the issue for raising unparsable rte limits so that it does not create one each run
-- Clear stale _WF_CREATION_FAILED flag when the Workflow-project cache-hit path restores a previously discovered repo, preventing a spurious missing-project issue from being filed
-- Use the real service username instead of systemd's %u specifier in install-timer's pkill ExecStartPre lines — %u resolves to root (the system manager's user) in system services, not the service's User=, so the pre-start ssh-agent/gpg-agent cleanup was always a silent no-op
-- Instruct agent sessions to wait synchronously for slow pre-commit hooks (build+test) instead of ending the turn and expecting to be notified later — under the fresh-session-per-phase design, stopping mid-commit tears down the container, killing the hook before it finishes and leaving the branch stuck in an endless dirty-retry loop.
-- Agent container images now fail to build if any pre-commit linter wrapper (run-eslint, run-stylelint, run-psscriptanalyzer, run-bats) is not resolvable on the developer user's PATH, preventing images that break commits with an "Executable run-eslint not found" hook error
-- development-full now runs the pre-commit check-setup health-check at build time (as the developer user) and fails the build if the pre-commit config is invalid or any required linter tool is missing
-- Bumped drifted pinned commit references (dotnet-claude-kit, wshobson/agents, credfeto-global-pre-commit) in the development-full base image so the scheduled build no longer fails when those upstream default branches advance (#1047)
-- PR CI-check detection no longer treats a legacy commit-status check as permanently pending, which was preventing the orchestrator from noticing and fixing real CI failures on affected PRs and blocked sibling issues in the same repo from being worked
-- Orchestrator no longer permanently walks away from a PR just because auto-merge was enabled — it now also checks whether a required check has since failed, and steps back in to fix the build when GitHub can never complete the merge as-is
-- development-full's pinned upstream repo clones no longer break the build merely because an upstream default branch advances: pin to a maintainer's tagged release where one is current and compatible (cc-devops-skills), fetch the exact commit directly rather than the moving branch tip where no usable tag exists (dotnet-claude-kit, wshobson/agents), and let credfeto-owned repos track live main HEAD with no pinned-commit assertion (credfeto-global-pre-commit) (#1066)
-- Dependency-PR agent instructions now check for a failed required check before treating auto-merge-enabled as nothing-to-do, so a dependency PR with a broken build gets fixed and blocked instead of silently abandoned
-- A PR whose idle-invocation budget is exhausted while it still has a failed required check is now marked Blocked with an explanatory comment instead of being silently parked forever with no human ever notified
-- Agent container's prompt is now passed as a positional CLI argument to claude --print instead of via stdin redirection, eliminating the host-to-container stdin-attach timing race that intermittently caused the whole orchestrator run to fail
-- Agent container's claude invocation now terminates option parsing with -- before the prompt argument, fixing the variadic --add-dir flag greedily swallowing the prompt instead of recognizing it, which intermittently caused the whole orchestrator run to fail
-- Agent container now enables Claude Code's built-in auto-compaction so long-running sessions summarize their own context automatically instead of eventually crashing with 'Prompt is too long'
-- PR is no longer treated as done once auto-merge is enabled if a reviewer has an outstanding CHANGES_REQUESTED review, so the automation keeps engaging with review feedback instead of silently ignoring it
-- A transient GitHub identity lookup failure while checking a repo for existing PRs no longer aborts the whole orchestrator run — the lookup is retried and, if it still fails, only that one work item is skipped so the rest of the cycle still runs
-- All five build-development-*.yml workflows now set ignore-error=true on their GHA cache-to exporter, so a transient GitHub Actions cache-write contention/quota failure (error writing layer blob: failed to reserve cache) no longer fails the whole build after the image has already been successfully pushed to ghcr.io (#1087)
-- A priorities-API outage or malformed response was previously silently reported as a healthy 'no work items found' run; the fetch is now retried and any ultimate failure now fails the run loudly instead of masquerading as success
-- Blocked-label escalations now verify the label actually landed before posting the explanatory comment, retrying and self-healing by creating the label if missing, and notifying Discord directly on failure — previously a silent label failure caused the same escalation comment to repeat every tick indefinitely, and for CI timeouts silently re-armed a fresh 24-hour wait instead of ever blocking the PR
-- The systemd unit generated by install-timer now has a TimeoutStartSec bound, so a network hang in a self-update step can no longer leave the unit stuck 'activating' forever and silently stop the orchestrator; the self-update steps are also now bounded and fault-tolerant, and ssh-agent cleanup no longer disrupts other concurrently running instances
-- Transient failures at several per-item points in the main loop (gh state fetches, a malformed priorities entry, repo/rules network hiccups, an image registry hiccup, a leftover container from a crashed run) no longer abort the whole orchestrator run and throw away every other queued priority item
-- Skip saving the post-run fingerprint (and its linked issue's fingerprint) instead of dying when computing it fails transiently after a successful agent invocation, so the item is safely re-evaluated next tick rather than the orchestrator stopping (#1091)
-- Add a runaway invocation backstop for Issue items (MAX_ISSUE_TOTAL_INVOCATIONS, default 15), mirroring the existing PR backstop, so a non-converging Issue that never produces a PR no longer re-invokes the agent forever with no cap (#1093)
-- Clearing the Blocked label after a runaway-invocation-cap block (PRs and Issues) now actually resets the invocation counter via a dedicated runaway-blocked marker file, so unblocking a capped item no longer silently re-blocks it on the very next tick
-- get_trusted_logins now paginates the repo-collaborators fetch (previously first-page-only, silently dropping collaborator #31+ from the trust list) and retries transient gh failures instead of silently caching a shrunken trust list — on ultimate failure it fails closed and the item is skipped for that tick rather than proceeding with a wrong (or, at the main-loop fingerprint call sites, effectively unfiltered) trust list (#1094)
-- Human clearing the Blocked label on a PR/Issue whose invocation total already sat at the runaway cap now reliably resets the counter, even when the block was applied by something other than oneshot's own backstop (e.g. the code-review workflow's "3+ rounds" rule) — previously such a PR would instantly re-block with zero new agent activity
-- PR fingerprinting was blind to reviewDecision, baseRefName, requested reviewers, assignees, and milestone changes — these are now fetched and folded into the fingerprint so a re-request-review, base retarget, reviewer request/removal, PR assignment, or milestone change is correctly detected as real activity instead of being misclassified as idle (#1096)
-- oneshot's EXIT trap that cleans up the ssh-agent started by the service unit's ExecStartPre was registered too late in main() — several early die-capable steps (argument parsing, tool checks, config validation, GPG key check, preload_ssh_keys) ran before the trap was installed, so a failure on any of them leaked the agent into the service's cgroup, which systemd then logged as a "Found left-over process" warning on the next timer firing. The trap is now registered first, before any of those steps run (#1103)
-- Orchestrator now checks inline/diff-level PR review comments, not just top-level comments and review summaries, so a CHANGES_REQUESTED review whose only content is an inline comment is answered instead of idling out to a Blocked label
-- Agent container now pre-accepts the workspace trust dialog for /workspace/repo, so the project's baked-in .claude/settings.json permissions.allow entries are actually honoured instead of being silently ignored on every fresh-container invocation
-- Orchestrator no longer picks up PRs whose code is human-authored - PR pickup now requires at least one bot-authored commit, human-taken-over PRs and their linked issues are stood off (other issues in the repo stay workable), and dependencies-labelled PRs are exempt so the dependency takeover flow is unaffected (#1131)
-- Hardened the human-takeover stand-off from code review: dependencies-label exemption now matches exactly instead of by substring, takeover detection falls back to the branch-name convention when the closing reference was edited away, one broken PR no longer blocks pivoting to a healthy one, transient failures keep repo work serialized, closed issues with a taken-over PR are tagged for investigation again, idle issues no longer pay per-tick PR scans, and misclassified bot PRs are logged (#1134)
-- Review round 2 on the takeover stand-off: a Blocked human-driven PR still stands off its issue (tagging no longer blinds the lookup), explicit closing references beat the branch-name fallback, dependency-label exemption applies only to PRs the bot did not create (restoring substring variants like npm dependencies), and the closed-issue takeover check runs once per issue instead of every tick (#1134)
-- Review round 3 on the takeover stand-off: PR list scans now request 200 PRs instead of gh's default 30-item page, an unreadable candidate no longer wedges the takeover check (references are checked before commits and unrelated broken PRs are scanned past), a failed state fetch for an open PR still serializes its repo, the closed-issue investigation tag is retried when it fails entirely, and a reopened issue re-arms the one-time takeover check (#1134)
-- Fixed a crash-loop where the agent container refused workspace trust for any repo committing a legitimate .claude/settings.json (e.g. a linter permissions allowlist), wrongly burning invocation budget and auto-blocking issues (#164/#166 in credfeto-global-pre-commit) - the guard now compares the checked-out config against the reviewed origin/main version and trusts an exact match, and a container that fails before Claude ever starts no longer counts against an item's invocation budget or kills the whole orchestrator run
-- Review round on the #1133 crash-loop fix: the workspace-trust config comparison now uses git blob SHAs instead of shell string comparison (immune to NUL-byte stripping), a container that fails repeatedly before Claude ever starts now escalates to Blocked after 5 consecutive failures instead of retrying forever silently, the Claude OAuth/GH Enterprise podman secrets are now removed immediately after a failed pre-flight attempt instead of leaking until the next invocation, and the workflow board is no longer reset to Not Started on every retry of a persistently failing container
-- Addressed Copilot review on the #1133 fix: cleanup_claude_invocation_tmpfiles now explicitly guards each removal so it is unambiguously safe when called twice (explicit call plus the EXIT trap backstop), and run_claude_fresh now recognises any valid Claude result object - not only is_error true - as proof a session actually ran, so a genuinely successful completion racing a non-zero container exit is no longer misclassified as a pre-flight infra failure
+- Clear a stale _WF_CREATION_FAILED flag on the Workflow-project cache-hit path
+- Use the real service username instead of %u in install-timer's pkill lines
+- Tell agent sessions to wait synchronously for slow pre-commit hooks
+- Agent images fail to build if any pre-commit linter wrapper is missing from PATH
+- development-full runs the pre-commit check-setup health check at build time
+- Bump drifted pinned commit references in the development-full base image (#1047)
+- A legacy commit-status check is no longer treated as permanently pending
+- Re-engage with an auto-merge PR when a required check has since failed
+- Pinned upstream clones no longer break the build when a default branch advances (#1066)
+- Dependency-PR instructions check for a failed required check before doing nothing
+- Mark a PR Blocked when its idle budget runs out with a failed required check
+- Pass the agent's prompt as a positional argument to claude --print instead of stdin
+- End option parsing with -- before the prompt so --add-dir doesn't swallow it
+- Enable Claude Code's built-in auto-compaction in the agent container
+- A PR with an outstanding CHANGES_REQUESTED review isn't treated as done on auto-merge
+- A transient identity lookup failure skips only that item instead of aborting the run
+- Set ignore-error=true on the GHA cache-to exporter in build-development-*.yml (#1087)
+- A priorities API outage or bad response is retried and then fails the run loudly
+- Blocked-label escalations verify the label landed before posting the comment
+- install-timer's systemd unit has a TimeoutStartSec bound
+- Transient per-item failures in the main loop no longer abort the whole run
+- Skip saving the post-run fingerprint when computing it fails transiently (#1091)
+- Add MAX_ISSUE_TOTAL_INVOCATIONS, a runaway invocation backstop for issues (#1093)
+- Clearing Blocked after a runaway-cap block now resets the invocation counter
+- get_trusted_logins paginates collaborators and retries transient failures (#1094)
+- Clearing Blocked on an item at the runaway cap reliably resets the counter
+- PR fingerprints include review decision, base, reviewers, assignees and milestone (#1096)
+- Register oneshot's ssh-agent cleanup EXIT trap before any step that can die (#1103)
+- Check inline PR review comments, not just top-level comments and summaries
+- The agent container pre-accepts workspace trust for /workspace/repo
+- Stop picking up PRs whose code is human-authored (#1131)
+- Harden the human-takeover stand-off after code review (#1134)
+- Review round 2 on the takeover stand-off (#1134)
+- Review round 3 on the takeover stand-off (#1134)
+- Fix a crash-loop where workspace trust was refused for repos with .claude/settings.json
+- Review round on the #1133 crash-loop fix
+- Address Copilot review on the #1133 fix
 - Paginate projectsV2 discovery to handle repos with more than 20 GitHub Projects v2 boards
-- Review round on the Discord priority/status feature: board sub-status is now resolved correctly for blocked-item notifications too, not just the small work-item-start path - most blocked notifications fire from scan branches that never reach the per-item work block's own board discovery, so they always showed Sub-status Unknown even with a fully configured board; also closed a related multi-repo bug where a stale project ID from a previously processed repo could poison another repo's sub-status lookup for the rest of the run, and deduplicated the item-type-to-gh-CLI-noun mapping that had drifted into three separate copies
-- Blocked-notification root cause: Issue sessions never received recovery instructions for a dirty working tree (unlike PR sessions), so an unrelated leftover branch state (e.g. from an interrupted dependency-PR run) could leave the agent with no way to proceed and no instructions for cleaning it up, causing a silent re-block with zero explanation immediately after a human's approval - the agent now gets explicit dirty-tree recovery steps for Issue sessions, and is told this is never a legitimate reason to block. Also: notify_discord_blocked_item now shows the item's real title (not just its type and number) and a Reason field (explicit for oneshot's own blocking paths, a best-effort excerpt of the item's latest comment otherwise), a missing explanatory comment on the no-.ai-instructions-found path was added, and a new mandatory rule requires the agent to always explain why in the same turn it applies the Blocked label
-- Review round on the #1140 blocked-notification fix: dirty-tree cleanup instructions now reset the index before checking out the working tree (the reverse order left staged changes uncleaned), Discord embed titles are truncated to stay under Discord's 256-character limit (an untruncated title could silently fail the whole notification and permanently suppress it), the plan-approval re-block instruction now also tells the agent to revise and re-post the plan when a human left feedback (not only diagnose the approval state), and the duplicated block-label-comment-notify sequence across all seven blocking call sites was extracted into a single shared helper
-- Second review round on the #1140 blocked-notification fix: block_pr_for_ci_timeout now correctly returns failure (instead of silently succeeding) when the Blocked label cannot be verified, and notify_discord_blocked_item truncates the item title and reason via jq (codepoint-aware) instead of bash byte-offset slicing, which could split a multi-byte UTF-8 character and corrupt Discord notification text under a non-UTF-8 locale
-- Orchestrator now stands off issues and PRs already assigned to another user, preventing duplicate work when a human owns the item
+- Review round on the Discord priority and status feature
+- Issue sessions get recovery instructions for a dirty working tree, as PR sessions do
+- Review round on the #1140 blocked-notification fix
+- Second review round on the #1140 blocked-notification fix
+- Stand off issues and PRs already assigned to another user
 - Non-agentic rebase no longer blocks same-repo Issues from being picked up in the same tick
-- development-full image build no longer fails on a skill-name collision — credfeto-ai-skills entries are now installed with the credfeto- prefix, matching that repo's own install.sh convention, instead of colliding with same-named skills from other bundled sources
-- Prune the orphaned `lib/` directory from the credfeto-global-pre-commit clone baked into `containers/base/development-full/Dockerfile` — it was only sourced by `install-deps-arch`/`install-deps-debian`, which were already removed from the image.
-- Dependency-bump PRs opened under the bot's own account (instead of the usual app/github-actions) with no bot commits yet were misclassified as a human takeover and permanently stood off
-- Harden `enforce-git-identity` and `enforce-git-dash-c` Claude Code hooks against regex false-positives/false-negatives: heredoc/doc-text bodies containing git-command-shaped lines no longer trigger a false block, a `-c <key>=<value>` flag before `-C`/the subcommand no longer bypasses either check, a quoted `-C` path containing spaces is now handled correctly, and `enforce-git-identity`'s repo-directory extraction can no longer be misled by unrelated git-command-shaped text elsewhere in the same command
-- Error-handling hardening: an unvalidated agent timeout, a corrupt-guard-file aliasing bug, a dead SSH agent socket silently passing, repeated closed-issue re-tagging, six silent podman failures with no Discord alert, and a CLAUDE.md tempfile leak window are all fixed
-- entrypoint.sh pre-flight checks (SSH GitHub-auth, gpg-agent, GPG/SSH signing tests) had no timeouts and could hang for hours; the SSH GitHub-auth check also misdiagnosed a network failure as an unauthorized key
-- Review round on the #1099 entrypoint-hardening fix: the GitHub SSH host-key bake step now busts its Docker layer cache daily (GHA layer caching meant it could otherwise silently reuse a stale scan indefinitely), ssh-keyscan's own output is captured directly instead of grepping the destination file, a GitHub too-many-authentication-failures disconnect is now diagnosed separately from an unregistered key, timeout is verified present at build time, and the bats suite no longer silently depends on real network/filesystem state for its known_hosts coverage
-- oneshot: exempt dependency PRs (depends/ branch or dependencies-ish label) from the assignee stand-off gate (#1142), so a human assignee (e.g. dependabot.yml's assignees: config) no longer permanently blocks the CI-verify/auto-merge takeover prompt
-- Fix development-full base image build failing to install PSScriptAnalyzer (PackageManagement's NuGet provider bootstrap fails non-interactively) by installing PowerShell as a local dotnet tool and using Install-PSResource instead of Install-Module
-- enforce-git-dash-c: closed residual bypasses where a bare git command backgrounded with a single &, wrapped in a brace group { }, or reached via a live $()/backtick substitution nested inside double quotes could slip past the -C guardrail — and quote-aware splitting stops the hook from falsely blocking already-hardened commands whose quoted arguments merely contain shell metacharacters (#1105)
-- enforce-git-dash-c: closed a further bypass where a bare git invocation preceded by a shell keyword (do/then/else/!/time) or wrapper command (sudo/env/exec/command) in the same statement segment was never checked for -C at all, since the check only matched segments starting literally with "git" (#1105)
-- Added a categorical reject-obfuscated-commands Claude Code hook that runs first in the PreToolUse chain and rejects any Bash command whose command-name token is quote-spliced, backslash-escaped, or built from a live substitution (or is eval) - closing this whole class of hook-bypass obfuscation up front instead of chasing each technique individually through enforce-git-dash-c (#1105)
-- Ban the env/nice/command wrappers outright in reject-obfuscated-commands (their leading flags could be mistaken for the validated command name) and reject a leading dash in the command-name allowlist to close the same bypass class for the remaining pass-through wrappers
-- Allow the pre-commit-check wrapper script through the reject-obfuscated-commands hook allowlist so local pre-commit tooling is not blocked
-- Allow the testdb and testdocker repo-local test scripts through the reject-obfuscated-commands hook allowlist
+- Install credfeto-ai-skills entries with the credfeto- prefix to avoid name collisions
+- Prune the orphaned lib/ directory from the baked global pre-commit clone
+- Bot-account dependency PRs with no bot commits are no longer seen as human takeovers
+- Harden the enforce-git-identity and enforce-git-dash-c hooks against regex errors
+- Error-handling hardening across timeouts, guard files, agent sockets and podman
+- Add timeouts to entrypoint.sh pre-flight checks and fix the SSH auth misdiagnosis
+- Review round on the #1099 entrypoint-hardening fix
+- Exempt dependency PRs from the assignee stand-off gate (#1142)
+- Fix the development-full PSScriptAnalyzer install by using Install-PSResource
+- enforce-git-dash-c closes residual bypasses via &, brace groups and substitutions (#1105)
+- enforce-git-dash-c closes a bypass via shell keywords and wrapper commands (#1105)
+- Add a reject-obfuscated-commands hook rejecting obfuscated command names (#1105)
+- Ban the env, nice and command wrappers outright in reject-obfuscated-commands
+- Allow the pre-commit-check wrapper through the reject-obfuscated-commands allowlist
+- Allow the testdb and testdocker scripts through the reject-obfuscated-commands allowlist
 - PR fingerprint now includes trusted comment and review bodies so edits are detected (#1095)
-- create-project: non-destructively add missing Workflow Status options (e.g. AI Simplify) to boards created before that option existed, preserving every existing option's id/color/description so item statuses and appearance are unaffected
-- oneshot never backfilled the new "AI Simplify" Workflow Status board option onto pre-existing boards (only create-project did), so PHASE D's board-status update silently no-op'd; oneshot's live discovery path now mirrors create-project's migration and self-heals pre-existing boards
-- create-project's board-status migration for a missing option (e.g. "AI Simplify") always appended the new option to the end of the list instead of inserting it at its schema position, so a migrated board's column order diverged from a freshly created board's; it now inserts after the correct predecessor option, with a safe fallback to the original field if the mutation returns no usable data
-- Auxiliary scripts reliability: loop now bounds and tolerates a failed git self-update pull, setup-owner refreshes rotated SSH keys on re-run, and create-project board seeding fails loudly instead of reporting false success on a gh API error
-- Every lib/* source line in oneshot, loop, create-project, and setup-owner now dies loudly with a FATAL message when the source fails, instead of silently leaving die/success/info/warn/is_ai_agent undefined; a missing lib/ previously let a script fall through an intended die-guard into its normal execution path with every subsequent call to those functions silently becoming a no-op
-- Test fixtures created by make_repo_fixture_dir are nested inside this repo's own working tree with no .git of their own; a git command run against one previously escaped upward via git's normal repository-discovery and silently operated on this real repo instead of failing (confirmed incident: a test bug left a loop iteration running git switch main against this repo's checkout every 5 minutes for hours). setup_isolated_env now sets GIT_CEILING_DIRECTORIES to stop the walk at the repo root
+- create-project adds missing Workflow Status options without changing existing ones
+- oneshot backfills the AI Simplify Workflow Status option onto existing boards
+- create-project inserts a migrated board option at its schema position
+- Reliability fixes for loop, setup-owner and create-project
+- Every lib/* source line dies loudly with a FATAL message when sourcing fails
+- Test fixtures from make_repo_fixture_dir no longer let git escape into this repo
 ### Changed
 - Always pull the latest container image before starting each run
-- Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
+- Increase agent container limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM
 - Configure Trivy to suppress vulnerability reports where no fix is available
-- Extract Trivy vulnerability scan and SARIF upload into a shared composite action used by all container image build workflows including development-agent
+- Move the Trivy scan and SARIF upload into a shared composite action
 - Pre-load SSH keys into the agent at startup so they are available before the container is launched
-- Increased container pids-limit from 1024 to 4096 to prevent fork failures during parallel BenchmarkDotNet artifact compilation
+- Increase the container pids-limit from 1024 to 4096
 - Timer interval configurable via ORCHESTRATOR_TIMER_INTERVAL env var, defaulting to 30sec
 - Improve git configuration: add standard settings to setup-owner and system-gitconfig
 - Suppress SC2016 in shellcheck — single-quoted GraphQL query strings are intentional
-- Defer Workflow-project GraphQL discovery and board-approved-items fetch until after per-item skip checks to avoid redundant API calls for blocked/unchanged items
-- Skip fetch_board_approved_items for PullRequest items — _WF_APPROVED_ITEMS is only consumed for Issues
-- Batch user-node lookups in _wf_invite_trusted_collaborators into a single GraphQL query (N+1 → 2 calls)
-- Mount only individual .claude subfolders (sessions, session-env, plans, cache, backups) so agent state persists across oneshot invocations, instead of mounting and wiping the whole ephemeral .claude directory each run
-- discover_or_create_workflow_project and fetch_board_approved_items now use per-repo associative array caches instead of single-string sentinels, so repos that appear more than once in a run avoid redundant GraphQL calls
-- oneshot: run one workflow phase per fresh Claude session and remove session resume, so a single run cannot accumulate enough context to hit the model window (Prompt is too long); state carries between phases via GitHub, with per-PR total/idle invocation guards bounding re-invocation (#1051)
-- test-shell-scripts.yml no longer runs on every push to main, only on pull_request — pushes to main were producing occasional noisy CI failures from the intermittent test/entrypoint.bats flake (#1073) without blocking anything, since main is already merged by that point
-- Renamed development build workflow job ids and marked them as required checks for main so branch protection can target them individually
-- Rewrote the reject-obfuscated-commands and enforce-git-dash-c Claude Code hooks to parse commands with shfmt (a real shell parser) instead of regex/text scanning, ending the per-technique bypass arms race (8 review rounds on PR #1159): obfuscated command names, unparseable commands, function/declare clauses, and assignments to IFS/PATH/LD_*/GIT_* are rejected categorically, and command names are then checked against extendable known-bad (command-blocklist: eval, sub-shells, sudo/env/nice/timeout wrappers) and known-good (command-allowlist, strict default-reject) data files baked into the image (#1105)
-- oneshot: add a new PHASE D (Simplify) that runs /simplify against the diff, commits/pushes any resulting changes, and STOPs so a fresh session re-verifies CI before code review runs in the renumbered PHASE E
-- Add a dedicated AI Simplify Workflow Status option (create-project and oneshot's board schema); PHASE D now sets the board to it explicitly instead of leaving Simplify's in-progress state implicit
+- Defer Workflow-project discovery until after the per-item skip checks
+- Skip fetch_board_approved_items for pull request items
+- Batch user-node lookups in _wf_invite_trusted_collaborators into one GraphQL query
+- Mount only the individual .claude subfolders so agent state persists across runs
+- Cache Workflow-project discovery and board approvals per repository
+- oneshot runs one workflow phase per fresh Claude session and drops resume (#1051)
+- test-shell-scripts.yml runs only on pull_request, not every push to main (#1073)
+- Rename the development build job ids and make them required checks for main
+- Rewrite two Claude Code hooks to parse commands with shfmt (#1159, #1105)
+- Add PHASE D (Simplify), which runs /simplify and stops before code review
+- Add an AI Simplify Workflow Status option, set explicitly by PHASE D
 - SDK - Updated DotNet SDK to 10.0.302
-- Split oneshot from a single 4650-line script into a thin entrypoint plus 10 lib/* function libraries (globals, core, git, github, github-status, fingerprints, state, prompts, workflow-board, discord, podman); loop, create-project, and setup-owner now source lib/core for their shared output helpers instead of each keeping a duplicated copy
+- Split oneshot into a thin entrypoint plus 10 lib/* function libraries
 ### Removed
-- Pruned the pre-commit install, install-deps-arch, and install-deps-debian scripts from the baked development-full image — they describe a ~/.local/bin symlink setup this image doesn't use (PATH is wired directly via ENV) and were misleading troubleshooting
+- Prune the pre-commit install and install-deps scripts from development-full
 
 ## [0.0.1] - 2026-06-11
 ### Added
-- oneshot script to fetch the top-priority work item from the priorities API and drive a Claude Code session to work on it
+- Add the oneshot script to drive a Claude Code session on the top-priority work item
 - loop script: continuous wrapper that runs oneshot every 5 minutes
-- oneshot now clones both cs-template rules and the target repo into $XDG_PROJECTS_DIR (or $HOME/work) before each Claude session, keeping both up-to-date
-- Support for specifying a Claude OAuth token per repo owner so work can be billed to the appropriate account
+- oneshot clones the cs-template rules and target repo before each Claude session
+- Support a Claude OAuth token per repo owner
 - Non-agentic PR status check to avoid burning tokens on up-to-date PRs
 - Non-agentic issue status check to skip unchanged issues without burning tokens
-- Active GitHub query for linked PRs when the priorities API has none, ensuring a recently-created PR is detected and worked on rather than the issue
+- Query GitHub for linked PRs when the priorities API has none
 - Bats-based test suite for the oneshot and loop shell scripts
-- Add install-timer script to install a system-level systemd service and timer that runs the orchestrator every 5 minutes as the invoking user, self-updates via git pull before each run, and persists across reboots without requiring an active login session
-- Layered development base Docker images (development-tools, development-node, development-python, development-full) with per-stage self-checks for modular, independently-rebuildable agent container layers
-- Discord webhook notifications on work start, resume, and no-work — configurable via DISCORD_WEBHOOK in ~/.config/orchestrator/.env
-- Discord webhook notification when an issue or PR is found to be blocked, including a direct link to the blocked item
+- Add install-timer to run the orchestrator every 5 minutes from a systemd timer
+- Add layered development base Docker images with per-stage self-checks
+- Discord webhook notifications on work start, resume and no work
+- Discord notification when an issue or PR is blocked, with a direct link
 - GitHub Actions workflow to run bats shell test suite in CI on every push and pull request
-- Label management guidance added to both issue and PR prompts in oneshot — GitHub workflow classification labels are preserved when adding new labels
-- Discord notification when Claude returns an application-level error (is_error: true), including the error message and a link to the affected issue or PR
-- Automatic session reset when a resumed Claude session exceeds the context limit (terminal_reason=blocking_limit) — retries as a new session, overwriting the stored session ID to break the stuck loop
-- Pre-send prompt length guard (MAX_PROMPT_CHARS=100000) that fails fast and notifies Discord before invoking Claude if the initial prompt is grossly oversized
-- Discord notification and automatic rate-limit backoff when Claude returns HTTP 429, with non-agentic parsing of the reset time from the error message
-- Exclusive per-owner flock lock in oneshot to prevent concurrent invocations racing on the same git working directories when a Claude session outlasts the timer interval
+- Issue and PR prompts include label management guidance
+- Discord notification when Claude returns an application-level error
+- Reset the session automatically when a resumed session exceeds the context limit
+- Add a pre-send prompt length guard (MAX_PROMPT_CHARS=100000)
+- Discord notification and automatic rate-limit backoff when Claude returns HTTP 429
+- Add an exclusive per-owner flock lock in oneshot to prevent concurrent runs
 - Log current HEAD SHA on startup so the running version is visible in systemd journal output
-- notify_discord_no_work now accepts an optional owner argument; when --owner is set the Discord message is prefixed with [owner] to distinguish multiple orchestrator instances (fixes #90)
-- Non-agentic PR rebases now proceed even when the owner is rate-limited — only invoke_claude is blocked during the rate-limit window
-- development-agent Docker image based on development-full with package-management and privilege-escalation tools removed, and a build workflow that triggers every 30 minutes or when development-full is updated
-- Docker container execution for oneshot: named orchestrator-<owner>, uses development-agent image, mounts repo rw, rules ro, ssh ro, gnupg rw, passes Claude and GitHub CLI tokens
+- notify_discord_no_work prefixes the message with [owner] when --owner is set (#90)
+- Non-agentic PR rebases proceed even when the owner is rate-limited
+- Add a development-agent image without package-management or privilege-escalation tools
+- Run oneshot sessions in a Docker container using the development-agent image
 ### Fixed
 - oneshot prompt now delivered to Claude via stdin, fixing empty-prompt error when using --print
 - oneshot now skips items from the priorities API that are already closed or merged on GitHub
-- bats test stubs now created in repo tree so they are executable in sandboxes where /tmp is mounted noexec, fixing load_session PR fallback test failures
-- development-node Docker image: add CLAUDE_CODE_CACHE_BUST ARG so npm @latest installs are rebuilt when a new version is published
-- load_token_for_owner now exits 0 when no token is configured, preventing spurious failures under set -e callers
-- Avoid gh pr list --author flag broken in gh 2.93.0 by filtering open PRs by author client-side using gh api user
+- Create bats test stubs in the repo tree so they run where /tmp is noexec
+- development-node: add a CLAUDE_CODE_CACHE_BUST ARG to rebuild npm @latest installs
+- load_token_for_owner exits 0 when no token is configured
+- Filter open PRs by author client-side to avoid gh 2.93.0's broken --author flag
 - Include Draft PRs in priority scan — Draft status indicates work still needed
-- Preserve /priorities API order — remove sort_by(.priority) that was overriding the server-defined priority ordering
+- Preserve the /priorities API order by removing sort_by(.priority)
 - Log claude output before dying on failed invocation
-- Replaced 'git pull --ff-only' in systemd ExecStartPre with explicit 'git fetch origin' then 'git merge --ff-only origin/main' to avoid failure when pull.rebase=true is configured
-- Retry as a new session when Claude reports the stored session ID no longer exists ('No conversation found with session ID')
-- Stored session expired retry no longer sends a Discord notification — this is a recoverable transient state already logged to the console
+- ExecStartPre fetches then merges --ff-only instead of git pull --ff-only
+- Retry as a new session when Claude reports the stored session ID no longer exists
+- An expired stored session retry no longer sends a Discord notification
 - Draft PRs no longer skipped when fingerprint is unchanged — a draft PR always has pending work
-- Orchestrator now evaluates all open PRs in a repository independently; previously a second PR in the same repo was silently skipped when an earlier PR had already been seen in the priority list
+- Evaluate all open PRs in a repository independently
 - Use sudo docker for container invocations in invoke_claude
-- Pass GH_ENTERPRISE_TOKEN (not GH_TOKEN) to the agent container so the GitHub API proxy authenticates correctly; fall back to GH_TOKEN in orchestrator .env when no per-owner token file exists
-- Configure host-side gh CLI with GH_HOST and GH_ENTERPRISE_TOKEN from orchestrator .env so oneshot uses the same proxy as the agent container
+- Pass GH_ENTERPRISE_TOKEN, not GH_TOKEN, to the agent container
+- Configure the host-side gh CLI with GH_HOST and GH_ENTERPRISE_TOKEN from .env
 ### Changed
-- oneshot session management now stores one session file per issue or pull request and falls back to a linked issue session when working on a PR with no existing session
-- oneshot now saves Claude output to a temp file and displays the text response after each session, making it possible to review what Claude did
-- oneshot session prompts now instruct Claude to reply to every actioned comment and add the Blocked label before asking questions
-- oneshot issue prompt now instructs Claude to create a branch, add a placeholder CHANGELOG entry, push upstream, and open a draft PR when starting work on an issue
-- Claude sessions now run against the XDG-based repo clone; prompts specify .ai-instructions loading order (repo then rules fallback, error if neither found)
-- oneshot prompt builders rewritten as heredocs with direct variable expansion; instructions are read first, followed by numbered task steps, making both source and rendered prompts easier to review
-- oneshot now resolves the .ai-instructions path before building prompts via find_ai_instructions(), dying immediately if neither repo nor rules dir contains the file
-- Claude sessions now use --model opusplan, giving smarter model selection: Opus for plan-mode reasoning, Sonnet for execution
-- oneshot now iterates through all priorities entries across all repos, working on the first actionable item rather than being restricted to a single hardcoded repository
-- oneshot now respects the one-PR-per-repo constraint correctly: skip_repos is only marked busy after a PR is confirmed open and non-blocked, and the is_skipped flag is explicitly reset between loop iterations
-- docker-images.instructions.md updated to specify :latest only for container image tags; development-tools README and Dockerfile updated accordingly
+- Store one session file per issue or PR, falling back to the linked issue's session
+- oneshot saves Claude output and shows the text response after each session
+- Session prompts tell Claude to reply to actioned comments and add Blocked before asking
+- The issue prompt tells Claude to branch, add a CHANGELOG placeholder and open a draft PR
+- Claude sessions run against the XDG-based repo clone with an instruction load order
+- Rewrite oneshot's prompt builders as heredocs with direct variable expansion
+- Resolve the .ai-instructions path before building prompts, dying if it is missing
+- Claude sessions use --model opusplan: Opus for planning, Sonnet for execution
+- oneshot iterates all priorities entries across repos, working the first actionable one
+- oneshot respects the one-PR-per-repo constraint correctly
+- docker-images instructions specify :latest only for container image tags
 - PR prompt now includes explicit gh pr ready command to mark PR as ready for review
-- Issue and PR prompts now include GitHub CLI markdown formatting guidance to prevent escaped newlines rendering as literal characters in comments
+- Issue and PR prompts include GitHub CLI markdown formatting guidance
 - docker: base images: switch claude code install from npm to apt
-- PR prompt now instructs Claude to check CI state once with gh pr checks and stop immediately if checks are pending, rather than polling in a loop — prevents sessions hanging indefinitely when Build: Pre-Release is absent from the most-recent workflow runs window
-- Moved GitHub CLI comment body, label management, and CI check-once rules to cs-template global instructions; prompts now reference AI instructions instead of repeating inline rule blocks
-- Refactored invoke_claude into run_claude_fresh, run_claude_resumed, and handle_claude_is_error helpers for readability
-- Rate-limit backoff now waits until 1 hour past the token reset time (RATE_LIMIT_RESUME_BUFFER_SECS=3600) to avoid immediately hitting the limit again
+- The PR prompt checks CI once and stops if checks are pending, instead of polling
+- Move GitHub CLI comment, label and CI rules to the cs-template global instructions
+- Refactor invoke_claude into run_claude_fresh, run_claude_resumed and an error helper
+- Rate-limit backoff waits until 1 hour past the reset time
 - No-work notification now includes counts of blocked, unchanged, and repo-active skips
-- Replace pre-run container removal with existence check — die if named container already exists; detect name-in-use race in docker run; remove host ~/.claude mount from container
+- Die if the named container already exists instead of removing it first
 - SDK - Updated DotNet SDK to 10.0.301
 ### Removed
-- Remove unused NanoClaw container/ directory and its dependabot tracking — never deployed, superseded by containers/ base images and oneshot
+- Remove the unused NanoClaw container/ directory and its dependabot tracking
 
 ## [0.0.0] - Project created
