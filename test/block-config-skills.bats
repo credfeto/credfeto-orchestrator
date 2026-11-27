@@ -141,6 +141,12 @@ run_raw_payload() {
     jq -r '.permissions.deny[]' "${MANAGED_SETTINGS}" | grep -qxF 'Agent(statusline-setup)'
 }
 
+@test "the security-review skill is allowed by the managed settings and passes the hook" {
+    jq -r '.permissions.allow[]' "${MANAGED_SETTINGS}" | grep -qxF 'Skill(security-review)'
+    run_skill "security-review"
+    [ "${status}" -eq 0 ] || { echo "did not allow security-review: ${output}" >&2; return 1; }
+}
+
 @test "the managed settings register this hook against the Skill and SlashCommand matcher" {
     run jq -r '.hooks.PreToolUse[] | select(.matcher == "Skill|SlashCommand") | .hooks[] | .command' "${MANAGED_SETTINGS}"
     [ "${status}" -eq 0 ]
