@@ -11,6 +11,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ## [Unreleased]
 ### Security
 ### Added
+- .NET rewrite (#252): ORCHESTRATOR_DOTNET_CHECKS for the github-status routing and label reads
 ### Fixed
 ### Changed
 ### Deprecated
