@@ -28,6 +28,9 @@ public static class DiscordTextCommandParser
         ["truncate"] = new(DiscordTextKind.TRUNCATE, [MaxLength]),
     };
 
+    // Every text command; the tool's --capabilities lists them
+    public static IReadOnlyList<string> Names { get; } = [.. Commands.Keys.Order(StringComparer.Ordinal)];
+
     // Whether args name one of these commands, so the runner parses them here rather than as a payload
     public static bool IsTextCommand(IReadOnlyList<string> args)
     {

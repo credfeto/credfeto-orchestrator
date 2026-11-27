@@ -78,6 +78,9 @@ public static class DiscordCommandParser
 
     public static string KindNames => string.Join(separator: ", ", values: Kinds.Keys);
 
+    // Every payload kind; the tool's --capabilities lists them as "discord payload <kind>"
+    public static IReadOnlyList<string> Names { get; } = [.. Kinds.Keys.Order(StringComparer.Ordinal)];
+
     public static bool IsVerb(IReadOnlyList<string> args)
     {
         return args.Count > 0 && StringComparer.Ordinal.Equals(x: args[0], y: Verb);

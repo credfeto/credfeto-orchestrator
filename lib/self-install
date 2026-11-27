@@ -300,3 +300,84 @@ self_install_orchestrator_cmd() {
     fi
     return 0
 }
+
+# The line --capabilities prints first; a binary that prints anything else lists nothing
+_ORCHESTRATOR_CMD_CAPABILITIES_HEADER='credfeto-orchestrator capabilities 1'
+
+# Returns 0 when the ORCHESTRATOR_DOTNET_<AREA> switch for the tool verb in $1 is on, 1 when it is off
+_orchestrator_cmd_area_on() {
+    local switch
+    case "$1" in
+        agent) switch=ORCHESTRATOR_DOTNET_AGENTS ;;
+        discord) switch=ORCHESTRATOR_DOTNET_DISCORD ;;
+        discovery) switch=ORCHESTRATOR_DOTNET_DISCOVERY ;;
+        fingerprint) switch=ORCHESTRATOR_DOTNET_FINGERPRINTS ;;
+        git) switch=ORCHESTRATOR_DOTNET_GIT ;;
+        github) switch=ORCHESTRATOR_DOTNET_GITHUB ;;
+        podman) switch=ORCHESTRATOR_DOTNET_PODMAN ;;
+        predicate) switch=ORCHESTRATOR_DOTNET_PREDICATES ;;
+        prompt) switch=ORCHESTRATOR_DOTNET_PROMPTS ;;
+        state) switch=ORCHESTRATOR_DOTNET_STATE ;;
+        *) return 1 ;;
+    esac
+    [ "${!switch:-0}" = 1 ]
+}
+
+# Checks, once a run, which commands the self-installed binary has (#2095). The bash checkout updates itself within
+# minutes of a merge, but the binary only once a newer package is on the feed and the version cache has expired, so
+# for a while this checkout can ask for a command, or a payload kind, the binary does not have yet. When
+# ORCHESTRATOR_CMD is the self-installed binary (not one the environment set) and any ORCHESTRATOR_DOTNET_<AREA> is
+# on, this asks it for --capabilities, its one line per command, and keeps them in ORCHESTRATOR_CMD_CAPABILITIES for
+# orchestrator_cmd_supports. It logs one line at most: the commands of the areas that are on which this checkout's
+# own build lists (ORCHESTRATOR_CMD_CAPABILITIES_FILE) and the binary lacks, or, for a binary that lists none (one
+# built before --capabilities), the areas that run in bash this run. Its stderr is thrown away, so an older binary's
+# usage text never reaches the journal. Always returns 0.
+check_orchestrator_cmd_capabilities() {
+    ORCHESTRATOR_CMD_CHECKED=0
+    ORCHESTRATOR_CMD_CAPABILITIES=""
+    if [ "${ORCHESTRATOR_CMD_FROM_ENVIRONMENT}" = 1 ] \
+        || [ "${ORCHESTRATOR_CMD}" != "${ORCHESTRATOR_CMD_INSTALL_DIR}/current/${ORCHESTRATOR_CMD_BINARY}" ]; then
+        return 0
+    fi
+    local verb text status=0 line version joined
+    local -a areas=() missing=()
+    for verb in agent discord discovery fingerprint git github podman predicate prompt state; do
+        _orchestrator_cmd_area_on "${verb}" && areas+=("${verb}")
+    done
+    [ "${#areas[@]}" -gt 0 ] || return 0
+
+    ORCHESTRATOR_CMD_CHECKED=1
+    version=$(_self_install_current_version "${ORCHESTRATOR_CMD_INSTALL_DIR}")
+    text=$("${ORCHESTRATOR_CMD}" --capabilities < /dev/null 2> /dev/null) || status=$?
+    if [ "${status}" -ne 0 ] || [ "${text%%$'\n'*}" != "${_ORCHESTRATOR_CMD_CAPABILITIES_HEADER}" ]; then
+        printf -v joined '%s, ' "${areas[@]}"
+        warn "${ORCHESTRATOR_CMD_BINARY} ${version:-(unknown version)} does not list its capabilities (it is older than this checkout), so ${joined%, } run in bash this run"
+        return 0
+    fi
+    case "${text}" in
+        *$'\n'*) ORCHESTRATOR_CMD_CAPABILITIES=$'\n'"${text#*$'\n'}"$'\n' ;;
+    esac
+
+    if [ -f "${ORCHESTRATOR_CMD_CAPABILITIES_FILE}" ]; then
+        while IFS= read -r line || [ -n "${line}" ]; do
+            if [ -n "${line}" ] && [ "${line}" != "${_ORCHESTRATOR_CMD_CAPABILITIES_HEADER}" ] \
+                && _orchestrator_cmd_area_on "${line%% *}" && ! orchestrator_cmd_supports "${line}"; then
+                missing+=("${line}")
+            fi
+        done < "${ORCHESTRATOR_CMD_CAPABILITIES_FILE}"
+    fi
+    if [ "${#missing[@]}" -gt 0 ]; then
+        printf -v joined '%s, ' "${missing[@]}"
+        warn "${ORCHESTRATOR_CMD_BINARY} ${version:-(unknown version)} is older than this checkout and lacks ${joined%, }, so those run in bash this run"
+    fi
+    return 0
+}
+
+# Returns 0 when ORCHESTRATOR_CMD may be asked the command its arguments name ("discord payload work-item",
+# "git head-sha"), 1 when it lacks it, printing nothing either way. Every command may be asked unless
+# check_orchestrator_cmd_capabilities checked the binary this run; then only the commands it listed may be. A caller
+# that gets 1 runs its bash version, as it does with its area off.
+orchestrator_cmd_supports() {
+    [ "${ORCHESTRATOR_CMD_CHECKED:-0}" = 1 ] || return 0
+    [[ "${ORCHESTRATOR_CMD_CAPABILITIES}" == *$'\n'"$*"$'\n'* ]]
+}

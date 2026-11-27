@@ -13,6 +13,7 @@
 # webhook URL never reaches the tool, and posting it and every dedup marker stay in this file.
 _discord_payload_from_tool() {
     [ "${ORCHESTRATOR_DOTNET_DISCORD}" = 1 ] || return 1
+    orchestrator_cmd_supports discord payload "$1" || return 1
     local kind="$1" text status
     shift
     # The tool's exit status after a dot, so a failing tool never trips errexit in a caller that has it on
@@ -36,6 +37,7 @@ _discord_payload_from_tool() {
 # as an argument, so no argument size limit applies; the tool drops the one newline the here-string adds.
 _discord_text_from_tool() {
     [ "${ORCHESTRATOR_DOTNET_DISCORD}" = 1 ] || return 1
+    orchestrator_cmd_supports discord "$1" || return 1
     local command="$1" text status
     shift
     # The tool's exit status after a dot, so a failing tool never trips errexit in a caller that has it on

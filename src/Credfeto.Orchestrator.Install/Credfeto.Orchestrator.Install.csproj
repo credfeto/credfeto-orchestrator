@@ -4,7 +4,7 @@
     <AnalysisMode>AllEnabledByDefault</AnalysisMode>
     <CodeAnalysisTreatWarningsAsErrors>true</CodeAnalysisTreatWarningsAsErrors>
     <DebuggerSupport>true</DebuggerSupport>
-    <Description>Credfeto Orchestrator install: the --version and --self-test answers oneshot's self-install asks of a binary before using it</Description>
+    <Description>Credfeto Orchestrator install: the --version and --self-test answers oneshot's self-install asks of a binary before using it, and the --capabilities list oneshot reads once a run</Description>
     <DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
     <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
@@ -37,10 +37,15 @@
     <WarningsAsErrors />
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="../Credfeto.Orchestrator.Agents/Credfeto.Orchestrator.Agents.csproj" />
+    <ProjectReference Include="../Credfeto.Orchestrator.Commands/Credfeto.Orchestrator.Commands.csproj" />
     <ProjectReference Include="../Credfeto.Orchestrator.Config/Credfeto.Orchestrator.Config.csproj" />
+    <ProjectReference Include="../Credfeto.Orchestrator.Discord/Credfeto.Orchestrator.Discord.csproj" />
     <ProjectReference Include="../Credfeto.Orchestrator.Fingerprints/Credfeto.Orchestrator.Fingerprints.csproj" />
     <ProjectReference Include="../Credfeto.Orchestrator.Jq/Credfeto.Orchestrator.Jq.csproj" />
+    <ProjectReference Include="../Credfeto.Orchestrator.Podman/Credfeto.Orchestrator.Podman.csproj" />
     <ProjectReference Include="../Credfeto.Orchestrator.Prompts/Credfeto.Orchestrator.Prompts.csproj" />
+    <ProjectReference Include="../Credfeto.Orchestrator.State/Credfeto.Orchestrator.State.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="AsyncFixer" Version="2.1.0" PrivateAssets="All" ExcludeAssets="runtime" />

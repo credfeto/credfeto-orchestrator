@@ -33,7 +33,7 @@ get_trusted_logins() {
 
     # With ORCHESTRATOR_DOTNET_DISCOVERY=1 the tool reads the collaborators (through the cfwf MCP
     # server, with the same retries) and builds the same list (#252); a failure is not cached either.
-    if [ "${ORCHESTRATOR_DOTNET_DISCOVERY}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_DISCOVERY}" = 1 ] && orchestrator_cmd_supports discovery trusted-logins; then
         local dotnet_logins
         if dotnet_logins=$(_discovery_with_orchestrator_cmd trusted-logins --repo "${REPO_FULL}" \
             --owner "${OWNER}" --whitelist "${WHITELISTED_USERS}" --creator "${PR_CREATOR_LOGIN}" \
@@ -112,7 +112,7 @@ fetch_all_priorities() {
         url="${PRIORITIES_URL}?user=${encoded_user}"
     fi
 
-    if [ "${ORCHESTRATOR_DOTNET_DISCOVERY}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_DISCOVERY}" = 1 ] && orchestrator_cmd_supports discovery priorities; then
         local -a user_args=()
         [ -n "${encoded_user}" ] && user_args=(--user "${_GH_ME}")
         local cmd_rc=0
@@ -151,7 +151,7 @@ fetch_all_priorities() {
 # non-zero when it cannot be read. With ORCHESTRATOR_DOTNET_GITHUB=1 the tool reads it through the
 # cfwf MCP server's auth_status (#252).
 fetch_current_login() {
-    if [ "${ORCHESTRATOR_DOTNET_GITHUB}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_GITHUB}" = 1 ] && orchestrator_cmd_supports github whoami; then
         _github_read_with_orchestrator_cmd whoami
         return
     fi
@@ -203,7 +203,7 @@ list_bot_created_open_prs() {
 
     resolve_gh_me || return 1
 
-    if [ "${ORCHESTRATOR_DOTNET_GITHUB}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_GITHUB}" = 1 ] && orchestrator_cmd_supports github own-open-prs; then
         _github_read_with_orchestrator_cmd own-open-prs --repo "${repo_full}" --me "${_GH_ME}" \
             --creator "${PR_CREATOR_LOGIN}" --include-blocked "${include_blocked}"
         return
@@ -266,7 +266,7 @@ _github_read_with_orchestrator_cmd() {
 # stops at 200 (#252).
 fetch_open_prs_with_closing_issues() {
     local repo_full="$1" pr_list
-    if [ "${ORCHESTRATOR_DOTNET_GITHUB}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_GITHUB}" = 1 ] && orchestrator_cmd_supports github open-prs-closing-issues; then
         _github_read_with_orchestrator_cmd open-prs-closing-issues --repo "${repo_full}"
         return
     fi
@@ -291,7 +291,7 @@ fetch_open_prs_with_closing_issues() {
 # With ORCHESTRATOR_DOTNET_GITHUB=1 the tool reads them through the cfwf MCP server's pr_view (#252).
 fetch_pr_commit_authors_json() {
     local repo_full="$1" pr_number="$2" attempt=1 result
-    if [ "${ORCHESTRATOR_DOTNET_GITHUB}" != 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_GITHUB}" != 1 ] || ! orchestrator_cmd_supports github pr-commit-authors; then
         result=$(fetch_pr_fields_json "${pr_number}" commits "${repo_full}") || return 1
         printf '%s' "${result}" | jq -c '{commits: [(.commits // [])[] | {
             authors: [(.authors // [])[] | {login: (.login // ""), email: (.email // "")}]
@@ -317,7 +317,7 @@ fetch_pr_commit_authors_json() {
 # branch_compare (#252).
 fetch_branch_behind_by() {
     local repo_full="$1" base_branch="$2" head_branch="$3" encoded_base encoded_head
-    if [ "${ORCHESTRATOR_DOTNET_GITHUB}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_GITHUB}" = 1 ] && orchestrator_cmd_supports github branch-behind-by; then
         _github_read_with_orchestrator_cmd branch-behind-by --repo "${repo_full}" \
             --base "${base_branch}" --head "${head_branch}"
         return
@@ -332,7 +332,7 @@ fetch_branch_behind_by() {
 # ORCHESTRATOR_DOTNET_GITHUB=1 the tool reads them through the cfwf MCP server's pr_view (#252).
 fetch_pr_closing_issue_numbers() {
     local repo_full="$1" pr_number="$2"
-    if [ "${ORCHESTRATOR_DOTNET_GITHUB}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_GITHUB}" = 1 ] && orchestrator_cmd_supports github pr-closing-issues; then
         _github_read_with_orchestrator_cmd pr-closing-issues --repo "${repo_full}" --pr "${pr_number}"
         return
     fi
@@ -348,7 +348,7 @@ fetch_pr_closing_issue_numbers() {
 # closing_issue_labels (#252).
 fetch_closing_issue_labels() {
     local repo_full="$1" pr_number="$2" references issue_repo issue_number labels=""
-    if [ "${ORCHESTRATOR_DOTNET_GITHUB}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_GITHUB}" = 1 ] && orchestrator_cmd_supports github closing-issue-labels; then
         _github_read_with_orchestrator_cmd closing-issue-labels --repo "${repo_full}" --pr "${pr_number}"
         return
     fi
@@ -371,7 +371,7 @@ fetch_closing_issue_labels() {
 # Returns non-zero when the list cannot be read.
 fetch_open_pr_numbers_on_head() {
     local repo_full="$1" branch="$2"
-    if [ "${ORCHESTRATOR_DOTNET_GITHUB}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_GITHUB}" = 1 ] && orchestrator_cmd_supports github open-prs; then
         _github_read_with_orchestrator_cmd open-prs --repo "${repo_full}" --head "${branch}"
         return
     fi
@@ -382,7 +382,7 @@ fetch_open_pr_numbers_on_head() {
 # fetch_open_pr_numbers_on_head lists them. Returns non-zero when the list cannot be read.
 fetch_open_pr_count_on_head() {
     local repo_full="$1" branch="$2"
-    if [ "${ORCHESTRATOR_DOTNET_GITHUB}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_GITHUB}" = 1 ] && orchestrator_cmd_supports github open-pr-count; then
         _github_read_with_orchestrator_cmd open-pr-count --repo "${repo_full}" --head "${branch}"
         return
     fi
@@ -425,7 +425,7 @@ fetch_pr_required_check_names() {
 fetch_branch_requires_status_checks() {
     local base_branch="$1" repo_full="${2:-${REPO_FULL}}" encoded_branch protection rules
     [ -n "${base_branch}" ] || return 1
-    if [ "${ORCHESTRATOR_DOTNET_GITHUB}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_GITHUB}" = 1 ] && orchestrator_cmd_supports github branch-requires-status-checks; then
         _github_read_with_orchestrator_cmd branch-requires-status-checks --repo "${repo_full}" --branch "${base_branch}"
         return
     fi

@@ -22,6 +22,7 @@ _prompt_with_orchestrator_cmd() {
     local kind="$1" wf_status text status
     local -a records=()
     shift
+    orchestrator_cmd_supports prompt "${kind}" || return 1
     if [ "${kind}" = issue-claude-md ] || [ "${kind}" = pr-claude-md ]; then
         records=("repo-full=${REPO_FULL}" "board=false")
         [ -n "${_WF_PROJECT_ID}" ] && records[1]="board=true"
@@ -50,7 +51,7 @@ _prompt_with_orchestrator_cmd() {
 # tool counts it, in the locale this shell runs in; if the tool fails, bash counts it.
 prompt_exceeds_max_chars() {
     local prompt="$1" length status
-    if [ "${ORCHESTRATOR_DOTNET_PROMPTS}" = 1 ]; then
+    if [ "${ORCHESTRATOR_DOTNET_PROMPTS}" = 1 ] && orchestrator_cmd_supports prompt check-length; then
         length=$(printf '%s' "${prompt}" | "${ORCHESTRATOR_CMD}" prompt check-length --max "${MAX_PROMPT_CHARS}")
         status=$?
         if [ -n "${length}" ] && { [ "${status}" -eq 0 ] || [ "${status}" -eq 3 ]; }; then

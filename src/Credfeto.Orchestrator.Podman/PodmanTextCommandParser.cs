@@ -25,6 +25,21 @@ public static class PodmanTextCommandParser
     public const string CLEAN = "clean";
     public const string FINDINGS = "findings";
 
+    // Every text query name Parse accepts; the tool's --capabilities lists them (Names)
+    private static readonly IReadOnlyDictionary<string, PodmanTextQuery> ByName = new Dictionary<
+        string,
+        PodmanTextQuery
+    >(StringComparer.Ordinal)
+    {
+        ["background-stall"] = PodmanTextQuery.BACKGROUND_STALL,
+        ["diagnostic-refusal"] = PodmanTextQuery.DIAGNOSTIC_REFUSAL,
+        ["tool-denied-quit"] = PodmanTextQuery.TOOL_DENIED_QUIT,
+        ["review-result-marker"] = PodmanTextQuery.REVIEW_RESULT_MARKER,
+        ["clean-review"] = PodmanTextQuery.CLEAN_REVIEW,
+    };
+
+    public static IReadOnlyList<string> Names { get; } = [.. ByName.Keys.Order(StringComparer.Ordinal)];
+
     public static bool IsQuery(IReadOnlyList<string> args)
     {
         return args.Count > 1 && PodmanCommandParser.IsVerb(args) && ParseQuery(args[1]) is not null;
@@ -83,14 +98,6 @@ public static class PodmanTextCommandParser
 
     private static PodmanTextQuery? ParseQuery(string query)
     {
-        return query switch
-        {
-            "background-stall" => PodmanTextQuery.BACKGROUND_STALL,
-            "diagnostic-refusal" => PodmanTextQuery.DIAGNOSTIC_REFUSAL,
-            "tool-denied-quit" => PodmanTextQuery.TOOL_DENIED_QUIT,
-            "review-result-marker" => PodmanTextQuery.REVIEW_RESULT_MARKER,
-            "clean-review" => PodmanTextQuery.CLEAN_REVIEW,
-            _ => null,
-        };
+        return ByName.TryGetValue(key: query, value: out PodmanTextQuery value) ? value : null;
     }
 }

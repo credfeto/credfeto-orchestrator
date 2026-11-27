@@ -58,6 +58,9 @@ public static class StateCommandParser
 
     public static string QueryNames => string.Join(separator: ", ", values: Queries.Keys);
 
+    // Every query; the tool's --capabilities lists them
+    public static IReadOnlyList<string> Names { get; } = [.. Queries.Keys.Order(StringComparer.Ordinal)];
+
     public static bool IsVerb(IReadOnlyList<string> args)
     {
         return args.Count > 0 && StringComparer.Ordinal.Equals(x: args[0], y: Verb);

@@ -1,0 +1,97 @@
+credfeto-orchestrator capabilities 1
+agent ssh-key-state
+agent stop-ssh-agent
+discord item-status
+discord item-status-log
+discord no-work-breakdown
+discord payload blocked-issue-replanning
+discord payload blocked-item
+discord payload board-conversion-failed
+discord payload daily-digest
+discord payload host-health
+discord payload item-error
+discord payload low-disk-space
+discord payload no-work
+discord payload permission-denials
+discord payload pr-needs-approval
+discord payload priorities-unreachable
+discord payload rate-limited
+discord payload self-update-stale
+discord payload session-stalled
+discord payload slow-pull
+discord payload work-item
+discord truncate
+discovery github-incident
+discovery priorities
+discovery trusted-logins
+fingerprint issue
+fingerprint pr
+git autostashes-beyond-keep
+git changed-file-count
+git commits-behind
+git current-branch
+git head-sha
+git origin-branch-exists
+git porcelain-status
+git stale-issue-branch
+git stash-head
+git uncommitted-changes
+github branch-behind-by
+github branch-requires-status-checks
+github closing-issue-labels
+github open-pr-count
+github open-prs
+github open-prs-closing-issues
+github own-open-prs
+github pr-closing-issues
+github pr-commit-authors
+github pr-issue-comments
+github pr-review-comments
+github whoami
+podman background-stall
+podman clean-review
+podman container-exists
+podman container-running
+podman denials-summary
+podman denied-command-names
+podman diagnostic-refusal
+podman image-exists
+podman image-sha
+podman review-result-marker
+podman tool-denied-quit
+predicate issue-has-human-plan-approval
+predicate issue-has-plan-comment
+predicate pr-annotate-required-checks
+predicate pr-env-block-image-sha
+predicate pr-has-failed-check-of-unknown-requiredness
+predicate pr-has-failed-required-check
+predicate pr-has-only-passed-checks
+predicate pr-has-pending-ci-checks
+predicate pr-has-placeholder-file
+predicate pr-has-unaddressed-review-request
+predicate pr-is-terminal
+predicate pr-latest-trusted-comment-timestamp
+predicate pr-lowest-closing-issue
+predicate pr-needs-review-approval
+predicate pr-unaddressed-trusted-comments
+prompt check-length
+prompt issue-claude-md
+prompt issue-launch
+prompt pr-claude-md
+prompt pr-launch
+prompt precheck-section
+state env-unblock-attempts
+state infra-failures
+state invocations
+state last-diagnostic
+state marker
+state precheck-result
+state pull-duration-baseline
+state rate-limit
+state save-env-unblock-attempts
+state save-infra-failures
+state save-invocations
+state save-last-diagnostic
+state save-precheck-result
+state save-rate-limit
+state session-denials-summary

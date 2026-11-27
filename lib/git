@@ -121,6 +121,7 @@ clean_local_git_url_rewrites() {
 _git_tool_answers() {
     local stderr_mode="$1" query="$2" text status
     shift 2
+    orchestrator_cmd_supports git "${query}" || return 1
     # The tool's exit status after a dot keeps the output's own trailing newlines, which $(...) would drop
     if [ "${stderr_mode}" = quiet ]; then
         text=$(
