@@ -9,6 +9,7 @@ using Credfeto.Orchestrator.Agents;
 using Credfeto.Orchestrator.Commands;
 using Credfeto.Orchestrator.Discord;
 using Credfeto.Orchestrator.Podman;
+using Credfeto.Orchestrator.Predicates;
 using Credfeto.Orchestrator.State;
 using FunFair.Test.Common;
 using Xunit;
@@ -62,7 +63,7 @@ public sealed partial class ToolCapabilitiesTests : TestBase
         ];
 
         Assert.Equal(
-            expected: "agent|discord|discovery|fingerprint|git|github|podman|predicate|prompt|state".Split('|'),
+            expected: "agent|checks|discord|discovery|fingerprint|git|github|podman|predicate|prompt|state".Split('|'),
             actual: verbs
         );
     }
@@ -97,6 +98,7 @@ public sealed partial class ToolCapabilitiesTests : TestBase
 
     [Theory]
     [InlineData("agent|no-such-command")]
+    [InlineData("checks|no-such-command")]
     [InlineData("discord|payload|no-such-command")]
     [InlineData("discovery|no-such-command")]
     [InlineData("fingerprint|no-such-command")]
@@ -162,6 +164,10 @@ public sealed partial class ToolCapabilitiesTests : TestBase
 
         switch (args[0])
         {
+            case ChecksCommandParser.Verb:
+                _ = ChecksCommandParser.Parse(args: args, error: out error);
+
+                return error;
             case PodmanCommandParser.Verb when PodmanTextCommandParser.IsQuery(args):
                 _ = PodmanTextCommandParser.Parse(args: args, error: out error);
 

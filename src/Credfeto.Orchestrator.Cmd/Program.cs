@@ -13,6 +13,7 @@ using Credfeto.Orchestrator.Fingerprints;
 using Credfeto.Orchestrator.GitHub;
 using Credfeto.Orchestrator.Install;
 using Credfeto.Orchestrator.Podman;
+using Credfeto.Orchestrator.Predicates;
 using Credfeto.Orchestrator.State;
 
 namespace Credfeto.Orchestrator.Cmd;
@@ -86,18 +87,9 @@ public static class Program
                 .AsTask();
         }
 
-        // discord only prints the payload or text it builds from its arguments and, for the text commands, stdin
-        if (DiscordCommandParser.IsVerb(args))
+        if (DiscordCommandParser.IsVerb(args) || ChecksCommandParser.IsVerb(args))
         {
-            return DiscordCommandRunner
-                .RunAsync(
-                    args: args,
-                    input: Console.OpenStandardInput,
-                    output: Console.Out,
-                    error: Console.Error,
-                    cancellationToken: cancellationToken
-                )
-                .AsTask();
+            return RunTextVerbAsync(args: args, cancellationToken: cancellationToken);
         }
 
         if (GitCommandParser.IsVerb(args))
@@ -130,6 +122,32 @@ public static class Program
         }
 
         return RunCommandAsync(args: args, cancellationToken: cancellationToken);
+    }
+
+    // discord only prints the payload or text it builds from its arguments and, for the text commands, stdin; checks
+    // only prints what a lib/github-status or lib/workflow-board read answers from its arguments and, for the JSON
+    // reads, stdin
+    private static Task<int> RunTextVerbAsync(string[] args, CancellationToken cancellationToken)
+    {
+        return DiscordCommandParser.IsVerb(args)
+            ? DiscordCommandRunner
+                .RunAsync(
+                    args: args,
+                    input: Console.OpenStandardInput,
+                    output: Console.Out,
+                    error: Console.Error,
+                    cancellationToken: cancellationToken
+                )
+                .AsTask()
+            : ChecksCommandRunner
+                .RunAsync(
+                    args: args,
+                    input: Console.OpenStandardInput,
+                    output: Console.Out,
+                    error: Console.Error,
+                    cancellationToken: cancellationToken
+                )
+                .AsTask();
     }
 
     // git has its own runner: it writes the bytes git printed to stdout untouched, not through Console.Out

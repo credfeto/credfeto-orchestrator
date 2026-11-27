@@ -36,6 +36,8 @@
   <ItemGroup>
     <!-- The golden cases test/oneshot-predicates-parity.bats checks the shell version against -->
     <EmbeddedResource Include="../../test/fixtures/predicates-parity.json" LogicalName="predicates-parity.json" />
+    <!-- The golden cases test/oneshot-checks-parity.bats checks the shell version against -->
+    <EmbeddedResource Include="../../test/fixtures/checks-parity.json" LogicalName="checks-parity.json" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../Credfeto.Orchestrator.Predicates/Credfeto.Orchestrator.Predicates.csproj" />

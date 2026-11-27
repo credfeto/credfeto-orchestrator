@@ -5,6 +5,7 @@ using Credfeto.Orchestrator.Agents;
 using Credfeto.Orchestrator.Commands;
 using Credfeto.Orchestrator.Discord;
 using Credfeto.Orchestrator.Podman;
+using Credfeto.Orchestrator.Predicates;
 using Credfeto.Orchestrator.State;
 
 namespace Credfeto.Orchestrator.Install;
@@ -30,6 +31,7 @@ public static class ToolCapabilities
         IEnumerable<string> lines =
         [
             .. Prefixed(verb: AgentCommandParser.Verb, names: AgentCommandParser.Names),
+            .. Prefixed(verb: ChecksCommandParser.Verb, names: ChecksCommandParser.Names),
             .. Prefixed(verb: DiscordCommandParser.Verb, names: DiscordTextCommandParser.Names),
             .. Prefixed(
                 verb: DiscordCommandParser.Verb + SEPARATOR + DiscordCommandParser.Payload,
