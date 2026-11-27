@@ -122,4 +122,22 @@ internal sealed class FakeGitHubReader : IGitHubReader
     {
         throw new NotSupportedException();
     }
+
+    public ValueTask<IReadOnlyList<PullRequestCheck>> PullRequestChecksAsync(
+        string repository,
+        int pullRequest,
+        CancellationToken cancellationToken
+    )
+    {
+        throw new NotSupportedException();
+    }
+
+    public ValueTask<int> CommitRunningCheckRunsAsync(
+        string repository,
+        string sha,
+        CancellationToken cancellationToken
+    )
+    {
+        throw new NotSupportedException();
+    }
 }

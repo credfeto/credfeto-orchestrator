@@ -32,6 +32,7 @@ public static class ToolCapabilities
         [
             .. Prefixed(verb: AgentCommandParser.Verb, names: AgentCommandParser.Names),
             .. Prefixed(verb: ChecksCommandParser.Verb, names: ChecksCommandParser.Names),
+            .. Prefixed(verb: ChecksReadCommandParser.Verb, names: ChecksReadCommandParser.Names),
             .. Prefixed(verb: DiscordCommandParser.Verb, names: DiscordTextCommandParser.Names),
             .. Prefixed(
                 verb: DiscordCommandParser.Verb + SEPARATOR + DiscordCommandParser.Payload,

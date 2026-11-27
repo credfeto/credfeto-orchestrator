@@ -21,6 +21,7 @@ public sealed class GitHubReader : IGitHubReader
     private const string APP_PREFIX = "app/";
     private const string BOT_SUFFIX = "[bot]";
     private const string REPO_COLLABORATORS = "repo_collaborators";
+    private const string COMMIT_CHECK_RUNS = "commit_check_runs";
 
     private readonly IMcpToolCaller _tools;
 
@@ -434,6 +435,71 @@ public sealed class GitHubReader : IGitHubReader
                 entry is { Login.Length: > 0 } valid ? valid.Login : throw Unexpected(REPO_COLLABORATORS)
             ),
         ];
+    }
+
+    public async ValueTask<IReadOnlyList<PullRequestCheck>> PullRequestChecksAsync(
+        string repository,
+        int pullRequest,
+        CancellationToken cancellationToken
+    )
+    {
+        // Exact names: the GraphQL rollup the shell version reads keeps a name's line breaks and spaces
+        PullRequestViewResult result = await this.CallAsync(
+            tool: PR_VIEW,
+            arguments: new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+            {
+                ["repo"] = McpArgument.Of(repository),
+                ["pr"] = McpArgument.Of(pullRequest),
+                ["fields"] = McpArgument.Of(["checks"]),
+                ["exactCheckNames"] = McpArgument.Of(true),
+            },
+            typeInfo: GitHubJsonContext.Default.PullRequestViewResult,
+            cancellationToken: cancellationToken
+        );
+
+        IReadOnlyList<PullRequestCheckResult?> checks = result.Checks ?? throw Unexpected(PR_VIEW);
+
+        return [.. checks.Select(Check)];
+    }
+
+    // A server older than workflow-mcp #188 lists the checks without GitHub's required flag
+    private static PullRequestCheck Check(PullRequestCheckResult? check)
+    {
+        return check switch
+        {
+            { Name: { } name, Required: { } required } => new(Name: name, Required: required),
+            { Name: not null } => throw new McpServerOutdatedException(
+                $"the cfwf MCP server's {PR_VIEW} checks carry no required flag"
+            ),
+            _ => throw Unexpected(PR_VIEW),
+        };
+    }
+
+    public async ValueTask<int> CommitRunningCheckRunsAsync(
+        string repository,
+        string sha,
+        CancellationToken cancellationToken
+    )
+    {
+        IReadOnlyList<string> tools = await this._tools.ListToolsAsync(cancellationToken);
+
+        if (!tools.Contains(value: COMMIT_CHECK_RUNS, comparer: StringComparer.Ordinal))
+        {
+            throw new McpServerOutdatedException($"the cfwf MCP server does not list {COMMIT_CHECK_RUNS}");
+        }
+
+        CommitCheckRunsResult result = await this.CallAsync(
+            tool: COMMIT_CHECK_RUNS,
+            arguments: new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+            {
+                ["repo"] = McpArgument.Of(repository),
+                ["sha"] = McpArgument.Of(sha),
+            },
+            typeInfo: GitHubJsonContext.Default.CommitCheckRunsResult,
+            cancellationToken: cancellationToken
+        );
+
+        return result.Running is { } running and >= 0 ? running : throw Unexpected(COMMIT_CHECK_RUNS);
     }
 
     private async ValueTask<T> CallAsync<T>(

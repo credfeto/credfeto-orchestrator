@@ -3,9 +3,11 @@ agent ssh-key-state
 agent stop-ssh-agent
 checks clean-review-comment
 checks has-blocked-label
+checks has-running-check-runs
 checks merge-state-allows-settled
 checks next-phase
 checks priority-for-labels
+checks required-check-names
 checks session-progress-reason
 discord item-status
 discord item-status-log

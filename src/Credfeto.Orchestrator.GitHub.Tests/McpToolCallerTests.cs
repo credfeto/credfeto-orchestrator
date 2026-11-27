@@ -210,6 +210,51 @@ public sealed class McpToolCallerTests : TestBase
     }
 
     [Fact]
+    public async Task TheListedToolNamesAreReturnedAsync()
+    {
+        using FakeMcpServerHandler server = new(
+            toolsCallResponse: static _ => throw new InvalidOperationException("no tool call expected"),
+            tools: ["pr_view", "commit_check_runs"]
+        );
+        using HttpClient httpClient = new(handler: server, disposeHandler: false);
+        McpToolCaller caller = new(httpClient: httpClient, settings: static () =>
+            new(endpoint: new("https://mcp.example.test/mcp"), token: TOKEN)
+        );
+
+        IReadOnlyList<string> tools = await caller.ListToolsAsync(this.CancellationToken());
+
+        Assert.Equal(expected: ["pr_view", "commit_check_runs"], actual: tools, comparer: StringComparer.Ordinal);
+        Assert.Contains(server.Requests, request =>
+            request.Body.Contains(value: "\"tools/list\"", comparisonType: StringComparison.Ordinal)
+        );
+        Assert.All(server.Requests, request =>
+            Assert.Equal(expected: "Bearer " + TOKEN, actual: request.Authorization)
+        );
+    }
+
+    [Fact]
+    public async Task AToolListTheServerRefusesIsAFailedReadAsync()
+    {
+        using FakeMcpServerHandler server = new(static _ =>
+            throw new InvalidOperationException("no tool call expected")
+        );
+        using HttpClient httpClient = new(handler: server, disposeHandler: false);
+        McpToolCaller caller = new(httpClient: httpClient, settings: static () =>
+            new(endpoint: new("https://mcp.example.test/mcp"), token: TOKEN)
+        );
+
+        GitHubReadException exception = await Assert.ThrowsAsync<GitHubReadException>(() =>
+            caller.ListToolsAsync(this.CancellationToken()).AsTask()
+        );
+
+        Assert.StartsWith(
+            expectedStartString: "the cfwf MCP server's tools could not be listed: ",
+            actualString: exception.Message,
+            comparisonType: StringComparison.Ordinal
+        );
+    }
+
+    [Fact]
     public async Task ACancelledCallIsNotAFailedReadAsync()
     {
         using FakeMcpServerHandler server = new(id => Result(id: id, content: TextContent("{}")));

@@ -41,6 +41,8 @@
     <EmbeddedResource Include="../../test/fixtures/prompts-pr-parity.json" LogicalName="prompts-pr-parity.json" />
     <!-- The golden cases test/oneshot-discovery-parity.bats checks the shell version against -->
     <EmbeddedResource Include="../../test/fixtures/discovery-parity.json" LogicalName="discovery-parity.json" />
+    <!-- The golden cases test/oneshot-checks-reads-parity.bats checks the shell version against -->
+    <EmbeddedResource Include="../../test/fixtures/checks-reads-parity.json" LogicalName="checks-reads-parity.json" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../Credfeto.Orchestrator.Commands/Credfeto.Orchestrator.Commands.csproj" />
