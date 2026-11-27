@@ -97,8 +97,11 @@ _check_checks_parity_cases() {
         _checks_parity_decode "${encoded_output}" expected_output
         if [ "${case_locale}" = "-" ]; then
             locales=("${all_locales[@]}")
-        else
+        elif printf '%s\n' "${all_locales[@]}" | grep -qxF -- "${case_locale}"; then
             locales=("${case_locale}")
+        else
+            # A case recorded in a locale this host lacks (CI has no en_GB.UTF-8) cannot be run here
+            locales=()
         fi
         for locale in "${locales[@]}"; do
             result=$(_checks_parity_run "${locale}" "${fn}" "${args[@]}")
