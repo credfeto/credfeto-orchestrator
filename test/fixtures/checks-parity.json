@@ -1,0 +1,5946 @@
+{
+  "description": "Golden parity cases for the lib/github-status routing and label reads and priority_for_labels (lib/workflow-board) in the .NET rewrite (#252): each case's shell function, its arguments (a JSON string is passed as its text, any other value as jq -c prints it), whether the tool answers it or refuses it (exit 3, so bash answers), the locale it was recorded in when the answer depends on it, and the status (0, 2 for pr_next_phase_for_board_status's no phase, 1 for any other failure) and output the function gives. test/oneshot-checks-parity.bats checks the shell side and regenerates status and output; Credfeto.Orchestrator.Predicates.Tests checks the tool.",
+  "cases": [
+    {
+      "name": "next phase: board 'Not Started', armed auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Not Started",
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (finish any outstanding linked-issue work), otherwise PHASE D (simplify)"
+    },
+    {
+      "name": "next phase: board 'Not Started', no auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Not Started",
+        {
+          "number": 1,
+          "autoMergeRequest": null
+        },
+        "false"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (finish any outstanding linked-issue work), otherwise PHASE D (simplify)"
+    },
+    {
+      "name": "next phase: board 'Planning', armed auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Planning",
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (finish any outstanding linked-issue work), otherwise PHASE D (simplify)"
+    },
+    {
+      "name": "next phase: board 'Planning', no auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Planning",
+        {
+          "number": 1,
+          "autoMergeRequest": null
+        },
+        "false"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (finish any outstanding linked-issue work), otherwise PHASE D (simplify)"
+    },
+    {
+      "name": "next phase: board 'Approved', armed auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Approved",
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (finish any outstanding linked-issue work), otherwise PHASE D (simplify)"
+    },
+    {
+      "name": "next phase: board 'Approved', no auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Approved",
+        {
+          "number": 1,
+          "autoMergeRequest": null
+        },
+        "false"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (finish any outstanding linked-issue work), otherwise PHASE D (simplify)"
+    },
+    {
+      "name": "next phase: board 'Development', armed auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Development",
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (finish any outstanding linked-issue work), otherwise PHASE D (simplify)"
+    },
+    {
+      "name": "next phase: board 'Development', no auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Development",
+        {
+          "number": 1,
+          "autoMergeRequest": null
+        },
+        "false"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (finish any outstanding linked-issue work), otherwise PHASE D (simplify)"
+    },
+    {
+      "name": "next phase: board 'AI Simplify', armed auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Simplify",
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE D (simplify)"
+    },
+    {
+      "name": "next phase: board 'AI Simplify', no auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Simplify",
+        {
+          "number": 1,
+          "autoMergeRequest": null
+        },
+        "false"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE D (simplify)"
+    },
+    {
+      "name": "next phase: board 'AI Review', armed auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: board 'AI Review', no auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "number": 1,
+          "autoMergeRequest": null
+        },
+        "false"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: board 'AI Security Review', armed auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Security Review",
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE F (security review)"
+    },
+    {
+      "name": "next phase: board 'AI Security Review', no auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Security Review",
+        {
+          "number": 1,
+          "autoMergeRequest": null
+        },
+        "false"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE F (security review)"
+    },
+    {
+      "name": "next phase: board 'AI Coverage', armed auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Coverage",
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE G (coverage)"
+    },
+    {
+      "name": "next phase: board 'AI Coverage', no auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Coverage",
+        {
+          "number": 1,
+          "autoMergeRequest": null
+        },
+        "false"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE G (coverage)"
+    },
+    {
+      "name": "next phase: board 'Human Review', armed auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: board 'Human Review', no auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "number": 1,
+          "autoMergeRequest": null
+        },
+        "false"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: board 'Complete', armed auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        }
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: board 'Complete', no auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        {
+          "number": 1,
+          "autoMergeRequest": null
+        },
+        "false"
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: board 'Unknown', armed auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Unknown",
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        }
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: board 'Unknown', no auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Unknown",
+        {
+          "number": 1,
+          "autoMergeRequest": null
+        },
+        "false"
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: board '', armed auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "",
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        }
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: board '', no auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "",
+        {
+          "number": 1,
+          "autoMergeRequest": null
+        },
+        "false"
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: board 'human review', armed auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "human review",
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        }
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: board 'human review', no auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "human review",
+        {
+          "number": 1,
+          "autoMergeRequest": null
+        },
+        "false"
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: board 'Human Review ', armed auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review ",
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        }
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: board 'Human Review ', no auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review ",
+        {
+          "number": 1,
+          "autoMergeRequest": null
+        },
+        "false"
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: board 'AI Review\\n', armed auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review\n",
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        }
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: board 'AI Review\\n', no auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review\n",
+        {
+          "number": 1,
+          "autoMergeRequest": null
+        },
+        "false"
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: board 'Planning|Approved', armed auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Planning|Approved",
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        }
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: board 'Planning|Approved', no auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Planning|Approved",
+        {
+          "number": 1,
+          "autoMergeRequest": null
+        },
+        "false"
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: board '*', armed auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "*",
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        }
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: board '*', no auto-merge",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "*",
+        {
+          "number": 1,
+          "autoMergeRequest": null
+        },
+        "false"
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: plain, board Human Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: plain, board Human Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: plain, board Human Review, required checks unknown TRUE",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        },
+        "TRUE"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: plain, board AI Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: plain, board AI Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: plain, board Complete, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: no auto-merge, board Human Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "number": 1,
+          "autoMergeRequest": null
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: no auto-merge, board Human Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "number": 1,
+          "autoMergeRequest": null
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: no auto-merge, board Human Review, required checks unknown TRUE",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "number": 1,
+          "autoMergeRequest": null
+        },
+        "TRUE"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: no auto-merge, board AI Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "number": 1,
+          "autoMergeRequest": null
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: no auto-merge, board AI Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "number": 1,
+          "autoMergeRequest": null
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: no auto-merge, board Complete, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        {
+          "number": 1,
+          "autoMergeRequest": null
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: no autoMergeRequest field, board Human Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "number": 1
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: no autoMergeRequest field, board Human Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "number": 1
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: no autoMergeRequest field, board Human Review, required checks unknown TRUE",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "number": 1
+        },
+        "TRUE"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: no autoMergeRequest field, board AI Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "number": 1
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: no autoMergeRequest field, board AI Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "number": 1
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: no autoMergeRequest field, board Complete, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        {
+          "number": 1
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: failed required check, board Human Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "FAILURE",
+              "isRequired": true
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (fix the failed required check)"
+    },
+    {
+      "name": "next phase: failed required check, board Human Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "FAILURE",
+              "isRequired": true
+            }
+          ]
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (fix the failed required check)"
+    },
+    {
+      "name": "next phase: failed required check, board Human Review, required checks unknown TRUE",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "FAILURE",
+              "isRequired": true
+            }
+          ]
+        },
+        "TRUE"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (fix the failed required check)"
+    },
+    {
+      "name": "next phase: failed required check, board AI Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "FAILURE",
+              "isRequired": true
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (fix the failed required check)"
+    },
+    {
+      "name": "next phase: failed required check, board AI Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "FAILURE",
+              "isRequired": true
+            }
+          ]
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (fix the failed required check)"
+    },
+    {
+      "name": "next phase: failed required check, board Complete, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "FAILURE",
+              "isRequired": true
+            }
+          ]
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (fix the failed required check)"
+    },
+    {
+      "name": "next phase: failed check of unknown requiredness, board Human Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "TIMED_OUT"
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: failed check of unknown requiredness, board Human Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "TIMED_OUT"
+            }
+          ]
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (fix the failed check: whether it is required could not be looked up)"
+    },
+    {
+      "name": "next phase: failed check of unknown requiredness, board Human Review, required checks unknown TRUE",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "TIMED_OUT"
+            }
+          ]
+        },
+        "TRUE"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: failed check of unknown requiredness, board AI Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "TIMED_OUT"
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: failed check of unknown requiredness, board AI Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "TIMED_OUT"
+            }
+          ]
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (fix the failed check: whether it is required could not be looked up)"
+    },
+    {
+      "name": "next phase: failed check of unknown requiredness, board Complete, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "TIMED_OUT"
+            }
+          ]
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (fix the failed check: whether it is required could not be looked up)"
+    },
+    {
+      "name": "next phase: failed optional check, board Human Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "lint",
+              "status": "COMPLETED",
+              "conclusion": "FAILURE",
+              "isRequired": false
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: failed optional check, board Human Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "lint",
+              "status": "COMPLETED",
+              "conclusion": "FAILURE",
+              "isRequired": false
+            }
+          ]
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: failed optional check, board Human Review, required checks unknown TRUE",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "lint",
+              "status": "COMPLETED",
+              "conclusion": "FAILURE",
+              "isRequired": false
+            }
+          ]
+        },
+        "TRUE"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: failed optional check, board AI Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "lint",
+              "status": "COMPLETED",
+              "conclusion": "FAILURE",
+              "isRequired": false
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: failed optional check, board AI Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "lint",
+              "status": "COMPLETED",
+              "conclusion": "FAILURE",
+              "isRequired": false
+            }
+          ]
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: failed optional check, board Complete, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "lint",
+              "status": "COMPLETED",
+              "conclusion": "FAILURE",
+              "isRequired": false
+            }
+          ]
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: superseded failure, board Human Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "FAILURE",
+              "isRequired": true,
+              "startedAt": "2026-01-01T00:00:00Z"
+            },
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "isRequired": true,
+              "startedAt": "2026-01-01T01:00:00Z"
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: superseded failure, board Human Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "FAILURE",
+              "isRequired": true,
+              "startedAt": "2026-01-01T00:00:00Z"
+            },
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "isRequired": true,
+              "startedAt": "2026-01-01T01:00:00Z"
+            }
+          ]
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: superseded failure, board Human Review, required checks unknown TRUE",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "FAILURE",
+              "isRequired": true,
+              "startedAt": "2026-01-01T00:00:00Z"
+            },
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "isRequired": true,
+              "startedAt": "2026-01-01T01:00:00Z"
+            }
+          ]
+        },
+        "TRUE"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: superseded failure, board AI Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "FAILURE",
+              "isRequired": true,
+              "startedAt": "2026-01-01T00:00:00Z"
+            },
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "isRequired": true,
+              "startedAt": "2026-01-01T01:00:00Z"
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: superseded failure, board AI Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "FAILURE",
+              "isRequired": true,
+              "startedAt": "2026-01-01T00:00:00Z"
+            },
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "isRequired": true,
+              "startedAt": "2026-01-01T01:00:00Z"
+            }
+          ]
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: superseded failure, board Complete, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "FAILURE",
+              "isRequired": true,
+              "startedAt": "2026-01-01T00:00:00Z"
+            },
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "isRequired": true,
+              "startedAt": "2026-01-01T01:00:00Z"
+            }
+          ]
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: legacy status failure, required, board Human Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "context": "ci/legacy",
+              "state": "ERROR",
+              "isRequired": true
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (fix the failed required check)"
+    },
+    {
+      "name": "next phase: legacy status failure, required, board Human Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "context": "ci/legacy",
+              "state": "ERROR",
+              "isRequired": true
+            }
+          ]
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (fix the failed required check)"
+    },
+    {
+      "name": "next phase: legacy status failure, required, board Human Review, required checks unknown TRUE",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "context": "ci/legacy",
+              "state": "ERROR",
+              "isRequired": true
+            }
+          ]
+        },
+        "TRUE"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (fix the failed required check)"
+    },
+    {
+      "name": "next phase: legacy status failure, required, board AI Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "context": "ci/legacy",
+              "state": "ERROR",
+              "isRequired": true
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (fix the failed required check)"
+    },
+    {
+      "name": "next phase: legacy status failure, required, board AI Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "context": "ci/legacy",
+              "state": "ERROR",
+              "isRequired": true
+            }
+          ]
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (fix the failed required check)"
+    },
+    {
+      "name": "next phase: legacy status failure, required, board Complete, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "context": "ci/legacy",
+              "state": "ERROR",
+              "isRequired": true
+            }
+          ]
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (fix the failed required check)"
+    },
+    {
+      "name": "next phase: legacy status failure, unknown, board Human Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "context": "ci/legacy",
+              "state": "FAILURE"
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: legacy status failure, unknown, board Human Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "context": "ci/legacy",
+              "state": "FAILURE"
+            }
+          ]
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (fix the failed check: whether it is required could not be looked up)"
+    },
+    {
+      "name": "next phase: legacy status failure, unknown, board Human Review, required checks unknown TRUE",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "context": "ci/legacy",
+              "state": "FAILURE"
+            }
+          ]
+        },
+        "TRUE"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: legacy status failure, unknown, board AI Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "context": "ci/legacy",
+              "state": "FAILURE"
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: legacy status failure, unknown, board AI Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "context": "ci/legacy",
+              "state": "FAILURE"
+            }
+          ]
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (fix the failed check: whether it is required could not be looked up)"
+    },
+    {
+      "name": "next phase: legacy status failure, unknown, board Complete, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "context": "ci/legacy",
+              "state": "FAILURE"
+            }
+          ]
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (fix the failed check: whether it is required could not be looked up)"
+    },
+    {
+      "name": "next phase: pending check, board Human Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "IN_PROGRESS",
+              "conclusion": "",
+              "isRequired": true
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: pending check, board Human Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "IN_PROGRESS",
+              "conclusion": "",
+              "isRequired": true
+            }
+          ]
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: pending check, board Human Review, required checks unknown TRUE",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "IN_PROGRESS",
+              "conclusion": "",
+              "isRequired": true
+            }
+          ]
+        },
+        "TRUE"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: pending check, board AI Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "IN_PROGRESS",
+              "conclusion": "",
+              "isRequired": true
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: pending check, board AI Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "IN_PROGRESS",
+              "conclusion": "",
+              "isRequired": true
+            }
+          ]
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: pending check, board Complete, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "IN_PROGRESS",
+              "conclusion": "",
+              "isRequired": true
+            }
+          ]
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: changes requested, board Human Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "reviewDecision": "CHANGES_REQUESTED",
+          "autoMergeRequest": null
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (address the requested changes)"
+    },
+    {
+      "name": "next phase: changes requested, board Human Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "reviewDecision": "CHANGES_REQUESTED",
+          "autoMergeRequest": null
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (address the requested changes)"
+    },
+    {
+      "name": "next phase: changes requested, board Human Review, required checks unknown TRUE",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "reviewDecision": "CHANGES_REQUESTED",
+          "autoMergeRequest": null
+        },
+        "TRUE"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (address the requested changes)"
+    },
+    {
+      "name": "next phase: changes requested, board AI Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "reviewDecision": "CHANGES_REQUESTED",
+          "autoMergeRequest": null
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (address the requested changes)"
+    },
+    {
+      "name": "next phase: changes requested, board AI Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "reviewDecision": "CHANGES_REQUESTED",
+          "autoMergeRequest": null
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (address the requested changes)"
+    },
+    {
+      "name": "next phase: changes requested, board Complete, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        {
+          "reviewDecision": "CHANGES_REQUESTED",
+          "autoMergeRequest": null
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (address the requested changes)"
+    },
+    {
+      "name": "next phase: changes requested, auto-merge armed, board Human Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "reviewDecision": "CHANGES_REQUESTED",
+          "autoMergeRequest": {
+            "x": 1
+          }
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (address the requested changes)"
+    },
+    {
+      "name": "next phase: changes requested, auto-merge armed, board Human Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "reviewDecision": "CHANGES_REQUESTED",
+          "autoMergeRequest": {
+            "x": 1
+          }
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (address the requested changes)"
+    },
+    {
+      "name": "next phase: changes requested, auto-merge armed, board Human Review, required checks unknown TRUE",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "reviewDecision": "CHANGES_REQUESTED",
+          "autoMergeRequest": {
+            "x": 1
+          }
+        },
+        "TRUE"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (address the requested changes)"
+    },
+    {
+      "name": "next phase: changes requested, auto-merge armed, board AI Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "reviewDecision": "CHANGES_REQUESTED",
+          "autoMergeRequest": {
+            "x": 1
+          }
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (address the requested changes)"
+    },
+    {
+      "name": "next phase: changes requested, auto-merge armed, board AI Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "reviewDecision": "CHANGES_REQUESTED",
+          "autoMergeRequest": {
+            "x": 1
+          }
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (address the requested changes)"
+    },
+    {
+      "name": "next phase: changes requested, auto-merge armed, board Complete, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        {
+          "reviewDecision": "CHANGES_REQUESTED",
+          "autoMergeRequest": {
+            "x": 1
+          }
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (address the requested changes)"
+    },
+    {
+      "name": "next phase: review required, board Human Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "reviewDecision": "REVIEW_REQUIRED",
+          "autoMergeRequest": null
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: review required, board Human Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "reviewDecision": "REVIEW_REQUIRED",
+          "autoMergeRequest": null
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: review required, board Human Review, required checks unknown TRUE",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "reviewDecision": "REVIEW_REQUIRED",
+          "autoMergeRequest": null
+        },
+        "TRUE"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: review required, board AI Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "reviewDecision": "REVIEW_REQUIRED",
+          "autoMergeRequest": null
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: review required, board AI Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "reviewDecision": "REVIEW_REQUIRED",
+          "autoMergeRequest": null
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: review required, board Complete, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        {
+          "reviewDecision": "REVIEW_REQUIRED",
+          "autoMergeRequest": null
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: approved, board Human Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "reviewDecision": "APPROVED",
+          "autoMergeRequest": {
+            "x": 1
+          }
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: approved, board Human Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "reviewDecision": "APPROVED",
+          "autoMergeRequest": {
+            "x": 1
+          }
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: approved, board Human Review, required checks unknown TRUE",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "reviewDecision": "APPROVED",
+          "autoMergeRequest": {
+            "x": 1
+          }
+        },
+        "TRUE"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: approved, board AI Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "reviewDecision": "APPROVED",
+          "autoMergeRequest": {
+            "x": 1
+          }
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: approved, board AI Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "reviewDecision": "APPROVED",
+          "autoMergeRequest": {
+            "x": 1
+          }
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: approved, board Complete, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        {
+          "reviewDecision": "APPROVED",
+          "autoMergeRequest": {
+            "x": 1
+          }
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: failed required check and changes requested, board Human Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "reviewDecision": "CHANGES_REQUESTED",
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "CANCELLED",
+              "isRequired": true
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (fix the failed required check)"
+    },
+    {
+      "name": "next phase: failed required check and changes requested, board Human Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "reviewDecision": "CHANGES_REQUESTED",
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "CANCELLED",
+              "isRequired": true
+            }
+          ]
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (fix the failed required check)"
+    },
+    {
+      "name": "next phase: failed required check and changes requested, board Human Review, required checks unknown TRUE",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "reviewDecision": "CHANGES_REQUESTED",
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "CANCELLED",
+              "isRequired": true
+            }
+          ]
+        },
+        "TRUE"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (fix the failed required check)"
+    },
+    {
+      "name": "next phase: failed required check and changes requested, board AI Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "reviewDecision": "CHANGES_REQUESTED",
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "CANCELLED",
+              "isRequired": true
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (fix the failed required check)"
+    },
+    {
+      "name": "next phase: failed required check and changes requested, board AI Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "reviewDecision": "CHANGES_REQUESTED",
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "CANCELLED",
+              "isRequired": true
+            }
+          ]
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (fix the failed required check)"
+    },
+    {
+      "name": "next phase: failed required check and changes requested, board Complete, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        {
+          "reviewDecision": "CHANGES_REQUESTED",
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "CANCELLED",
+              "isRequired": true
+            }
+          ]
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (fix the failed required check)"
+    },
+    {
+      "name": "next phase: rollup not an array, board Human Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": "oops"
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: rollup not an array, board Human Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": "oops"
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: rollup not an array, board Human Review, required checks unknown TRUE",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": "oops"
+        },
+        "TRUE"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: rollup not an array, board AI Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": "oops"
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: rollup not an array, board AI Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": "oops"
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: rollup not an array, board Complete, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": "oops"
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: rollup entry not an object, board Human Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            5
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: rollup entry not an object, board Human Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            5
+          ]
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: rollup entry not an object, board Human Review, required checks unknown TRUE",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            5
+          ]
+        },
+        "TRUE"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: rollup entry not an object, board AI Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            5
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: rollup entry not an object, board AI Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            5
+          ]
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: rollup entry not an object, board Complete, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            5
+          ]
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: autoMergeRequest false, board Human Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": false
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: autoMergeRequest false, board Human Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": false
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: autoMergeRequest false, board Human Review, required checks unknown TRUE",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        {
+          "autoMergeRequest": false
+        },
+        "TRUE"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: autoMergeRequest false, board AI Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "autoMergeRequest": false
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: autoMergeRequest false, board AI Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "autoMergeRequest": false
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: autoMergeRequest false, board Complete, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        {
+          "autoMergeRequest": false
+        },
+        "true"
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: not JSON, board Human Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "{"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: not JSON, board Human Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "{",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: not JSON, board Human Review, required checks unknown TRUE",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "{",
+        "TRUE"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: not JSON, board AI Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        "{"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: not JSON, board AI Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        "{",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: not JSON, board Complete, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        "{",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: empty, board Human Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        ""
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: empty, board Human Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: empty, board Human Review, required checks unknown TRUE",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "",
+        "TRUE"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: empty, board AI Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        ""
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: empty, board AI Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        "",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: empty, board Complete, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        "",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: null, board Human Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "null"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: null, board Human Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "null",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: null, board Human Review, required checks unknown TRUE",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "null",
+        "TRUE"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: null, board AI Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        "null"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: null, board AI Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        "null",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: null, board Complete, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        "null",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: an array, board Human Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "[]"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: an array, board Human Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "[]",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: an array, board Human Review, required checks unknown TRUE",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "[]",
+        "TRUE"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: an array, board AI Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        "[]"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: an array, board AI Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        "[]",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: an array, board Complete, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        "[]",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: a string, board Human Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "\"text\""
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: a string, board Human Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "\"text\"",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: a string, board Human Review, required checks unknown TRUE",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "\"text\"",
+        "TRUE"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: a string, board AI Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        "\"text\""
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: a string, board AI Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        "\"text\"",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: a string, board Complete, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        "\"text\"",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: two texts, the last with changes requested, board Human Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "{\"reviewDecision\":\"APPROVED\"} {\"reviewDecision\":\"CHANGES_REQUESTED\"}"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (address the requested changes)"
+    },
+    {
+      "name": "next phase: two texts, the last with changes requested, board Human Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "{\"reviewDecision\":\"APPROVED\"} {\"reviewDecision\":\"CHANGES_REQUESTED\"}",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (address the requested changes)"
+    },
+    {
+      "name": "next phase: two texts, the last with changes requested, board Human Review, required checks unknown TRUE",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "{\"reviewDecision\":\"APPROVED\"} {\"reviewDecision\":\"CHANGES_REQUESTED\"}",
+        "TRUE"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (address the requested changes)"
+    },
+    {
+      "name": "next phase: two texts, the last with changes requested, board AI Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        "{\"reviewDecision\":\"APPROVED\"} {\"reviewDecision\":\"CHANGES_REQUESTED\"}"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (address the requested changes)"
+    },
+    {
+      "name": "next phase: two texts, the last with changes requested, board AI Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        "{\"reviewDecision\":\"APPROVED\"} {\"reviewDecision\":\"CHANGES_REQUESTED\"}",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (address the requested changes)"
+    },
+    {
+      "name": "next phase: two texts, the last with changes requested, board Complete, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        "{\"reviewDecision\":\"APPROVED\"} {\"reviewDecision\":\"CHANGES_REQUESTED\"}",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (address the requested changes)"
+    },
+    {
+      "name": "next phase: two texts, the first with changes requested, board Human Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "{\"reviewDecision\":\"CHANGES_REQUESTED\"} {\"reviewDecision\":\"APPROVED\",\"autoMergeRequest\":1}"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: two texts, the first with changes requested, board Human Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "{\"reviewDecision\":\"CHANGES_REQUESTED\"} {\"reviewDecision\":\"APPROVED\",\"autoMergeRequest\":1}",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: two texts, the first with changes requested, board Human Review, required checks unknown TRUE",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "{\"reviewDecision\":\"CHANGES_REQUESTED\"} {\"reviewDecision\":\"APPROVED\",\"autoMergeRequest\":1}",
+        "TRUE"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: two texts, the first with changes requested, board AI Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        "{\"reviewDecision\":\"CHANGES_REQUESTED\"} {\"reviewDecision\":\"APPROVED\",\"autoMergeRequest\":1}"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: two texts, the first with changes requested, board AI Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        "{\"reviewDecision\":\"CHANGES_REQUESTED\"} {\"reviewDecision\":\"APPROVED\",\"autoMergeRequest\":1}",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: two texts, the first with changes requested, board Complete, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        "{\"reviewDecision\":\"CHANGES_REQUESTED\"} {\"reviewDecision\":\"APPROVED\",\"autoMergeRequest\":1}",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: a text then broken JSON, board Human Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "{\"reviewDecision\":\"CHANGES_REQUESTED\"} {"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: a text then broken JSON, board Human Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "{\"reviewDecision\":\"CHANGES_REQUESTED\"} {",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: a text then broken JSON, board Human Review, required checks unknown TRUE",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "{\"reviewDecision\":\"CHANGES_REQUESTED\"} {",
+        "TRUE"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: a text then broken JSON, board AI Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        "{\"reviewDecision\":\"CHANGES_REQUESTED\"} {"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: a text then broken JSON, board AI Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        "{\"reviewDecision\":\"CHANGES_REQUESTED\"} {",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: a text then broken JSON, board Complete, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        "{\"reviewDecision\":\"CHANGES_REQUESTED\"} {",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: two texts, auto-merge armed then not, board Human Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "{\"autoMergeRequest\":1}\n{\"autoMergeRequest\":null}"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: two texts, auto-merge armed then not, board Human Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "{\"autoMergeRequest\":1}\n{\"autoMergeRequest\":null}",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: two texts, auto-merge armed then not, board Human Review, required checks unknown TRUE",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "{\"autoMergeRequest\":1}\n{\"autoMergeRequest\":null}",
+        "TRUE"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE H (finalize)"
+    },
+    {
+      "name": "next phase: two texts, auto-merge armed then not, board AI Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        "{\"autoMergeRequest\":1}\n{\"autoMergeRequest\":null}"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: two texts, auto-merge armed then not, board AI Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        "{\"autoMergeRequest\":1}\n{\"autoMergeRequest\":null}",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: two texts, auto-merge armed then not, board Complete, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        "{\"autoMergeRequest\":1}\n{\"autoMergeRequest\":null}",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: two texts, not armed then armed, board Human Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "{\"autoMergeRequest\":null}\n{\"autoMergeRequest\":1}"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: two texts, not armed then armed, board Human Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "{\"autoMergeRequest\":null}\n{\"autoMergeRequest\":1}",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: two texts, not armed then armed, board Human Review, required checks unknown TRUE",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Human Review",
+        "{\"autoMergeRequest\":null}\n{\"autoMergeRequest\":1}",
+        "TRUE"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)"
+    },
+    {
+      "name": "next phase: two texts, not armed then armed, board AI Review, required checks unknown not given",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        "{\"autoMergeRequest\":null}\n{\"autoMergeRequest\":1}"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: two texts, not armed then armed, board AI Review, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        "{\"autoMergeRequest\":null}\n{\"autoMergeRequest\":1}",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "next phase: two texts, not armed then armed, board Complete, required checks unknown true",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "Complete",
+        "{\"autoMergeRequest\":null}\n{\"autoMergeRequest\":1}",
+        "true"
+      ],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: no arguments",
+      "function": "pr_next_phase_for_board_status",
+      "args": [],
+      "tool": "answers",
+      "status": 2,
+      "output": ""
+    },
+    {
+      "name": "next phase: empty flag defaults to false",
+      "function": "pr_next_phase_for_board_status",
+      "args": [
+        "AI Review",
+        {
+          "autoMergeRequest": null,
+          "statusCheckRollup": [
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "TIMED_OUT"
+            }
+          ]
+        },
+        ""
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "PHASE E (code review)"
+    },
+    {
+      "name": "merge state 'DIRTY': review required",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        {
+          "reviewDecision": "REVIEW_REQUIRED",
+          "autoMergeRequest": null
+        },
+        "DIRTY"
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "merge state 'DIRTY': approved",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        {
+          "reviewDecision": "APPROVED",
+          "autoMergeRequest": {
+            "x": 1
+          }
+        },
+        "DIRTY"
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "merge state 'DIRTY': plain",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        },
+        "DIRTY"
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "merge state 'DIRTY': not JSON",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "{",
+        "DIRTY"
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "merge state 'DIRTY': empty",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "",
+        "DIRTY"
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "merge state 'DIRTY': two texts, the last with changes requested",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "{\"reviewDecision\":\"APPROVED\"} {\"reviewDecision\":\"CHANGES_REQUESTED\"}",
+        "DIRTY"
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "merge state 'BEHIND': review required",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        {
+          "reviewDecision": "REVIEW_REQUIRED",
+          "autoMergeRequest": null
+        },
+        "BEHIND"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'BEHIND': approved",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        {
+          "reviewDecision": "APPROVED",
+          "autoMergeRequest": {
+            "x": 1
+          }
+        },
+        "BEHIND"
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "merge state 'BEHIND': plain",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        },
+        "BEHIND"
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "merge state 'BEHIND': not JSON",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "{",
+        "BEHIND"
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "merge state 'BEHIND': empty",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "",
+        "BEHIND"
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "merge state 'BEHIND': two texts, the last with changes requested",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "{\"reviewDecision\":\"APPROVED\"} {\"reviewDecision\":\"CHANGES_REQUESTED\"}",
+        "BEHIND"
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "merge state 'CLEAN': review required",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        {
+          "reviewDecision": "REVIEW_REQUIRED",
+          "autoMergeRequest": null
+        },
+        "CLEAN"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'CLEAN': approved",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        {
+          "reviewDecision": "APPROVED",
+          "autoMergeRequest": {
+            "x": 1
+          }
+        },
+        "CLEAN"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'CLEAN': plain",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        },
+        "CLEAN"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'CLEAN': not JSON",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "{",
+        "CLEAN"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'CLEAN': empty",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "",
+        "CLEAN"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'CLEAN': two texts, the last with changes requested",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "{\"reviewDecision\":\"APPROVED\"} {\"reviewDecision\":\"CHANGES_REQUESTED\"}",
+        "CLEAN"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'UNKNOWN': review required",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        {
+          "reviewDecision": "REVIEW_REQUIRED",
+          "autoMergeRequest": null
+        },
+        "UNKNOWN"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'UNKNOWN': approved",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        {
+          "reviewDecision": "APPROVED",
+          "autoMergeRequest": {
+            "x": 1
+          }
+        },
+        "UNKNOWN"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'UNKNOWN': plain",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        },
+        "UNKNOWN"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'UNKNOWN': not JSON",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "{",
+        "UNKNOWN"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'UNKNOWN': empty",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "",
+        "UNKNOWN"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'UNKNOWN': two texts, the last with changes requested",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "{\"reviewDecision\":\"APPROVED\"} {\"reviewDecision\":\"CHANGES_REQUESTED\"}",
+        "UNKNOWN"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'BLOCKED': review required",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        {
+          "reviewDecision": "REVIEW_REQUIRED",
+          "autoMergeRequest": null
+        },
+        "BLOCKED"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'BLOCKED': approved",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        {
+          "reviewDecision": "APPROVED",
+          "autoMergeRequest": {
+            "x": 1
+          }
+        },
+        "BLOCKED"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'BLOCKED': plain",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        },
+        "BLOCKED"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'BLOCKED': not JSON",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "{",
+        "BLOCKED"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'BLOCKED': empty",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "",
+        "BLOCKED"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'BLOCKED': two texts, the last with changes requested",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "{\"reviewDecision\":\"APPROVED\"} {\"reviewDecision\":\"CHANGES_REQUESTED\"}",
+        "BLOCKED"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state '': review required",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        {
+          "reviewDecision": "REVIEW_REQUIRED",
+          "autoMergeRequest": null
+        },
+        ""
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state '': approved",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        {
+          "reviewDecision": "APPROVED",
+          "autoMergeRequest": {
+            "x": 1
+          }
+        },
+        ""
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state '': plain",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        },
+        ""
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state '': not JSON",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "{",
+        ""
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state '': empty",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "",
+        ""
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state '': two texts, the last with changes requested",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "{\"reviewDecision\":\"APPROVED\"} {\"reviewDecision\":\"CHANGES_REQUESTED\"}",
+        ""
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'behind': review required",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        {
+          "reviewDecision": "REVIEW_REQUIRED",
+          "autoMergeRequest": null
+        },
+        "behind"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'behind': approved",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        {
+          "reviewDecision": "APPROVED",
+          "autoMergeRequest": {
+            "x": 1
+          }
+        },
+        "behind"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'behind': plain",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        },
+        "behind"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'behind': not JSON",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "{",
+        "behind"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'behind': empty",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "",
+        "behind"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'behind': two texts, the last with changes requested",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "{\"reviewDecision\":\"APPROVED\"} {\"reviewDecision\":\"CHANGES_REQUESTED\"}",
+        "behind"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'dirty': review required",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        {
+          "reviewDecision": "REVIEW_REQUIRED",
+          "autoMergeRequest": null
+        },
+        "dirty"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'dirty': approved",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        {
+          "reviewDecision": "APPROVED",
+          "autoMergeRequest": {
+            "x": 1
+          }
+        },
+        "dirty"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'dirty': plain",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        },
+        "dirty"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'dirty': not JSON",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "{",
+        "dirty"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'dirty': empty",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "",
+        "dirty"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'dirty': two texts, the last with changes requested",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "{\"reviewDecision\":\"APPROVED\"} {\"reviewDecision\":\"CHANGES_REQUESTED\"}",
+        "dirty"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'BEHIND ': review required",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        {
+          "reviewDecision": "REVIEW_REQUIRED",
+          "autoMergeRequest": null
+        },
+        "BEHIND "
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'BEHIND ': approved",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        {
+          "reviewDecision": "APPROVED",
+          "autoMergeRequest": {
+            "x": 1
+          }
+        },
+        "BEHIND "
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'BEHIND ': plain",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        {
+          "number": 1,
+          "reviewDecision": "",
+          "autoMergeRequest": {
+            "enabledAt": "2026-01-01T00:00:00Z"
+          }
+        },
+        "BEHIND "
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'BEHIND ': not JSON",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "{",
+        "BEHIND "
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'BEHIND ': empty",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "",
+        "BEHIND "
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state 'BEHIND ': two texts, the last with changes requested",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "{\"reviewDecision\":\"APPROVED\"} {\"reviewDecision\":\"CHANGES_REQUESTED\"}",
+        "BEHIND "
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state BEHIND: two texts, review required last",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "{\"reviewDecision\":\"APPROVED\"} {\"reviewDecision\":\"REVIEW_REQUIRED\"}",
+        "BEHIND"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "merge state BEHIND: review required then broken JSON",
+      "function": "pr_merge_state_allows_settled",
+      "args": [
+        "{\"reviewDecision\":\"REVIEW_REQUIRED\"} [",
+        "BEHIND"
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "progress: board moved",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "AI Review",
+        "AI Coverage",
+        "",
+        "",
+        "a",
+        "a"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "board moved from AI Review to AI Coverage"
+    },
+    {
+      "name": "progress: board moved, also a comment and a push",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "AI Review",
+        "AI Coverage",
+        "2026-11-27T10:00:00Z",
+        "2026-11-27T10:05:00Z",
+        "a",
+        "b"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "board moved from AI Review to AI Coverage"
+    },
+    {
+      "name": "progress: board moved from Unknown",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "Unknown",
+        "AI Review",
+        "",
+        "",
+        "a",
+        "a"
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "progress: board moved to Unknown",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "AI Review",
+        "Unknown",
+        "",
+        "",
+        "a",
+        "b"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "a commit was pushed"
+    },
+    {
+      "name": "progress: board empty before",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "",
+        "AI Review",
+        "",
+        "",
+        "a",
+        "a"
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "progress: board empty after",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "AI Review",
+        "",
+        "",
+        "",
+        "a",
+        "a"
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "progress: board names differ only in case",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "AI Review",
+        "ai review",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "board moved from AI Review to ai review"
+    },
+    {
+      "name": "progress: board names with spaces and newlines",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "AI\nReview",
+        "AI Review ",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "board moved from AI\nReview to AI Review "
+    },
+    {
+      "name": "progress: board name with a percent sign",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "100% done",
+        "AI Review",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "board moved from 100% done to AI Review"
+    },
+    {
+      "name": "progress: board name not ASCII",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "R\u00e9vision",
+        "AI Review",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "board moved from R\u00e9vision to AI Review"
+    },
+    {
+      "name": "progress: board unchanged, nothing else",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "AI Review",
+        "AI Review",
+        "2026-11-27T10:00:00Z",
+        "2026-11-27T10:00:00Z",
+        "a",
+        "a"
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "progress: newer comment",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "AI Review",
+        "AI Review",
+        "2026-11-27T10:00:00Z",
+        "2026-11-27T10:05:00Z",
+        "a",
+        "a"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "a trusted comment arrived during the session and is left unaddressed for the next run"
+    },
+    {
+      "name": "progress: older comment",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "AI Review",
+        "AI Review",
+        "2026-11-27T10:05:00Z",
+        "2026-11-27T10:00:00Z",
+        "a",
+        "a"
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "progress: first comment",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "AI Review",
+        "AI Review",
+        "",
+        "2026-11-27T10:00:00Z",
+        "a",
+        "a"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "a trusted comment arrived during the session and is left unaddressed for the next run"
+    },
+    {
+      "name": "progress: comment gone",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "AI Review",
+        "AI Review",
+        "2026-11-27T10:00:00Z",
+        "",
+        "a",
+        "a"
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "progress: older comment, new head",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "AI Review",
+        "AI Review",
+        "2026-11-27T10:05:00Z",
+        "2026-11-27T10:00:00Z",
+        "a",
+        "b"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "a commit was pushed"
+    },
+    {
+      "name": "progress: newer by a second",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "AI Review",
+        "AI Review",
+        "2026-11-27T10:00:00Z",
+        "2026-11-27T10:00:01Z",
+        "",
+        ""
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "a trusted comment arrived during the session and is left unaddressed for the next run"
+    },
+    {
+      "name": "progress: newer by a year",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "AI Review",
+        "AI Review",
+        "2025-12-31T23:59:59Z",
+        "2026-01-01T00:00:00Z",
+        "",
+        ""
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "a trusted comment arrived during the session and is left unaddressed for the next run"
+    },
+    {
+      "name": "progress: older by a year",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "AI Review",
+        "AI Review",
+        "2026-01-01T00:00:00Z",
+        "2025-12-31T23:59:59Z",
+        "",
+        ""
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "progress: fractional seconds of one length",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "",
+        "",
+        "2026-01-01T00:00:00.100Z",
+        "2026-01-01T00:00:00.200Z",
+        "",
+        ""
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "a trusted comment arrived during the session and is left unaddressed for the next run"
+    },
+    {
+      "name": "progress: fractional seconds of two lengths",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "",
+        "",
+        "2026-01-01T00:00:00Z",
+        "2026-01-01T00:00:00.5Z",
+        "",
+        ""
+      ],
+      "tool": "refuses",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "progress: offset and Z",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "",
+        "",
+        "2026-01-01T00:00:00Z",
+        "2026-01-01T00:00:00+00:00",
+        "",
+        ""
+      ],
+      "tool": "refuses",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "progress: letters of either case",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "",
+        "",
+        "B",
+        "a",
+        "",
+        ""
+      ],
+      "tool": "refuses",
+      "locale": "C.UTF-8",
+      "status": 0,
+      "output": "a trusted comment arrived during the session and is left unaddressed for the next run"
+    },
+    {
+      "name": "progress: letters of either case",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "",
+        "",
+        "B",
+        "a",
+        "",
+        ""
+      ],
+      "tool": "refuses",
+      "locale": "en_GB.UTF-8",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "progress: letters of either case",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "",
+        "",
+        "B",
+        "a",
+        "",
+        ""
+      ],
+      "tool": "refuses",
+      "locale": "C",
+      "status": 0,
+      "output": "a trusted comment arrived during the session and is left unaddressed for the next run"
+    },
+    {
+      "name": "progress: letters of either case, the other way",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "",
+        "",
+        "a",
+        "B",
+        "",
+        ""
+      ],
+      "tool": "refuses",
+      "locale": "C.UTF-8",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "progress: letters of either case, the other way",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "",
+        "",
+        "a",
+        "B",
+        "",
+        ""
+      ],
+      "tool": "refuses",
+      "locale": "en_GB.UTF-8",
+      "status": 0,
+      "output": "a trusted comment arrived during the session and is left unaddressed for the next run"
+    },
+    {
+      "name": "progress: letters of either case, the other way",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "",
+        "",
+        "a",
+        "B",
+        "",
+        ""
+      ],
+      "tool": "refuses",
+      "locale": "C",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "progress: same letters, digits differ",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "",
+        "",
+        "x1y",
+        "x2y",
+        "",
+        ""
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "a trusted comment arrived during the session and is left unaddressed for the next run"
+    },
+    {
+      "name": "progress: first difference is a letter",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "",
+        "",
+        "2026a",
+        "2026b",
+        "",
+        ""
+      ],
+      "tool": "refuses",
+      "status": 0,
+      "output": "a trusted comment arrived during the session and is left unaddressed for the next run"
+    },
+    {
+      "name": "progress: first difference is punctuation",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "",
+        "",
+        "2026-01",
+        "2026:01",
+        "",
+        ""
+      ],
+      "tool": "refuses",
+      "status": 0,
+      "output": "a trusted comment arrived during the session and is left unaddressed for the next run"
+    },
+    {
+      "name": "progress: first empty, later a dash",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "",
+        "",
+        "",
+        "-",
+        "",
+        ""
+      ],
+      "tool": "refuses",
+      "status": 0,
+      "output": "a trusted comment arrived during the session and is left unaddressed for the next run"
+    },
+    {
+      "name": "progress: first empty, later a word",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "",
+        "",
+        "",
+        "later",
+        "",
+        ""
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "a trusted comment arrived during the session and is left unaddressed for the next run"
+    },
+    {
+      "name": "progress: first empty, later with a space",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "",
+        "",
+        "",
+        "2026 01",
+        "",
+        ""
+      ],
+      "tool": "refuses",
+      "status": 0,
+      "output": "a trusted comment arrived during the session and is left unaddressed for the next run"
+    },
+    {
+      "name": "progress: not ASCII digits",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "",
+        "",
+        "2026-01-01T00:00:00Z",
+        "\uff12026-01-01T00:00:00Z",
+        "",
+        ""
+      ],
+      "tool": "refuses",
+      "status": 0,
+      "output": "a trusted comment arrived during the session and is left unaddressed for the next run"
+    },
+    {
+      "name": "progress: same text not ASCII",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "",
+        "",
+        "\u00e9t\u00e9",
+        "\u00e9t\u00e9",
+        "",
+        ""
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "progress: equal timestamps, new head",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "AI Review",
+        "AI Review",
+        "2026-11-27T10:00:00Z",
+        "2026-11-27T10:00:00Z",
+        "a",
+        "b"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "a commit was pushed"
+    },
+    {
+      "name": "progress: head pushed",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "AI Review",
+        "AI Review",
+        "",
+        "",
+        "abc",
+        "def"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "a commit was pushed"
+    },
+    {
+      "name": "progress: head appeared",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "AI Review",
+        "AI Review",
+        "",
+        "",
+        "",
+        "def"
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "progress: head vanished",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "AI Review",
+        "AI Review",
+        "",
+        "",
+        "abc",
+        ""
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "progress: nothing at all",
+      "function": "pr_session_progress_reason",
+      "args": [],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "progress: only boards",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "AI Review",
+        "AI Review"
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "progress: Unknown both sides, comment newer",
+      "function": "pr_session_progress_reason",
+      "args": [
+        "Unknown",
+        "Unknown",
+        "2026-11-27T10:00:00Z",
+        "2026-11-27T10:05:00Z",
+        "",
+        ""
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "a trusted comment arrived during the session and is left unaddressed for the next run"
+    },
+    {
+      "name": "clean review comment: 'AI Security Review'",
+      "function": "pr_clean_review_status_comment",
+      "args": [
+        "AI Security Review"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Code review clean - advancing to security review (board moved by the orchestrator: the session reported no findings but did not move it)"
+    },
+    {
+      "name": "clean review comment: 'AI Coverage'",
+      "function": "pr_clean_review_status_comment",
+      "args": [
+        "AI Coverage"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Security review clean, advancing to coverage check (board moved by the orchestrator: the session reported no findings but did not move it)"
+    },
+    {
+      "name": "clean review comment: 'AI Review'",
+      "function": "pr_clean_review_status_comment",
+      "args": [
+        "AI Review"
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "clean review comment: ''",
+      "function": "pr_clean_review_status_comment",
+      "args": [
+        ""
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "clean review comment: 'ai coverage'",
+      "function": "pr_clean_review_status_comment",
+      "args": [
+        "ai coverage"
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "clean review comment: 'AI Coverage '",
+      "function": "pr_clean_review_status_comment",
+      "args": [
+        "AI Coverage "
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "clean review comment: 'Human Review'",
+      "function": "pr_clean_review_status_comment",
+      "args": [
+        "Human Review"
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "clean review comment: no argument",
+      "function": "pr_clean_review_status_comment",
+      "args": [],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: Blocked",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": "Blocked"
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "blocked label: blocked lower case",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": "blocked"
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "blocked label: BLOCKED",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": "BLOCKED"
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "blocked label: bLoCkEd",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": "bLoCkEd"
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "blocked label: among others",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": "AI-Work"
+            },
+            {
+              "name": "High"
+            },
+            {
+              "name": "Blocked"
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "blocked label: none",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": "AI-Work"
+            },
+            {
+              "name": "High"
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: not blocked",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": "not blocked"
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: blocked by",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": "blocked by #1"
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: leading space",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": " blocked"
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: trailing space",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": "blocked "
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: trailing carriage return",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": "blocked\r"
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: a newline then Blocked",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": "x\nBLOCKED"
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "blocked label: Blocked then a newline",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": "Blocked\n"
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "blocked label: Blocked between newlines",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": "a\nblocked\nb"
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "blocked label: On Hold",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": "On Hold"
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: no labels",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": []
+        }
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: labels null",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": null
+        }
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: labels false",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": false
+        }
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: no labels field",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "number": 1
+        }
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: labels an object",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": {
+            "a": {
+              "name": "blocked"
+            }
+          }
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "blocked label: labels an object, error first",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": {
+            "a": "s",
+            "b": {
+              "name": "blocked"
+            }
+          }
+        }
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: labels a string",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": "blocked"
+        }
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: labels a number",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": 5
+        }
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: Blocked then a string entry",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": "blocked"
+            },
+            "s"
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "blocked label: a string entry then Blocked",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            "s",
+            {
+              "name": "blocked"
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: a null entry then Blocked",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            null,
+            {
+              "name": "Blocked"
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "blocked label: name null",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": null
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: name a number",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": 5
+            },
+            {
+              "name": "Blocked"
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "blocked label: name an array",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": [
+                "blocked"
+              ]
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: name an object",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": {
+                "blocked": "blocked"
+              }
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: no name field",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "color": "red"
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: emoji label",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": "\ud83d\udeab blocked"
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: non-ASCII label of another length",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": "bloqu\u00e9"
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: Kelvin sign",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": "bloc\u212aed"
+            }
+          ]
+        }
+      ],
+      "tool": "refuses",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: seven non-ASCII characters",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": "bl\u00f6cked"
+            }
+          ]
+        }
+      ],
+      "tool": "refuses",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: seven non-ASCII on a later line",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": "x\nbl\u00f6cked"
+            }
+          ]
+        }
+      ],
+      "tool": "refuses",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: seven non-ASCII after Blocked",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": "Blocked"
+            },
+            {
+              "name": "bl\u00f6cked"
+            }
+          ]
+        }
+      ],
+      "tool": "refuses",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "blocked label: a NUL byte",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": "blocked\u0000"
+            }
+          ]
+        }
+      ],
+      "tool": "refuses",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "blocked label: a NUL byte in another label",
+      "function": "pr_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": "Blocked"
+            },
+            {
+              "name": "a\u0000b"
+            }
+          ]
+        }
+      ],
+      "tool": "refuses",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "blocked label: not JSON",
+      "function": "issue_json_has_blocked_label",
+      "args": [
+        "{"
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: empty",
+      "function": "issue_json_has_blocked_label",
+      "args": [
+        ""
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: null",
+      "function": "issue_json_has_blocked_label",
+      "args": [
+        "null"
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: an array",
+      "function": "issue_json_has_blocked_label",
+      "args": [
+        "[{\"name\":\"Blocked\"}]"
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: a string",
+      "function": "issue_json_has_blocked_label",
+      "args": [
+        "\"Blocked\""
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: two texts, Blocked in the second",
+      "function": "issue_json_has_blocked_label",
+      "args": [
+        "{\"labels\":null} {\"labels\":[{\"name\":\"Blocked\"}]}"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "blocked label: two texts, Blocked in the first",
+      "function": "issue_json_has_blocked_label",
+      "args": [
+        "{\"labels\":[{\"name\":\"Blocked\"}]} {\"labels\":[]}"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "blocked label: Blocked then broken JSON",
+      "function": "issue_json_has_blocked_label",
+      "args": [
+        "{\"labels\":[{\"name\":\"Blocked\"}]} {"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "blocked label: an error text then Blocked",
+      "function": "issue_json_has_blocked_label",
+      "args": [
+        "[1] {\"labels\":[{\"name\":\"blocked\"}]}"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "blocked label: escaped newline in a name",
+      "function": "issue_json_has_blocked_label",
+      "args": [
+        "{\"labels\":[{\"name\":\"x\\nblocked\"}]}"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "blocked label: duplicate labels keys",
+      "function": "issue_json_has_blocked_label",
+      "args": [
+        "{\"labels\":[{\"name\":\"Blocked\"}],\"labels\":[]}"
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "blocked label: duplicate name keys",
+      "function": "issue_json_has_blocked_label",
+      "args": [
+        "{\"labels\":[{\"name\":\"x\",\"name\":\"Blocked\"}]}"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "blocked label: an Issue",
+      "function": "issue_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": "Blocked"
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "blocked label: an Issue without it",
+      "function": "issue_json_has_blocked_label",
+      "args": [
+        {
+          "labels": [
+            {
+              "name": "Planning"
+            }
+          ]
+        }
+      ],
+      "tool": "answers",
+      "status": 1,
+      "output": ""
+    },
+    {
+      "name": "priority: security",
+      "function": "priority_for_labels",
+      "args": [
+        [
+          {
+            "name": "Security"
+          }
+        ]
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Security\n"
+    },
+    {
+      "name": "priority: urgent",
+      "function": "priority_for_labels",
+      "args": [
+        [
+          {
+            "name": "Urgent"
+          }
+        ]
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Urgent\n"
+    },
+    {
+      "name": "priority: high",
+      "function": "priority_for_labels",
+      "args": [
+        [
+          {
+            "name": "High"
+          }
+        ]
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "High\n"
+    },
+    {
+      "name": "priority: medium",
+      "function": "priority_for_labels",
+      "args": [
+        [
+          {
+            "name": "Medium"
+          }
+        ]
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Medium\n"
+    },
+    {
+      "name": "priority: low",
+      "function": "priority_for_labels",
+      "args": [
+        [
+          {
+            "name": "Low"
+          }
+        ]
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Low\n"
+    },
+    {
+      "name": "priority: none",
+      "function": "priority_for_labels",
+      "args": [
+        [
+          {
+            "name": "AI-Work"
+          },
+          {
+            "name": "Bug"
+          }
+        ]
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Undefined\n"
+    },
+    {
+      "name": "priority: empty array",
+      "function": "priority_for_labels",
+      "args": [
+        []
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Undefined\n"
+    },
+    {
+      "name": "priority: security beats low",
+      "function": "priority_for_labels",
+      "args": [
+        [
+          {
+            "name": "Low"
+          },
+          {
+            "name": "Security"
+          }
+        ]
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Security\n"
+    },
+    {
+      "name": "priority: urgent beats high",
+      "function": "priority_for_labels",
+      "args": [
+        [
+          {
+            "name": "high"
+          },
+          {
+            "name": "URGENT"
+          }
+        ]
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Urgent\n"
+    },
+    {
+      "name": "priority: medium beats low",
+      "function": "priority_for_labels",
+      "args": [
+        [
+          {
+            "name": "low"
+          },
+          {
+            "name": "medium"
+          }
+        ]
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Medium\n"
+    },
+    {
+      "name": "priority: lower and upper case",
+      "function": "priority_for_labels",
+      "args": [
+        [
+          {
+            "name": "hIgH"
+          }
+        ]
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "High\n"
+    },
+    {
+      "name": "priority: not a whole name",
+      "function": "priority_for_labels",
+      "args": [
+        [
+          {
+            "name": "High priority"
+          },
+          {
+            "name": "lowest"
+          }
+        ]
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Undefined\n"
+    },
+    {
+      "name": "priority: null entry",
+      "function": "priority_for_labels",
+      "args": [
+        [
+          null,
+          {
+            "name": "Low"
+          }
+        ]
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Low\n"
+    },
+    {
+      "name": "priority: null name",
+      "function": "priority_for_labels",
+      "args": [
+        [
+          {
+            "name": null
+          },
+          {
+            "name": "Medium"
+          }
+        ]
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Medium\n"
+    },
+    {
+      "name": "priority: false name",
+      "function": "priority_for_labels",
+      "args": [
+        [
+          {
+            "name": false
+          }
+        ]
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Undefined\n"
+    },
+    {
+      "name": "priority: number name",
+      "function": "priority_for_labels",
+      "args": [
+        [
+          {
+            "name": 5
+          }
+        ]
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Undefined"
+    },
+    {
+      "name": "priority: array name",
+      "function": "priority_for_labels",
+      "args": [
+        [
+          {
+            "name": [
+              "low"
+            ]
+          }
+        ]
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Undefined"
+    },
+    {
+      "name": "priority: string entry",
+      "function": "priority_for_labels",
+      "args": [
+        [
+          "low"
+        ]
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Undefined"
+    },
+    {
+      "name": "priority: string entry after a tier",
+      "function": "priority_for_labels",
+      "args": [
+        [
+          {
+            "name": "Low"
+          },
+          "x"
+        ]
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Undefined"
+    },
+    {
+      "name": "priority: object of labels",
+      "function": "priority_for_labels",
+      "args": [
+        {
+          "a": {
+            "name": "low"
+          }
+        }
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Low\n"
+    },
+    {
+      "name": "priority: no name field",
+      "function": "priority_for_labels",
+      "args": [
+        [
+          {
+            "color": "x"
+          }
+        ]
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Undefined\n"
+    },
+    {
+      "name": "priority: non-ASCII names",
+      "function": "priority_for_labels",
+      "args": [
+        [
+          {
+            "name": "h\u00efgh"
+          },
+          {
+            "name": "\u212aow"
+          }
+        ]
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Undefined\n"
+    },
+    {
+      "name": "priority: emoji",
+      "function": "priority_for_labels",
+      "args": [
+        [
+          {
+            "name": "\ud83d\udd25 Urgent"
+          },
+          {
+            "name": "Urgent"
+          }
+        ]
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Urgent\n"
+    },
+    {
+      "name": "priority: not JSON",
+      "function": "priority_for_labels",
+      "args": [
+        "["
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Undefined"
+    },
+    {
+      "name": "priority: empty",
+      "function": "priority_for_labels",
+      "args": [
+        ""
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    },
+    {
+      "name": "priority: a string",
+      "function": "priority_for_labels",
+      "args": [
+        "\"low\""
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Undefined\n"
+    },
+    {
+      "name": "priority: a number",
+      "function": "priority_for_labels",
+      "args": [
+        "5"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Undefined\n"
+    },
+    {
+      "name": "priority: null",
+      "function": "priority_for_labels",
+      "args": [
+        "null"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Undefined\n"
+    },
+    {
+      "name": "priority: two texts",
+      "function": "priority_for_labels",
+      "args": [
+        "[{\"name\":\"low\"}] [{\"name\":\"high\"}]"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Low\nHigh\n"
+    },
+    {
+      "name": "priority: a tier then an error text",
+      "function": "priority_for_labels",
+      "args": [
+        "[{\"name\":\"low\"}] [1]"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Low\nUndefined"
+    },
+    {
+      "name": "priority: an error text then a tier",
+      "function": "priority_for_labels",
+      "args": [
+        "[1] [{\"name\":\"low\"}]"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Low\n"
+    },
+    {
+      "name": "priority: a tier then broken JSON",
+      "function": "priority_for_labels",
+      "args": [
+        "[{\"name\":\"low\"}] {"
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": "Low\nUndefined"
+    },
+    {
+      "name": "priority: whitespace only",
+      "function": "priority_for_labels",
+      "args": [
+        " \n "
+      ],
+      "tool": "answers",
+      "status": 0,
+      "output": ""
+    }
+  ]
+}
