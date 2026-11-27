@@ -40,6 +40,7 @@ public static class ToolCapabilities
             .. Prefixed(verb: GitCommandParser.Verb, names: GitCommandParser.Names),
             .. Prefixed(verb: GitHubCommandParser.Verb, names: GitHubCommandParser.Names),
             .. Prefixed(verb: PodmanCommandParser.Verb, names: PodmanCommandParser.Names),
+            .. Prefixed(verb: PodmanCommandParser.Verb, names: PodmanTextCommandParser.Names),
             .. Prefixed(verb: PredicateCommandParser.Verb, names: PredicateCommandParser.Names),
             .. Prefixed(verb: PromptCommandParser.Verb, names: PromptCommandParser.Names),
             .. Prefixed(verb: StateCommandParser.Verb, names: StateCommandParser.Names),

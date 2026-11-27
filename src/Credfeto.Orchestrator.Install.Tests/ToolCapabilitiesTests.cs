@@ -82,6 +82,20 @@ public sealed partial class ToolCapabilitiesTests : TestBase
     }
 
     [Theory]
+    [InlineData("discord payload work-item")]
+    [InlineData("discord truncate")]
+    [InlineData("podman denials-summary")]
+    [InlineData("podman background-stall")]
+    [InlineData("podman clean-review")]
+    [InlineData("podman diagnostic-refusal")]
+    [InlineData("podman review-result-marker")]
+    [InlineData("podman tool-denied-quit")]
+    public static void ACommandFromEachOfAVerbsParsersIsListed(string line)
+    {
+        Assert.Contains(expected: line, collection: ToolCapabilities.Lines, comparer: StringComparer.Ordinal);
+    }
+
+    [Theory]
     [InlineData("agent|no-such-command")]
     [InlineData("discord|payload|no-such-command")]
     [InlineData("discovery|no-such-command")]
@@ -148,6 +162,10 @@ public sealed partial class ToolCapabilitiesTests : TestBase
 
         switch (args[0])
         {
+            case PodmanCommandParser.Verb when PodmanTextCommandParser.IsQuery(args):
+                _ = PodmanTextCommandParser.Parse(args: args, error: out error);
+
+                return error;
             case PodmanCommandParser.Verb:
                 _ = PodmanCommandParser.Parse(args: args, error: out error);
 
