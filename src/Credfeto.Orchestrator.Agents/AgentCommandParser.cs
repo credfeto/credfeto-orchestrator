@@ -17,6 +17,9 @@ public static class AgentCommandParser
 
     private const string STOP = "stop-ssh-agent";
 
+    // Every query; the tool's --capabilities lists them
+    public static IReadOnlyList<string> Names { get; } = [KEY_STATE, STOP];
+
     public static bool IsVerb(IReadOnlyList<string> args)
     {
         return args.Count > 0 && StringComparer.Ordinal.Equals(x: args[0], y: Verb);

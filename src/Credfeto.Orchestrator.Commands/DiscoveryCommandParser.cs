@@ -34,6 +34,18 @@ public static class DiscoveryCommandParser
 
     private const string READS = "priorities, trusted-logins or github-incident";
 
+    // Every read name Parse accepts; the tool's --capabilities lists them (Names)
+    private static readonly IReadOnlyDictionary<string, DiscoveryRead> ByName = new Dictionary<string, DiscoveryRead>(
+        StringComparer.Ordinal
+    )
+    {
+        ["priorities"] = DiscoveryRead.PRIORITIES,
+        ["trusted-logins"] = DiscoveryRead.TRUSTED_LOGINS,
+        ["github-incident"] = DiscoveryRead.GITHUB_INCIDENT,
+    };
+
+    public static IReadOnlyList<string> Names { get; } = [.. ByName.Keys.Order(StringComparer.Ordinal)];
+
     public static DiscoveryCommand? Parse(IReadOnlyList<string> args, out string error)
     {
         if (args.Count < 2 || !StringComparer.Ordinal.Equals(x: args[0], y: Verb))
@@ -73,13 +85,7 @@ public static class DiscoveryCommandParser
 
     private static DiscoveryRead? ParseRead(string read)
     {
-        return read switch
-        {
-            "priorities" => DiscoveryRead.PRIORITIES,
-            "trusted-logins" => DiscoveryRead.TRUSTED_LOGINS,
-            "github-incident" => DiscoveryRead.GITHUB_INCIDENT,
-            _ => null,
-        };
+        return ByName.TryGetValue(key: read, value: out DiscoveryRead value) ? value : null;
     }
 
     private static IReadOnlyList<string> AllowedOptions(DiscoveryRead read)

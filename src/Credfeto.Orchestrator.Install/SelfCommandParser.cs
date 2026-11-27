@@ -4,11 +4,14 @@ using System.Collections.Generic;
 namespace Credfeto.Orchestrator.Install;
 
 // --version | --self-test: what oneshot's self-install asks of a freshly unpacked binary before it uses it
+// --capabilities: the commands the binary accepts, which oneshot reads once a run (#2095)
 public static class SelfCommandParser
 {
     public const string VersionFlag = "--version";
 
     public const string SelfTestFlag = "--self-test";
+
+    public const string CapabilitiesFlag = "--capabilities";
 
     public static bool IsVerb(IReadOnlyList<string> args)
     {
@@ -16,6 +19,7 @@ public static class SelfCommandParser
             && (
                 StringComparer.Ordinal.Equals(x: args[0], y: VersionFlag)
                 || StringComparer.Ordinal.Equals(x: args[0], y: SelfTestFlag)
+                || StringComparer.Ordinal.Equals(x: args[0], y: CapabilitiesFlag)
             );
     }
 
@@ -23,7 +27,7 @@ public static class SelfCommandParser
     {
         if (!IsVerb(args))
         {
-            error = $"expected: {VersionFlag} or {SelfTestFlag}";
+            error = $"expected: {VersionFlag}, {SelfTestFlag} or {CapabilitiesFlag}";
 
             return null;
         }
@@ -37,6 +41,13 @@ public static class SelfCommandParser
 
         error = string.Empty;
 
-        return StringComparer.Ordinal.Equals(x: args[0], y: VersionFlag) ? SelfQuery.VERSION : SelfQuery.SELF_TEST;
+        if (StringComparer.Ordinal.Equals(x: args[0], y: VersionFlag))
+        {
+            return SelfQuery.VERSION;
+        }
+
+        return StringComparer.Ordinal.Equals(x: args[0], y: SelfTestFlag)
+            ? SelfQuery.SELF_TEST
+            : SelfQuery.CAPABILITIES;
     }
 }

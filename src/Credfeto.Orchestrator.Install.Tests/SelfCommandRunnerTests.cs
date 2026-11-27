@@ -65,6 +65,19 @@ public sealed class SelfCommandRunnerTests : TestBase
     }
 
     [Fact]
+    public async Task CapabilitiesPrintsTheHeaderThenEveryCommandAsync()
+    {
+        FakeSelfTestCheck check = new("never");
+
+        (int status, string output, string error) = await this.RunAsync(checks: [check], args: "--capabilities");
+
+        Assert.Equal(expected: 0, actual: status);
+        Assert.Equal(expected: Lines([ToolCapabilities.Header, .. ToolCapabilities.Lines]), actual: output);
+        Assert.Equal(expected: string.Empty, actual: error);
+        Assert.Equal(expected: 0, actual: check.Runs);
+    }
+
+    [Fact]
     public async Task ACancelledSelfTestExitsCancelledAsync()
     {
         FakeSelfTestCheck cancelled = new(name: "slow", failure: new OperationCanceledException());
@@ -78,7 +91,8 @@ public sealed class SelfCommandRunnerTests : TestBase
     [Theory]
     [InlineData("--version|now", "credfeto-orchestrator: --version takes no arguments")]
     [InlineData("--self-test|--version", "credfeto-orchestrator: --self-test takes no arguments")]
-    [InlineData("version", "credfeto-orchestrator: expected: --version or --self-test")]
+    [InlineData("--capabilities|all", "credfeto-orchestrator: --capabilities takes no arguments")]
+    [InlineData("version", "credfeto-orchestrator: expected: --version, --self-test or --capabilities")]
     public async Task AUsageErrorPrintsTheUsageAsync(string args, string expected)
     {
         FakeSelfTestCheck check = new("never");

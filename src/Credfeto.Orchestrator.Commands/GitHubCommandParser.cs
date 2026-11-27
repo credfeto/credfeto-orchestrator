@@ -31,6 +31,27 @@ public static class GitHubCommandParser
         + "pr-commit-authors, branch-behind-by, pr-review-comments, pr-issue-comments, pr-closing-issues or "
         + "closing-issue-labels";
 
+    // Every read name Parse accepts; the tool's --capabilities lists them (Names)
+    private static readonly IReadOnlyDictionary<string, GitHubRead> ByName = new Dictionary<string, GitHubRead>(
+        StringComparer.Ordinal
+    )
+    {
+        ["open-prs"] = GitHubRead.OPEN_PULL_REQUESTS,
+        ["open-pr-count"] = GitHubRead.OPEN_PULL_REQUEST_COUNT,
+        ["branch-requires-status-checks"] = GitHubRead.BRANCH_REQUIRES_STATUS_CHECKS,
+        ["own-open-prs"] = GitHubRead.OWN_OPEN_PULL_REQUESTS,
+        ["whoami"] = GitHubRead.CURRENT_LOGIN,
+        ["open-prs-closing-issues"] = GitHubRead.OPEN_PULL_REQUESTS_WITH_CLOSING_ISSUES,
+        ["pr-commit-authors"] = GitHubRead.PULL_REQUEST_COMMIT_AUTHORS,
+        ["branch-behind-by"] = GitHubRead.BRANCH_BEHIND_BY,
+        ["pr-review-comments"] = GitHubRead.PULL_REQUEST_REVIEW_COMMENTS,
+        ["pr-issue-comments"] = GitHubRead.PULL_REQUEST_ISSUE_COMMENTS,
+        ["pr-closing-issues"] = GitHubRead.PULL_REQUEST_CLOSING_ISSUES,
+        ["closing-issue-labels"] = GitHubRead.CLOSING_ISSUE_LABELS,
+    };
+
+    public static IReadOnlyList<string> Names { get; } = [.. ByName.Keys.Order(StringComparer.Ordinal)];
+
     public static GitHubCommand? Parse(IReadOnlyList<string> args, out string error)
     {
         if (args.Count < 2 || !StringComparer.Ordinal.Equals(x: args[0], y: Verb))
@@ -56,22 +77,7 @@ public static class GitHubCommandParser
 
     private static GitHubRead? ParseRead(string read)
     {
-        return read switch
-        {
-            "open-prs" => GitHubRead.OPEN_PULL_REQUESTS,
-            "open-pr-count" => GitHubRead.OPEN_PULL_REQUEST_COUNT,
-            "branch-requires-status-checks" => GitHubRead.BRANCH_REQUIRES_STATUS_CHECKS,
-            "own-open-prs" => GitHubRead.OWN_OPEN_PULL_REQUESTS,
-            "whoami" => GitHubRead.CURRENT_LOGIN,
-            "open-prs-closing-issues" => GitHubRead.OPEN_PULL_REQUESTS_WITH_CLOSING_ISSUES,
-            "pr-commit-authors" => GitHubRead.PULL_REQUEST_COMMIT_AUTHORS,
-            "branch-behind-by" => GitHubRead.BRANCH_BEHIND_BY,
-            "pr-review-comments" => GitHubRead.PULL_REQUEST_REVIEW_COMMENTS,
-            "pr-issue-comments" => GitHubRead.PULL_REQUEST_ISSUE_COMMENTS,
-            "pr-closing-issues" => GitHubRead.PULL_REQUEST_CLOSING_ISSUES,
-            "closing-issue-labels" => GitHubRead.CLOSING_ISSUE_LABELS,
-            _ => null,
-        };
+        return ByName.TryGetValue(key: read, value: out GitHubRead value) ? value : null;
     }
 
     private static IReadOnlyList<string> AllowedOptions(GitHubRead read)

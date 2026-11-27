@@ -4,4 +4,5 @@ public enum SelfQuery
 {
     VERSION,
     SELF_TEST,
+    CAPABILITIES,
 }

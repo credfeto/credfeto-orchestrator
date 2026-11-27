@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Credfeto.Orchestrator.Podman;
 
@@ -17,6 +18,21 @@ public static class PodmanCommandParser
 
     private const string QUERIES =
         "image-sha, container-exists, container-running, image-exists, denials-summary or denied-command-names";
+
+    // Every query name Parse accepts; the tool's --capabilities lists them (Names)
+    private static readonly IReadOnlyDictionary<string, PodmanQuery> ByName = new Dictionary<string, PodmanQuery>(
+        StringComparer.Ordinal
+    )
+    {
+        ["image-sha"] = PodmanQuery.IMAGE_SHA,
+        ["container-exists"] = PodmanQuery.CONTAINER_EXISTS,
+        ["container-running"] = PodmanQuery.CONTAINER_RUNNING,
+        ["image-exists"] = PodmanQuery.IMAGE_EXISTS,
+        ["denials-summary"] = PodmanQuery.DENIALS_SUMMARY,
+        ["denied-command-names"] = PodmanQuery.DENIED_COMMAND_NAMES,
+    };
+
+    public static IReadOnlyList<string> Names { get; } = [.. ByName.Keys.Order(StringComparer.Ordinal)];
 
     public static bool IsVerb(IReadOnlyList<string> args)
     {
@@ -67,15 +83,6 @@ public static class PodmanCommandParser
 
     private static PodmanQuery? ParseQuery(string query)
     {
-        return query switch
-        {
-            "image-sha" => PodmanQuery.IMAGE_SHA,
-            "container-exists" => PodmanQuery.CONTAINER_EXISTS,
-            "container-running" => PodmanQuery.CONTAINER_RUNNING,
-            "image-exists" => PodmanQuery.IMAGE_EXISTS,
-            "denials-summary" => PodmanQuery.DENIALS_SUMMARY,
-            "denied-command-names" => PodmanQuery.DENIED_COMMAND_NAMES,
-            _ => null,
-        };
+        return ByName.TryGetValue(key: query, value: out PodmanQuery value) ? value : null;
     }
 }
