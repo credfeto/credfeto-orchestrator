@@ -18,6 +18,10 @@
       "type": "stdio",
       "command": "/etc/claude-code/mcp/build-node-mcp"
     },
+    "build-python": {
+      "type": "stdio",
+      "command": "/etc/claude-code/mcp/build-python-mcp"
+    },
     "changelog": {
       "type": "stdio",
       "command": "/etc/claude-code/mcp/changelog-mcp"

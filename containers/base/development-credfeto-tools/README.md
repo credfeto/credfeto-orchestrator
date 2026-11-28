@@ -41,6 +41,7 @@ blob sizes manageable and to avoid cascading cache invalidation.
 | `Credfeto.DotNet.Repo.Formatter` | `cscleanup`, `dotnet-cscleanup` |
 | `Credfeto.Build.Dotnet.Server` | `credfeto-build-dotnet` (the `build-dotnet` MCP server, which `development-full`'s `build-dotnet-mcp` wrapper starts from its global tool path, `/home/developer/.dotnet/tools/credfeto-build-dotnet`) |
 | `Credfeto.Build.Node.Server` | `credfeto-build-node` (the `build-node` MCP server, which `development-full`'s `build-node-mcp` wrapper starts from its global tool path, `/home/developer/.dotnet/tools/credfeto-build-node`) |
+| `Credfeto.Build.Python.Server` | `credfeto-build-python` (the `build-python` MCP server, which `development-full`'s `build-python-mcp` wrapper starts from its global tool path, `/home/developer/.dotnet/tools/credfeto-build-python`) |
 | `Credfeto.ChangeLog.Mcp` | `changelog-mcp` (the `changelog` MCP server, which `development-full`'s `changelog-mcp` wrapper starts from its global tool path, `/home/developer/.dotnet/tools/changelog-mcp`) |
 | `Credfeto.Git.Mcp` | `credfeto-git-mcp` (the `git` MCP server, which `development-full`'s `git-mcp` wrapper starts from its global tool path, `/home/developer/.dotnet/tools/credfeto-git-mcp`) |
 
@@ -53,7 +54,7 @@ dotnet CLI can locate tools invoked through subcommand syntax.
 the `.github/actions/nuget-latest-versions` composite action: it queries the NuGet flat-container
 API for the latest stable (non-pre-release) version of every package this image installs (`Credfeto.Changelog.Cmd`,
 `Credfeto.DotNet.Code.Analysis.Overrides.Cmd`, `FunFair.BuildCheck`, `FunFair.BuildVersion`,
-`Credfeto.DotNet.Repo.Formatter`, `Credfeto.Build.Dotnet.Server`, `Credfeto.Build.Node.Server`, `Credfeto.ChangeLog.Mcp`, `Credfeto.Git.Mcp`) and hashes them together. Pre-release versions
+`Credfeto.DotNet.Repo.Formatter`, `Credfeto.Build.Dotnet.Server`, `Credfeto.Build.Node.Server`, `Credfeto.Build.Python.Server`, `Credfeto.ChangeLog.Mcp`, `Credfeto.Git.Mcp`) and hashes them together. Pre-release versions
 (any version with a `-` suffix) are ignored, because `dotnet tool install -g` without `--version`
 only installs stable releases; a package with no stable release is hashed as `none` and logged
 as a warning instead of failing the build. The value only changes when one of those packages
@@ -65,9 +66,10 @@ pushed, is a full build-cache hit rather than a blind reinstall.
 The build-time sanity `RUN` step verifies everything this stage adds and fails the build (not
 the container at runtime) if anything is missing:
 
-- Each of the nine .NET tools above is present in `dotnet tool list -g`.
+- Each of the ten .NET tools above is present in `dotnet tool list -g`.
 - `/home/developer/.dotnet/tools/credfeto-build-dotnet` is executable and `credfeto-build-dotnet` resolves on `PATH`.
 - `/home/developer/.dotnet/tools/credfeto-build-node` is executable and `credfeto-build-node` resolves on `PATH`.
+- `/home/developer/.dotnet/tools/credfeto-build-python` is executable and `credfeto-build-python` resolves on `PATH`.
 - `/home/developer/.dotnet/tools/changelog-mcp` is executable and `changelog-mcp` resolves on `PATH`.
 - `/home/developer/.dotnet/tools/credfeto-git-mcp` is executable and `credfeto-git-mcp` resolves on `PATH`.
 - Each of the five `dotnet-*` subcommand aliases resolves on `PATH`.

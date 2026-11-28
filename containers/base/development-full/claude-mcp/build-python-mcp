@@ -1,0 +1,41 @@
+#!/bin/sh
+
+# Starts the build-python MCP server (managed-mcp.json) through the shared launcher:
+# the Python build, test and coverage server, the credfeto-build-python command
+# of the Credfeto.Build.Python.Server dotnet tool.
+#
+# Only the values below differ between the dotnet tool MCP servers: every step of finding and
+# starting the server (the repository root, the local tool from the user's home tool manifest
+# ahead of the global tool, the container's BUILD_MCP_TOOL=global path, and stdout kept for the
+# MCP stream) lives in the shared dotnet-tool-mcp-launcher in this file's own directory, which is
+# sourced here and documents them.
+#
+# The Python server is built on the same core as build-dotnet, so it reads the same
+# BUILD_MCP_REPO_ROOT, BUILD_MCP_LOG_DIR and BUILD_MCP_TOOL. It starts no dotnet builds, so
+# SuppressNETCoreSdkPreviewMessage is left alone.
+
+# shellcheck disable=SC2034  # read by the shared launcher sourced below
+{
+    mcp_name=build-python-mcp
+    mcp_tool_command=credfeto-build-python
+    mcp_package_id=Credfeto.Build.Python.Server
+    mcp_env_prefix=BUILD_MCP
+    mcp_log_dir_name=credfeto-build-mcp
+    mcp_quiet_sdk_preview=no
+}
+
+# The shared launcher is found beside this file, so $0 has to carry its directory, as the absolute
+# command in managed-mcp.json does.
+case "$0" in
+    */*) ;;
+    *)
+        printf '%s: started without a path, so the shared launcher beside it cannot be found\n' "${mcp_name}" >&2
+        exit 1
+        ;;
+esac
+[ -f "${0%/*}/dotnet-tool-mcp-launcher" ] || {
+    printf '%s: the shared launcher %s is missing\n' "${mcp_name}" "${0%/*}/dotnet-tool-mcp-launcher" >&2
+    exit 1
+}
+# shellcheck source=containers/base/development-full/claude-mcp/dotnet-tool-mcp-launcher disable=SC1091
+. "${0%/*}/dotnet-tool-mcp-launcher"
