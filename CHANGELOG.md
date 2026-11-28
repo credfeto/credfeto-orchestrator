@@ -13,6 +13,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ### Added
 - .NET rewrite (#252): ORCHESTRATOR_DOTNET_CHECKS for the github-status routing and label reads
 - .NET rewrite (#252): ORCHESTRATOR_DOTNET_CHECKS for the required-check and running-check-run reads
+- Register the build-python MCP server (Credfeto.Build.Python.Server) in the agent image (#1812)
 ### Fixed
 ### Changed
 ### Deprecated
