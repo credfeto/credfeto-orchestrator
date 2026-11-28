@@ -15,6 +15,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - .NET rewrite (#252): ORCHESTRATOR_DOTNET_CHECKS for the required-check and running-check-run reads
 ### Fixed
 ### Changed
+- Hook denial messages now distinguish format-fixable blocks (fix and retry in the named form) from outright blocks (stop and report verbatim, never route around) (#1538)
 ### Deprecated
 ### Removed
 ### Deployment Changes
