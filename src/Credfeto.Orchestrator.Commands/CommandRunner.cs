@@ -36,6 +36,8 @@ public sealed class CommandRunner
                credfeto-orchestrator discovery github-incident --url <url> [--component <name>]...
                    [--serious-impact <impact>]... [--outage-status <status>]...
                credfeto-orchestrator predicate <name> [--<option> <value>]...
+               credfeto-orchestrator checks required-check-names --repo <owner/repo> --pr <number>
+               credfeto-orchestrator checks has-running-check-runs --repo <owner/repo> --sha <commit>
 
         fingerprint reads the pull request or issue JSON on stdin and prints its fingerprint, exactly
         as fingerprint_pr_json / fingerprint_issue_json in lib/fingerprints do.
@@ -80,9 +82,18 @@ public sealed class CommandRunner
         prints the JSON with each check's isRequired set; pr-env-block-image-sha and
         pr-lowest-closing-issue --repo <owner/repo> print what they find, or exit 3 when there is none.
 
+        checks required-check-names and has-running-check-runs ask the cfwf MCP server what
+        fetch_pr_required_check_names and head_commit_has_running_check_runs in lib/github read with gh:
+        required-check-names prints the names of the checks GitHub requires for merging the pull request,
+        unique and sorted, as one line of JSON (exit 1 when the read fails or the pull request has more
+        than 100 checks); has-running-check-runs exits 0 when a check run on the commit is still running,
+        1 when none is and 2 when the lookup fails or --repo or --sha is empty. Both exit 3, refusing, when
+        the server is older than the read needs (pr_view's checks carry no required flag, or it does not
+        list commit_check_runs), so the shell answers instead.
+
         Exit codes: 0 printed; 1 the fingerprint could not be computed, the read failed or the predicate's
-        input is not what jq could read; 2 a usage error; 3 as discovery and predicate describe; 4 as
-        discovery describes.
+        input is not what jq could read; 2 a usage error; 3 as discovery, predicate and checks describe; 4
+        as discovery describes.
         """;
 
     private static readonly Encoding Utf8 = new UTF8Encoding(
@@ -136,6 +147,16 @@ public sealed class CommandRunner
         if (args.Count > 0 && StringComparer.Ordinal.Equals(x: args[0], y: DiscoveryCommandParser.Verb))
         {
             return await this.RunDiscoveryAsync(
+                args: args,
+                output: output,
+                error: error,
+                cancellationToken: cancellationToken
+            );
+        }
+
+        if (ChecksReadCommandParser.IsRead(args))
+        {
+            return await this.RunChecksReadAsync(
                 args: args,
                 output: output,
                 error: error,
@@ -274,6 +295,25 @@ public sealed class CommandRunner
         {
             return ExitCodes.Cancelled;
         }
+    }
+
+    private ValueTask<int> RunChecksReadAsync(
+        IReadOnlyList<string> args,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken cancellationToken
+    )
+    {
+        ChecksReadCommand? command = ChecksReadCommandParser.Parse(args: args, error: out string problem);
+
+        return command is null
+            ? UsageAsync(error: error, problem: problem, cancellationToken: cancellationToken)
+            : new ChecksReadCommandRunner(this._github).RunAsync(
+                command: command,
+                output: output,
+                error: error,
+                cancellationToken: cancellationToken
+            );
     }
 
     private async ValueTask<int> RunPredicateAsync(

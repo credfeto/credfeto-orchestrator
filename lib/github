@@ -257,6 +257,23 @@ _github_read_with_orchestrator_cmd() {
     ORCHESTRATOR_CFWF_MCP_URL="${ORCHESTRATOR_CFWF_MCP_URL}" "${ORCHESTRATOR_CMD}" github "$@" < /dev/null
 }
 
+# Makes one of the CHECKS reads that ask GitHub (ORCHESTRATOR_DOTNET_CHECKS=1, #252) through
+# `ORCHESTRATOR_CMD checks <query>`, which asks the cfwf MCP server as _github_read_with_orchestrator_cmd
+# does. Arguments: the query and its options. Sets the caller's locals checks_tool_output, to what the
+# tool printed (trailing newlines kept), and checks_tool_status, to its exit status; the caller decides
+# which statuses are an answer. The tool's stderr is dropped: a caller that answers in bash warns instead.
+# test/fixtures/checks-reads-parity.json holds the cases both sides are tested against.
+_checks_read_with_orchestrator_cmd() {
+    local text
+    # The tool's exit status after a dot keeps the output's own trailing newlines, which $(...) would drop
+    text=$(
+        ORCHESTRATOR_CFWF_MCP_URL="${ORCHESTRATOR_CFWF_MCP_URL}" "${ORCHESTRATOR_CMD}" checks "$@" < /dev/null 2> /dev/null
+        printf '.%s' "$?"
+    )
+    checks_tool_output=${text%.*}
+    checks_tool_status=${text##*.}
+}
+
 # Prints, as one line of JSON, every open PR in repo_full with the fields
 # find_human_taken_over_pr_for_issue reads, newest first:
 # [{"number":N,"author":{"login":L},"closingIssuesReferences":[{"number":M}],"headRefName":H}],
@@ -396,9 +413,20 @@ fetch_open_pr_count_on_head() {
 # one. Reading the GraphQL field directly, rather than parsing `gh pr checks` output, also avoids
 # the stale "pending" state that command has shown through the API proxy. Returns 1 when the call
 # fails, the response has no pull request, or the rollup has more contexts than one page holds,
-# so the caller treats required-ness as unknown instead of trusting a partial list.
+# so the caller treats required-ness as unknown instead of trusting a partial list. With
+# ORCHESTRATOR_DOTNET_CHECKS=1 the tool reads the same names through the cfwf MCP server's pr_view
+# (checks, exact names) and prints the same line; when it fails or refuses (a server that gives no
+# required flag), this answers with gh, with a warning (#252).
 fetch_pr_required_check_names() {
-    local item_id="$1" repo_full="${2:-${REPO_FULL}}" response
+    local item_id="$1" repo_full="${2:-${REPO_FULL}}" response checks_tool_output checks_tool_status
+    if [ "${ORCHESTRATOR_DOTNET_CHECKS}" = 1 ] && orchestrator_cmd_supports checks required-check-names; then
+        _checks_read_with_orchestrator_cmd required-check-names --repo "${repo_full}" --pr "${item_id}"
+        if [ "${checks_tool_status}" = 0 ]; then
+            printf '%s' "${checks_tool_output}"
+            return 0
+        fi
+        warn "${ORCHESTRATOR_CMD} checks required-check-names failed (exit ${checks_tool_status}); answering it in bash instead"
+    fi
     # shellcheck disable=SC2016  # $owner/$name/$number are GraphQL variables, not shell expansions
     local query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){pageInfo{hasNextPage} nodes{__typename ... on CheckRun{name isRequired(pullRequestNumber:$number)} ... on StatusContext{context isRequired(pullRequestNumber:$number)}}}}}}}}}}'
     response=$(gh api graphql -f query="${query}" -f owner="${repo_full%%/*}" -f name="${repo_full#*/}" -F number="${item_id}" 2>/dev/null) || return 1
@@ -452,10 +480,20 @@ fetch_branch_requires_status_checks() {
 # assumes). Returns 1 when every check run on the commit has finished, or there is none, and 2 when
 # the lookup fails. The REST check-runs endpoint lists every run on the commit, including
 # push-triggered ones that are not in the PR's statusCheckRollup (#1860). It is paginated at 100
-# per page, so a commit with many runs is read in full.
+# per page, so a commit with many runs is read in full. With ORCHESTRATOR_DOTNET_CHECKS=1 the tool
+# asks the cfwf MCP server's commit_check_runs, which counts the same runs, and its 0, 1 or 2 is
+# returned as it is; when it refuses (a server that does not list commit_check_runs) or fails
+# otherwise, this asks gh, with a warning (#252).
 head_commit_has_running_check_runs() {
-    local repo_full="$1" head_sha="$2" statuses
+    local repo_full="$1" head_sha="$2" statuses checks_tool_output checks_tool_status
     [ -n "${repo_full}" ] && [ -n "${head_sha}" ] || return 2
+    if [ "${ORCHESTRATOR_DOTNET_CHECKS}" = 1 ] && orchestrator_cmd_supports checks has-running-check-runs; then
+        _checks_read_with_orchestrator_cmd has-running-check-runs --repo "${repo_full}" --sha "${head_sha}"
+        case "${checks_tool_status}" in
+            0 | 1 | 2) return "${checks_tool_status}" ;;
+        esac
+        warn "${ORCHESTRATOR_CMD} checks has-running-check-runs failed (exit ${checks_tool_status}); answering it in bash instead"
+    fi
     statuses=$(gh api --paginate "repos/${repo_full}/commits/${head_sha}/check-runs?per_page=100" \
         --jq '.check_runs[] | select(.conclusion == null) | .status' 2> /dev/null) || return 2
     printf '%s\n' "${statuses}" | grep -qxE 'queued|in_progress|waiting|pending|requested'

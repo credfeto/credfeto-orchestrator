@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -10,20 +11,26 @@ using System.Threading.Tasks;
 namespace Credfeto.Orchestrator.GitHub.Tests;
 
 // A minimal Streamable HTTP MCP server: it answers initialize (or refuses it with a status), accepts notifications and
-// the session delete, answers tools/call with the JSON-RPC response built from the request id, refuses every other
-// method, and records every request
+// the session delete, answers tools/call with the JSON-RPC response built from the request id and, when given tools,
+// tools/list with them, refuses every other method, and records every request
 internal sealed class FakeMcpServerHandler : HttpMessageHandler
 {
     private const string SESSION_ID = "fake-session";
 
     private readonly HttpStatusCode? _initializeStatus;
     private readonly List<RecordedRequest> _requests = [];
+    private readonly IReadOnlyList<string>? _tools;
     private readonly Func<string, string> _toolsCallResponse;
 
-    public FakeMcpServerHandler(Func<string, string> toolsCallResponse, HttpStatusCode? initializeStatus = null)
+    public FakeMcpServerHandler(
+        Func<string, string> toolsCallResponse,
+        HttpStatusCode? initializeStatus = null,
+        IReadOnlyList<string>? tools = null
+    )
     {
         this._toolsCallResponse = toolsCallResponse;
         this._initializeStatus = initializeStatus;
+        this._tools = tools;
     }
 
     public IReadOnlyList<RecordedRequest> Requests => this._requests;
@@ -68,6 +75,22 @@ internal sealed class FakeMcpServerHandler : HttpMessageHandler
         if (StringComparer.Ordinal.Equals(x: method, y: "tools/call"))
         {
             return Json(this._toolsCallResponse(id.GetRawText()));
+        }
+
+        if (StringComparer.Ordinal.Equals(x: method, y: "tools/list") && this._tools is not null)
+        {
+            return Json(
+                "{\"jsonrpc\":\"2.0\",\"id\":"
+                    + id.GetRawText()
+                    + ",\"result\":{\"tools\":["
+                    + string.Join(
+                        separator: ',',
+                        values: this._tools.Select(tool =>
+                            "{\"name\":\"" + tool + "\",\"inputSchema\":{\"type\":\"object\"}}"
+                        )
+                    )
+                    + "]}}"
+            );
         }
 
         // Any other request, such as a client's discovery probe, is one this server does not know, as an older

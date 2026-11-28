@@ -53,4 +53,9 @@ internal sealed class ScriptedMcpToolCaller : IMcpToolCaller
             ? ValueTask.FromResult(this._result)
             : ValueTask.FromException<string>(new GitHubReadException("the server is down"));
     }
+
+    public ValueTask<IReadOnlyList<string>> ListToolsAsync(CancellationToken cancellationToken)
+    {
+        return ValueTask.FromResult<IReadOnlyList<string>>(["repo_collaborators"]);
+    }
 }

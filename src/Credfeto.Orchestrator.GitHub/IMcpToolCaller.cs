@@ -14,4 +14,7 @@ public interface IMcpToolCaller
         IReadOnlyDictionary<string, JsonElement> arguments,
         CancellationToken cancellationToken
     );
+
+    // The names of the tools the server lists (tools/list); throws GitHubReadException when they cannot be read
+    ValueTask<IReadOnlyList<string>> ListToolsAsync(CancellationToken cancellationToken);
 }

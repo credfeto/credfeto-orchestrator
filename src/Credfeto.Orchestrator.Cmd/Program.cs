@@ -87,7 +87,11 @@ public static class Program
                 .AsTask();
         }
 
-        if (DiscordCommandParser.IsVerb(args) || ChecksCommandParser.IsVerb(args))
+        // The checks reads that ask GitHub (ChecksReadCommandParser) run with the GitHub reader below
+        if (
+            (DiscordCommandParser.IsVerb(args) || ChecksCommandParser.IsVerb(args))
+            && !ChecksReadCommandParser.IsRead(args)
+        )
         {
             return RunTextVerbAsync(args: args, cancellationToken: cancellationToken);
         }

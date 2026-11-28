@@ -210,5 +210,76 @@ _ask_each() {
     run _orchestrator_cmd_area_on checks
     [ "${status}" -eq 1 ]
     grep -q '^checks next-phase$' "${REPO_ROOT}/src/Credfeto.Orchestrator.Install/capabilities.txt"
-    [ "$(grep -c '^checks ' "${REPO_ROOT}/src/Credfeto.Orchestrator.Install/capabilities.txt")" -eq 6 ]
+    [ "$(grep -c '^checks ' "${REPO_ROOT}/src/Credfeto.Orchestrator.Install/capabilities.txt")" -eq 8 ]
+}
+
+# A gh stand-in for the two GitHub checks reads: the GraphQL rollup has one required check, and one check run on the
+# commit is queued
+_make_checks_reads_gh_stub() {
+    printf '%s' '{"data":{"repository":{"pullRequest":{"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[{"__typename":"CheckRun","name":"build","isRequired":true}]}}}}]}}}}}' \
+        > "${TEST_TMP}/graphql.json"
+    make_stub_multiline gh \
+        'case "$*" in' \
+        '    "api graphql "*) cat "${TEST_TMP}/graphql.json" ;;' \
+        '    *"/check-runs?per_page=100 "*) printf "queued\n" ;;' \
+        '    *) exit 1 ;;' \
+        'esac'
+}
+
+@test "a GitHub checks read the self-installed binary lacks is asked of gh, with no warning per call (#252)" {
+    make_checks_cmd_stub
+    _make_checks_reads_gh_stub
+    ORCHESTRATOR_DOTNET_CHECKS=1
+    ORCHESTRATOR_CMD_CHECKED=1
+    ORCHESTRATOR_CMD_CAPABILITIES=$'\nchecks next-phase\n'
+
+    run --separate-stderr fetch_pr_required_check_names 7 org/repo
+
+    [ "${status}" -eq 0 ]
+    [ "${output}" = '["build"]' ]
+    [ -z "${stderr}" ]
+
+    run --separate-stderr head_commit_has_running_check_runs org/repo 0123abcd
+
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ ! -e "${TEST_TMP}/cmd_args" ]
+}
+
+@test "a missing tool is warned about and the GitHub checks reads ask gh instead (#252)" {
+    _make_checks_reads_gh_stub
+    ORCHESTRATOR_DOTNET_CHECKS=1
+    ORCHESTRATOR_CMD="${TEST_TMP}/no-such-tool"
+
+    run --separate-stderr fetch_pr_required_check_names 7 org/repo
+
+    [ "${status}" -eq 0 ]
+    [ "${output}" = '["build"]' ]
+    [[ "${stderr}" == *"no-such-tool checks required-check-names failed (exit 127); answering it in bash instead" ]]
+
+    run --separate-stderr head_commit_has_running_check_runs org/repo 0123abcd
+
+    [ "${status}" -eq 0 ]
+    [[ "${stderr}" == *"no-such-tool checks has-running-check-runs failed (exit 127); answering it in bash instead" ]]
+}
+
+@test "the GitHub checks reads keep the tool's printed line and its 0, 1 or 2 as they are (#252)" {
+    local code kept
+    make_checks_cmd_stub
+    _make_checks_reads_gh_stub
+    ORCHESTRATOR_DOTNET_CHECKS=1
+    _tool_answers $'["from-tool"]\n' 0
+
+    kept=$(
+        fetch_pr_required_check_names 7 org/repo
+        printf x
+    )
+
+    [ "${kept}" = $'["from-tool"]\nx' ]
+    for code in 0 1 2; do
+        _tool_answers "" "${code}"
+        run --separate-stderr head_commit_has_running_check_runs org/repo 0123abcd
+        [ "${status}" -eq "${code}" ]
+        [ -z "${stderr}" ]
+    done
 }

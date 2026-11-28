@@ -83,6 +83,9 @@ public sealed partial class ToolCapabilitiesTests : TestBase
     }
 
     [Theory]
+    [InlineData("checks has-running-check-runs")]
+    [InlineData("checks next-phase")]
+    [InlineData("checks required-check-names")]
     [InlineData("discord payload work-item")]
     [InlineData("discord truncate")]
     [InlineData("podman denials-summary")]
@@ -164,6 +167,10 @@ public sealed partial class ToolCapabilitiesTests : TestBase
 
         switch (args[0])
         {
+            case ChecksReadCommandParser.Verb when ChecksReadCommandParser.IsRead(args):
+                _ = ChecksReadCommandParser.Parse(args: args, error: out error);
+
+                return error;
             case ChecksCommandParser.Verb:
                 _ = ChecksCommandParser.Parse(args: args, error: out error);
 

@@ -83,6 +83,38 @@ public sealed class McpToolCaller : IMcpToolCaller
         }
     }
 
+    public async ValueTask<IReadOnlyList<string>> ListToolsAsync(CancellationToken cancellationToken)
+    {
+        CfwfMcpSettings settings = this._settings();
+
+        try
+        {
+            await using HttpClientTransport transport = new(
+                transportOptions: TransportOptions(settings),
+                httpClient: this._httpClient,
+                loggerFactory: null,
+                ownsHttpClient: false
+            );
+            await using McpClient client = await McpClient.CreateAsync(
+                clientTransport: transport,
+                clientOptions: ClientOptions,
+                loggerFactory: null,
+                cancellationToken: cancellationToken
+            );
+
+            IList<McpClientTool> tools = await client.ListToolsAsync(cancellationToken: cancellationToken);
+
+            return [.. tools.Select(tool => tool.Name)];
+        }
+        catch (Exception exception) when (IsCallFailure(exception: exception, cancellationToken: cancellationToken))
+        {
+            throw new GitHubReadException(
+                message: $"the cfwf MCP server's tools could not be listed: {exception.Message}",
+                innerException: exception
+            );
+        }
+    }
+
     // A cancelled run is left to propagate; an HTTP timeout is a failed read
     private static bool IsCallFailure(Exception exception, CancellationToken cancellationToken)
     {

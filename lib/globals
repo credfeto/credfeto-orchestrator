@@ -128,8 +128,10 @@ ORCHESTRATOR_DOTNET_PREDICATES="${ORCHESTRATOR_DOTNET_PREDICATES:-0}"
 # from, whether a merge state lets a PR be called settled, what a session changed, the clean-review board comment and
 # whether an item carries Blocked) and the label priority of lib/workflow-board, which the tool answers from the same
 # arguments and JSON. It refuses, so bash answers, where the locale or grep could decide; the label writes and every
-# escalation stay in bash.
-# shellcheck disable=SC2034  # read by lib/github-status and lib/workflow-board after sourcing
+# escalation stay in bash. It also hands over the two CI-check reads of lib/github, the names of a PR's required
+# checks and whether a check run on its head commit is still running, which the tool asks of the cfwf MCP server
+# (ORCHESTRATOR_CFWF_MCP_URL) instead of gh, refusing, so bash answers, when the server is too old for them.
+# shellcheck disable=SC2034  # read by lib/github, lib/github-status and lib/workflow-board after sourcing
 ORCHESTRATOR_DOTNET_CHECKS="${ORCHESTRATOR_DOTNET_CHECKS:-0}"
 # ORCHESTRATOR_DOTNET_STATE: the read-only lib/state queries over the state files (counters, markers,
 # the last diagnostic, the pre-check cache, the pull-duration baseline, the rate-limit check and the

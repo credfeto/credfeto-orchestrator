@@ -85,4 +85,18 @@ public interface IGitHubReader
         string repository,
         CancellationToken cancellationToken
     );
+
+    // Every check run and status context on the pull request's head commit, every page, with GitHub's own answer to
+    // whether it is required for merging this pull request (the isRequired(pullRequestNumber:) field
+    // fetch_pr_required_check_names reads); throws McpServerOutdatedException when the server gives no such answer
+    ValueTask<IReadOnlyList<PullRequestCheck>> PullRequestChecksAsync(
+        string repository,
+        int pullRequest,
+        CancellationToken cancellationToken
+    );
+
+    // How many check runs on the commit are still running: no conclusion and a queued, in_progress, waiting, pending
+    // or requested status, over every run GitHub's default (latest) filter lists, as head_commit_has_running_check_runs
+    // reads them; throws McpServerOutdatedException when the server does not list commit_check_runs
+    ValueTask<int> CommitRunningCheckRunsAsync(string repository, string sha, CancellationToken cancellationToken);
 }
