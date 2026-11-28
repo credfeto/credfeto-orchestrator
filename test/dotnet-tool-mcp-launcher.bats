@@ -2,8 +2,8 @@
 # shellcheck disable=SC2030,SC2031  # bats test bodies run in subshells; variable modifications are intentionally scoped
 # shellcheck disable=SC2154  # stderr is set by run --separate-stderr
 
-# The dotnet tool MCP server launchers: the thin build-dotnet-mcp, build-node-mcp, changelog-mcp
-# and git-mcp entries and the shared dotnet-tool-mcp-launcher they source. Every case runs
+# The dotnet tool MCP server launchers: the thin build-dotnet-mcp, build-node-mcp, build-python-mcp,
+# changelog-mcp and git-mcp entries and the shared dotnet-tool-mcp-launcher they source. Every case runs
 # against every entry (for_each_entry), so the entries cannot drift apart again.
 
 bats_require_minimum_version 1.5.0
@@ -11,7 +11,7 @@ bats_require_minimum_version 1.5.0
 load test_helper
 
 MCP_DIR="${REPO_ROOT}/containers/base/development-full/claude-mcp"
-ENTRIES=(build-dotnet-mcp build-node-mcp changelog-mcp git-mcp)
+ENTRIES=(build-dotnet-mcp build-node-mcp build-python-mcp changelog-mcp git-mcp)
 # The runtime the dotnet stub's --info reports, and one it does not.
 HOST_RID="test-x64"
 OTHER_RID="other-arm64"
@@ -59,6 +59,10 @@ use_entry() {
             ;;
         build-node-mcp)
             TOOL_COMMAND=credfeto-build-node PACKAGE_ID=Credfeto.Build.Node.Server PREFIX=BUILD_MCP
+            LOG_DIR_NAME=credfeto-build-mcp QUIET_SDK_PREVIEW=no
+            ;;
+        build-python-mcp)
+            TOOL_COMMAND=credfeto-build-python PACKAGE_ID=Credfeto.Build.Python.Server PREFIX=BUILD_MCP
             LOG_DIR_NAME=credfeto-build-mcp QUIET_SDK_PREVIEW=no
             ;;
         changelog-mcp)

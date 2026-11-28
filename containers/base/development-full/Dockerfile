@@ -236,14 +236,16 @@ RUN mkdir -p /home/developer/.claude/agents \
 # and the root are all fixed. build-node, the Node build/test/coverage server
 # installed by development-credfeto-tools, is started the same way through the
 # root-owned mcp/build-node-mcp wrapper, which reads the same BUILD_MCP_REPO_ROOT
-# and BUILD_MCP_TOOL. changelog, the CHANGELOG.md server installed by
+# and BUILD_MCP_TOOL, and so is build-python, the Python build/test/coverage
+# server, through mcp/build-python-mcp.
+# changelog, the CHANGELOG.md server installed by
 # development-credfeto-tools, is started the same way through the root-owned
 # mcp/changelog-mcp wrapper, with CHANGELOG_MCP_REPO_ROOT and
 # CHANGELOG_MCP_TOOL=global in place of BUILD_MCP_REPO_ROOT and BUILD_MCP_TOOL.
 # git, the git status/diff/log/fetch server installed by
 # development-credfeto-tools, is started the same way through the root-owned
 # mcp/git-mcp wrapper, with GIT_MCP_REPO_ROOT and GIT_MCP_TOOL=global.
-# The four wrappers are thin entries that only name their tool and source the
+# The five wrappers are thin entries that only name their tool and source the
 # shared, root-owned mcp/dotnet-tool-mcp-launcher beside them, which holds the
 # logic for all of them.
 # codegraph, the code knowledge graph server
@@ -261,6 +263,7 @@ COPY --chown=root:root --chmod=0755 claude-mcp/kb-mcp-headers /etc/claude-code/m
 COPY --chown=root:root --chmod=0755 claude-mcp/dotnet-tool-mcp-launcher /etc/claude-code/mcp/dotnet-tool-mcp-launcher
 COPY --chown=root:root --chmod=0755 claude-mcp/build-dotnet-mcp /etc/claude-code/mcp/build-dotnet-mcp
 COPY --chown=root:root --chmod=0755 claude-mcp/build-node-mcp /etc/claude-code/mcp/build-node-mcp
+COPY --chown=root:root --chmod=0755 claude-mcp/build-python-mcp /etc/claude-code/mcp/build-python-mcp
 ENV BUILD_MCP_REPO_ROOT=/workspace/repo
 ENV BUILD_MCP_TOOL=global
 COPY --chown=root:root --chmod=0755 claude-mcp/changelog-mcp /etc/claude-code/mcp/changelog-mcp
@@ -514,6 +517,8 @@ RUN set -e; \
         || { echo "FATAL sanity: managed-mcp.json must hold the required build-node server, and as the file is world-readable it must be exactly the stdio server started by /etc/claude-code/mcp/build-node-mcp, with no env" >&2; exit 1; }; \
     [ -x /home/developer/.dotnet/tools/credfeto-build-node ] \
         || { echo "FATAL sanity: /home/developer/.dotnet/tools/credfeto-build-node, the build-node MCP server, is missing or not executable" >&2; exit 1; }; \
+    jq -e '.mcpServers["build-python"] == {"type": "stdio", "command": "/etc/claude-code/mcp/build-python-mcp"}' /etc/claude-code/managed-mcp.json >/dev/null \
+        || { echo "FATAL sanity: managed-mcp.json must hold the required build-python server, and as the file is world-readable it must be exactly the stdio server started by /etc/claude-code/mcp/build-python-mcp, with no env" >&2; exit 1; }; \
     jq -e '.mcpServers.changelog == {"type": "stdio", "command": "/etc/claude-code/mcp/changelog-mcp"}' /etc/claude-code/managed-mcp.json >/dev/null \
         || { echo "FATAL sanity: managed-mcp.json must hold the required changelog server, and as the file is world-readable it must be exactly the stdio server started by /etc/claude-code/mcp/changelog-mcp, with no env" >&2; exit 1; }; \
     [ "${CHANGELOG_MCP_REPO_ROOT}" = "/workspace/repo" ] \
@@ -535,11 +540,13 @@ RUN set -e; \
     [ "$(stat -c '%U:%G %a' /etc/claude-code/mcp/kb-mcp-headers)" = "root:root 755" ] \
         || { echo "FATAL sanity: kb-mcp-headers missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
     [ "$(stat -c '%U:%G %a' /etc/claude-code/mcp/dotnet-tool-mcp-launcher)" = "root:root 755" ] \
-        || { echo "FATAL sanity: dotnet-tool-mcp-launcher, the shared launcher the build-dotnet, build-node, changelog and git wrappers source, missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
+        || { echo "FATAL sanity: dotnet-tool-mcp-launcher, the shared launcher the build-dotnet, build-node, build-python, changelog and git wrappers source, missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
     [ "$(stat -c '%U:%G %a' /etc/claude-code/mcp/build-dotnet-mcp)" = "root:root 755" ] \
         || { echo "FATAL sanity: build-dotnet-mcp missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
     [ "$(stat -c '%U:%G %a' /etc/claude-code/mcp/build-node-mcp)" = "root:root 755" ] \
         || { echo "FATAL sanity: build-node-mcp missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
+    [ "$(stat -c '%U:%G %a' /etc/claude-code/mcp/build-python-mcp)" = "root:root 755" ] \
+        || { echo "FATAL sanity: build-python-mcp missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
     [ "$(stat -c '%U:%G %a' /etc/claude-code/mcp/changelog-mcp)" = "root:root 755" ] \
         || { echo "FATAL sanity: changelog-mcp missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
     [ "$(stat -c '%U:%G %a' /etc/claude-code/mcp/git-mcp)" = "root:root 755" ] \
@@ -550,6 +557,8 @@ RUN set -e; \
         || { echo "FATAL sanity: managed-settings.json does not allow the build-dotnet MCP tools (mcp__build-dotnet__*)" >&2; exit 1; }; \
     jq -e '.permissions.allow | index("mcp__build-node__*")' /etc/claude-code/managed-settings.json >/dev/null \
         || { echo "FATAL sanity: managed-settings.json does not allow the build-node MCP tools (mcp__build-node__*)" >&2; exit 1; }; \
+    jq -e '.permissions.allow | index("mcp__build-python__*")' /etc/claude-code/managed-settings.json >/dev/null \
+        || { echo "FATAL sanity: managed-settings.json does not allow the build-python MCP tools (mcp__build-python__*)" >&2; exit 1; }; \
     jq -e '.permissions.allow | index("mcp__changelog__*")' /etc/claude-code/managed-settings.json >/dev/null \
         || { echo "FATAL sanity: managed-settings.json does not allow the changelog MCP tools (mcp__changelog__*)" >&2; exit 1; }; \
     jq -e '.permissions.allow | index("mcp__git__*")' /etc/claude-code/managed-settings.json >/dev/null \

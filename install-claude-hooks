@@ -24,13 +24,14 @@
 #
 # It also installs /etc/claude-code/managed-mcp.json, which takes exclusive
 # control of the MCP servers Claude Code loads, and the cfwf-mcp-headers and
-# kb-mcp-headers helpers and the build-dotnet-mcp, build-node-mcp, changelog-mcp
-# and git-mcp wrappers it names, with the dotnet-tool-mcp-launcher those four
-# source from their own directory, all root:root 0755 in /etc/claude-code/mcp.
-# Each wrapper starts its server (build-dotnet, build-node, changelog or git) for
+# kb-mcp-headers helpers and the build-dotnet-mcp, build-node-mcp,
+# build-python-mcp, changelog-mcp and git-mcp wrappers it names, with the
+# dotnet-tool-mcp-launcher those five source from their own directory, all
+# root:root 0755 in /etc/claude-code/mcp. Each wrapper starts its server
+# (build-dotnet, build-node, build-python, changelog or git) for
 # whichever user runs Claude Code, so the one installed file works for every
 # user on the host. The installed file is the container's shipped servers
-# (cfwf, kb, build-dotnet, build-node, changelog, git and any others listed) merged
+# (cfwf, kb, build-dotnet, build-node, build-python, changelog, git and any others listed) merged
 # with
 # the MCP servers in ~/.claude.json (user scope and every project scope), so a
 # host keeps its own servers; see merge_host_mcp_servers for what is left out.
@@ -89,6 +90,7 @@ SOURCE_KB_MCP_HEADERS="${SOURCE_DIR}/claude-mcp/kb-mcp-headers"
 SOURCE_DOTNET_TOOL_MCP_LAUNCHER="${SOURCE_DIR}/claude-mcp/dotnet-tool-mcp-launcher"
 SOURCE_BUILD_DOTNET_MCP="${SOURCE_DIR}/claude-mcp/build-dotnet-mcp"
 SOURCE_BUILD_NODE_MCP="${SOURCE_DIR}/claude-mcp/build-node-mcp"
+SOURCE_BUILD_PYTHON_MCP="${SOURCE_DIR}/claude-mcp/build-python-mcp"
 SOURCE_CHANGELOG_MCP="${SOURCE_DIR}/claude-mcp/changelog-mcp"
 SOURCE_GIT_MCP="${SOURCE_DIR}/claude-mcp/git-mcp"
 CFWF_BIN_DIR="${CFWF_BIN_DIR:-/usr/local/bin}"
@@ -176,6 +178,7 @@ install_managed_files() {
     root_install -m 0755 "${SOURCE_DOTNET_TOOL_MCP_LAUNCHER}" "${mcp_dir}/$(basename "${SOURCE_DOTNET_TOOL_MCP_LAUNCHER}")"
     root_install -m 0755 "${SOURCE_BUILD_DOTNET_MCP}" "${mcp_dir}/$(basename "${SOURCE_BUILD_DOTNET_MCP}")"
     root_install -m 0755 "${SOURCE_BUILD_NODE_MCP}" "${mcp_dir}/$(basename "${SOURCE_BUILD_NODE_MCP}")"
+    root_install -m 0755 "${SOURCE_BUILD_PYTHON_MCP}" "${mcp_dir}/$(basename "${SOURCE_BUILD_PYTHON_MCP}")"
     root_install -m 0755 "${SOURCE_CHANGELOG_MCP}" "${mcp_dir}/$(basename "${SOURCE_CHANGELOG_MCP}")"
     root_install -m 0755 "${SOURCE_GIT_MCP}" "${mcp_dir}/$(basename "${SOURCE_GIT_MCP}")"
     root_install -m 0444 "${merged_mcp_file}" "${CLAUDE_MANAGED_DIR}/managed-mcp.json"
@@ -406,6 +409,7 @@ main() {
     [ -f "${SOURCE_DOTNET_TOOL_MCP_LAUNCHER}" ] || die "Source shared MCP launcher not found: ${SOURCE_DOTNET_TOOL_MCP_LAUNCHER}"
     [ -f "${SOURCE_BUILD_DOTNET_MCP}" ] || die "Source build-dotnet MCP wrapper not found: ${SOURCE_BUILD_DOTNET_MCP}"
     [ -f "${SOURCE_BUILD_NODE_MCP}" ] || die "Source build-node MCP wrapper not found: ${SOURCE_BUILD_NODE_MCP}"
+    [ -f "${SOURCE_BUILD_PYTHON_MCP}" ] || die "Source build-python MCP wrapper not found: ${SOURCE_BUILD_PYTHON_MCP}"
     [ -f "${SOURCE_CHANGELOG_MCP}" ] || die "Source changelog MCP wrapper not found: ${SOURCE_CHANGELOG_MCP}"
     [ -f "${SOURCE_GIT_MCP}" ] || die "Source git MCP wrapper not found: ${SOURCE_GIT_MCP}"
 

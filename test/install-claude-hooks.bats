@@ -202,7 +202,7 @@ expected_mcp_names() {
         | sed '/^$/d' | LC_ALL=C sort -u | paste -sd ' ' -
 }
 
-@test "the headers helpers, the build-dotnet, build-node, changelog and git wrappers, their shared launcher and managed-mcp.json are installed via sudo, 0755 and 0444" {
+@test "the headers helpers, the build-dotnet, build-node, build-python, changelog and git wrappers, their shared launcher and managed-mcp.json are installed via sudo, 0755 and 0444" {
     allow_sudo
     main
 
@@ -220,6 +220,9 @@ expected_mcp_names() {
     diff "${SOURCE_BUILD_NODE_MCP}" "${CLAUDE_MANAGED_DIR}/mcp/build-node-mcp"
     [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/mcp/build-node-mcp")" = "755" ]
     grep -qxF "install -o root -g root -m 0755 ${SOURCE_BUILD_NODE_MCP} ${CLAUDE_MANAGED_DIR}/mcp/build-node-mcp" "${SUDO_LOG}"
+    diff "${SOURCE_BUILD_PYTHON_MCP}" "${CLAUDE_MANAGED_DIR}/mcp/build-python-mcp"
+    [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/mcp/build-python-mcp")" = "755" ]
+    grep -qxF "install -o root -g root -m 0755 ${SOURCE_BUILD_PYTHON_MCP} ${CLAUDE_MANAGED_DIR}/mcp/build-python-mcp" "${SUDO_LOG}"
     diff "${SOURCE_CHANGELOG_MCP}" "${CLAUDE_MANAGED_DIR}/mcp/changelog-mcp"
     [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/mcp/changelog-mcp")" = "755" ]
     grep -qxF "install -o root -g root -m 0755 ${SOURCE_CHANGELOG_MCP} ${CLAUDE_MANAGED_DIR}/mcp/changelog-mcp" "${SUDO_LOG}"
@@ -269,6 +272,7 @@ expected_mcp_names() {
     [ "$(jq -c '.mcpServers.cfwf' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "$(jq -c '.mcpServers.cfwf' "${SOURCE_MANAGED_MCP}")" ]
     [ "$(jq -c '.mcpServers["build-dotnet"]' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "$(jq -c '.mcpServers["build-dotnet"]' "${SOURCE_MANAGED_MCP}")" ]
     [ "$(jq -c '.mcpServers["build-node"]' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "$(jq -c '.mcpServers["build-node"]' "${SOURCE_MANAGED_MCP}")" ]
+    [ "$(jq -c '.mcpServers["build-python"]' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "$(jq -c '.mcpServers["build-python"]' "${SOURCE_MANAGED_MCP}")" ]
     [ "$(jq -c '.mcpServers.changelog' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "$(jq -c '.mcpServers.changelog' "${SOURCE_MANAGED_MCP}")" ]
     [ "$(jq -c '.mcpServers.git' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "$(jq -c '.mcpServers.git' "${SOURCE_MANAGED_MCP}")" ]
 }
@@ -467,6 +471,15 @@ expected_mcp_names() {
     [ ! -e "${CLAUDE_MANAGED_DIR}" ]
 }
 
+@test "a host server named build-python with another definition collides with the shipped one and is fatal (#1812)" {
+    allow_sudo
+    write_host_claude_json '{"mcpServers": {"build-python": {"type": "stdio", "command": "/usr/bin/other-build"}}}'
+    run main
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"used for two different servers"*": build-python."* ]]
+    [ ! -e "${CLAUDE_MANAGED_DIR}" ]
+}
+
 @test "a host server named changelog with another definition collides with the shipped one and is fatal" {
     allow_sudo
     write_host_claude_json '{"mcpServers": {"changelog": {"type": "stdio", "command": "/usr/bin/other-changelog"}}}'
@@ -582,6 +595,15 @@ expected_mcp_names() {
     run main
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"Source build-node MCP wrapper not found: ${TEST_TMP}/build-node-does-not-exist"* ]]
+    [ ! -e "${CLAUDE_MANAGED_DIR}" ]
+}
+
+@test "dies when the build-python MCP wrapper is missing, before anything is installed (#1812)" {
+    allow_sudo
+    SOURCE_BUILD_PYTHON_MCP="${TEST_TMP}/build-python-does-not-exist"
+    run main
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"Source build-python MCP wrapper not found: ${TEST_TMP}/build-python-does-not-exist"* ]]
     [ ! -e "${CLAUDE_MANAGED_DIR}" ]
 }
 
@@ -803,6 +825,12 @@ kb_token_privacy_predicates() {
     [ "${output}" = '{"type":"stdio","command":"/etc/claude-code/mcp/build-node-mcp"}' ]
 }
 
+@test "the shipped build-python server is the stdio server started by the root-owned wrapper, with no env (#1812)" {
+    run jq -c '.mcpServers["build-python"]' "${SOURCE_MANAGED_MCP}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = '{"type":"stdio","command":"/etc/claude-code/mcp/build-python-mcp"}' ]
+}
+
 @test "the shipped changelog server is the stdio server started by the root-owned wrapper, with no env" {
     run jq -c '.mcpServers.changelog' "${SOURCE_MANAGED_MCP}"
     [ "${status}" -eq 0 ]
@@ -847,6 +875,11 @@ kb_token_privacy_predicates() {
 
 @test "the managed settings allow every build-node MCP tool (#1970)" {
     jq -r '.permissions.allow[]' "${SOURCE_MANAGED_SETTINGS}" | grep -qxF 'mcp__build-node__*'
+}
+
+@test "the managed settings allow every build-python MCP tool and deny none of them (#1812)" {
+    jq -r '.permissions.allow[]' "${SOURCE_MANAGED_SETTINGS}" | grep -qxF 'mcp__build-python__*'
+    [ "$(jq -r '.permissions.deny[]' "${SOURCE_MANAGED_SETTINGS}" | grep -c '^mcp__build-python__')" -eq 0 ]
 }
 
 @test "the managed settings allow every changelog MCP tool" {
@@ -905,6 +938,17 @@ kb_token_privacy_predicates() {
     grep -qE 'for tool in .* credfeto\.build\.node\.server( .*)?; do' "${dockerfile}"
 }
 
+# The Python server reads the same BUILD_MCP_REPO_ROOT and BUILD_MCP_TOOL as build-dotnet, whose test
+# above pins them. development-full's pull request build starts from the published
+# development-credfeto-tools image, so the global tool is checked there (test below) until a
+# published image carries it.
+@test "the Dockerfile sanity block pins the build-python server, its wrapper's owner and mode and its allow rule (#1812)" {
+    local dockerfile="${SOURCE_DIR}/Dockerfile"
+    grep -qF "jq -e '.mcpServers[\"build-python\"] == {\"type\": \"stdio\", \"command\": \"/etc/claude-code/mcp/build-python-mcp\"}' /etc/claude-code/managed-mcp.json" "${dockerfile}"
+    grep -qF "[ \"\$(stat -c '%U:%G %a' /etc/claude-code/mcp/build-python-mcp)\" = \"root:root 755\" ]" "${dockerfile}"
+    grep -qF "jq -e '.permissions.allow | index(\"mcp__build-python__*\")' /etc/claude-code/managed-settings.json" "${dockerfile}"
+}
+
 @test "the Dockerfile sanity block pins the changelog server, its wrapper's owner and mode, its root, its tool mode and allow rule" {
     local dockerfile="${SOURCE_DIR}/Dockerfile"
     grep -qF "jq -e '.mcpServers.changelog == {\"type\": \"stdio\", \"command\": \"/etc/claude-code/mcp/changelog-mcp\"}' /etc/claude-code/managed-mcp.json" "${dockerfile}"
@@ -949,7 +993,7 @@ run_dockerfile_mcp_checks() {
     run_dockerfile_mcp_checks "${TEST_TMP}/extra.json"
 }
 
-@test "the Dockerfile managed-mcp.json checks fail without cfwf, kb, build-dotnet, build-node, changelog, git or codegraph, or with any of them changed (#1850)" {
+@test "the Dockerfile managed-mcp.json checks fail without cfwf, kb, build-dotnet, build-node, build-python, changelog, git or codegraph, or with any of them changed (#1850, #1812)" {
     local filter
     for filter in \
         'del(.mcpServers.cfwf)' \
@@ -967,6 +1011,9 @@ run_dockerfile_mcp_checks() {
         'del(.mcpServers["build-node"])' \
         '.mcpServers["build-node"].env.EXTRA = "x"' \
         '.mcpServers["build-node"].command = "/home/developer/.dotnet/tools/credfeto-build-node"' \
+        'del(.mcpServers["build-python"])' \
+        '.mcpServers["build-python"].env.EXTRA = "x"' \
+        '.mcpServers["build-python"].command = "/home/developer/.dotnet/tools/credfeto-build-python"' \
         'del(.mcpServers.changelog)' \
         '.mcpServers.changelog.env.EXTRA = "x"' \
         '.mcpServers.changelog.command = "/home/developer/.dotnet/tools/changelog-mcp"' \
@@ -1011,6 +1058,19 @@ run_dockerfile_mcp_checks() {
     # The cache bust hashes the package's latest version, so a new release rebuilds the layer.
     grep -qxF '            Credfeto.Build.Node.Server' "${REPO_ROOT}/.github/workflows/build-development-credfeto-tools.yml"
     grep -qxF '            Credfeto.Build.Node.Server' "${REPO_ROOT}/.github/workflows/check-credfeto-tools-updates.yml"
+}
+
+@test "development-credfeto-tools installs Credfeto.Build.Python.Server behind the cache bust and its sanity check requires it (#1812)" {
+    local dockerfile="${REPO_ROOT}/containers/base/development-credfeto-tools/Dockerfile"
+    # shellcheck disable=SC2016  # the literal ${...} of the Dockerfile's ARG substitution
+    grep -qxF 'RUN su developer -c ": ${CREDFETO_FUNFAIR_TOOLS_CACHE_BUST}; dotnet tool install -g Credfeto.Build.Python.Server"' "${dockerfile}"
+    # Both the installed-versions report and the sanity check list the package.
+    [ "$(grep -cE 'for tool in .* credfeto\.build\.python\.server( .*)?; do' "${dockerfile}")" -eq 2 ]
+    grep -qF '[ -x /home/developer/.dotnet/tools/credfeto-build-python ]' "${dockerfile}"
+    grep -qF 'su developer -c "command -v credfeto-build-python >/dev/null 2>&1"' "${dockerfile}"
+    # The cache bust hashes the package's latest version, so a new release rebuilds the layer.
+    grep -qxF '            Credfeto.Build.Python.Server' "${REPO_ROOT}/.github/workflows/build-development-credfeto-tools.yml"
+    grep -qxF '            Credfeto.Build.Python.Server' "${REPO_ROOT}/.github/workflows/check-credfeto-tools-updates.yml"
 }
 
 @test "development-credfeto-tools installs Credfeto.ChangeLog.Mcp behind the cache bust and its sanity check requires it" {
@@ -1064,7 +1124,7 @@ run_dockerfile_mcp_checks() {
     grep -qE 'for cmd in git gh ' "${dockerfile}"
 }
 
-@test "the Dockerfile copies managed-mcp.json, the headers helpers, the build-dotnet, build-node, changelog and git wrappers and their shared launcher into /etc/claude-code, and sets each wrapper's root and tool mode" {
+@test "the Dockerfile copies managed-mcp.json, the headers helpers, the build-dotnet, build-node, build-python, changelog and git wrappers and their shared launcher into /etc/claude-code, and sets each wrapper's root and tool mode" {
     local dockerfile="${SOURCE_DIR}/Dockerfile"
     grep -qxF 'COPY --chown=root:root --chmod=0444 claude-managed-mcp.json /etc/claude-code/managed-mcp.json' "${dockerfile}"
     grep -qxF 'COPY --chown=root:root --chmod=0755 claude-mcp/cfwf-mcp-headers /etc/claude-code/mcp/cfwf-mcp-headers' "${dockerfile}"
@@ -1074,6 +1134,7 @@ run_dockerfile_mcp_checks() {
     grep -qxF 'ENV BUILD_MCP_REPO_ROOT=/workspace/repo' "${dockerfile}"
     grep -qxF 'ENV BUILD_MCP_TOOL=global' "${dockerfile}"
     grep -qxF 'COPY --chown=root:root --chmod=0755 claude-mcp/build-node-mcp /etc/claude-code/mcp/build-node-mcp' "${dockerfile}"
+    grep -qxF 'COPY --chown=root:root --chmod=0755 claude-mcp/build-python-mcp /etc/claude-code/mcp/build-python-mcp' "${dockerfile}"
     grep -qxF 'COPY --chown=root:root --chmod=0755 claude-mcp/changelog-mcp /etc/claude-code/mcp/changelog-mcp' "${dockerfile}"
     grep -qxF 'ENV CHANGELOG_MCP_REPO_ROOT=/workspace/repo' "${dockerfile}"
     grep -qxF 'ENV CHANGELOG_MCP_TOOL=global' "${dockerfile}"
@@ -1085,6 +1146,7 @@ run_dockerfile_mcp_checks() {
     [ -x "${SOURCE_DOTNET_TOOL_MCP_LAUNCHER}" ]
     [ -x "${SOURCE_BUILD_DOTNET_MCP}" ]
     [ -x "${SOURCE_BUILD_NODE_MCP}" ]
+    [ -x "${SOURCE_BUILD_PYTHON_MCP}" ]
     [ -x "${SOURCE_CHANGELOG_MCP}" ]
     [ -x "${SOURCE_GIT_MCP}" ]
 }

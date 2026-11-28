@@ -58,6 +58,12 @@ RUN su developer -c ": ${CREDFETO_FUNFAIR_TOOLS_CACHE_BUST}; dotnet tool install
 # /home/developer/.dotnet/tools/credfeto-build-node.
 # hadolint ignore=DL3059
 RUN su developer -c ": ${CREDFETO_FUNFAIR_TOOLS_CACHE_BUST}; dotnet tool install -g Credfeto.Build.Node.Server"
+# The Python build/test/coverage MCP server (credfeto-build-python), registered
+# for agent sessions as the build-python server in development-full's
+# managed-mcp.json, whose build-python-mcp wrapper starts it from its global
+# tool path, /home/developer/.dotnet/tools/credfeto-build-python.
+# hadolint ignore=DL3059
+RUN su developer -c ": ${CREDFETO_FUNFAIR_TOOLS_CACHE_BUST}; dotnet tool install -g Credfeto.Build.Python.Server"
 # The CHANGELOG.md MCP server (changelog-mcp), registered for agent sessions as
 # the changelog server in development-full's managed-mcp.json, whose
 # changelog-mcp wrapper starts it from its global tool path,
@@ -92,7 +98,7 @@ RUN su developer -c '\
 # post-build by .github/actions/report-installed-versions.
 RUN su developer -c "dotnet tool list -g" > /tmp/dotnet-tools-list.txt \
     && { \
-      for tool in credfeto.changelog.cmd credfeto.dotnet.code.analysis.overrides.cmd funfair.buildcheck funfair.buildversion credfeto.dotnet.repo.formatter credfeto.build.dotnet.server credfeto.build.node.server credfeto.changelog.mcp credfeto.git.mcp; do \
+      for tool in credfeto.changelog.cmd credfeto.dotnet.code.analysis.overrides.cmd funfair.buildcheck funfair.buildversion credfeto.dotnet.repo.formatter credfeto.build.dotnet.server credfeto.build.node.server credfeto.build.python.server credfeto.changelog.mcp credfeto.git.mcp; do \
         awk -v t="$tool" '{if (tolower($1)==t) print $1": "$2}' /tmp/dotnet-tools-list.txt; \
       done; \
     } > /opt/installed-versions.txt \
@@ -107,7 +113,7 @@ RUN su developer -c "dotnet tool list -g" > /tmp/dotnet-tools-list.txt \
 # hadolint ignore=DL3059
 RUN set -e; \
     echo "== dotnet tools =="; \
-    for tool in credfeto.changelog.cmd credfeto.dotnet.code.analysis.overrides.cmd funfair.buildcheck funfair.buildversion credfeto.dotnet.repo.formatter credfeto.build.dotnet.server credfeto.build.node.server credfeto.changelog.mcp credfeto.git.mcp; do \
+    for tool in credfeto.changelog.cmd credfeto.dotnet.code.analysis.overrides.cmd funfair.buildcheck funfair.buildversion credfeto.dotnet.repo.formatter credfeto.build.dotnet.server credfeto.build.node.server credfeto.build.python.server credfeto.changelog.mcp credfeto.git.mcp; do \
         if ! su developer -c "dotnet tool list -g" | awk '{print tolower($1)}' | grep -Fxq "$tool"; then \
             echo "FATAL sanity: dotnet tool '$tool' is missing" >&2; exit 1; \
         fi; \
@@ -122,6 +128,11 @@ RUN set -e; \
         || { echo "FATAL sanity: /home/developer/.dotnet/tools/credfeto-build-node is missing or not executable" >&2; exit 1; }; \
     su developer -c "command -v credfeto-build-node >/dev/null 2>&1" \
         || { echo "FATAL sanity: credfeto-build-node is missing from PATH" >&2; exit 1; }; \
+    echo "== credfeto-build-python (development-full's build-python-mcp wrapper starts it by this path) =="; \
+    [ -x /home/developer/.dotnet/tools/credfeto-build-python ] \
+        || { echo "FATAL sanity: /home/developer/.dotnet/tools/credfeto-build-python is missing or not executable" >&2; exit 1; }; \
+    su developer -c "command -v credfeto-build-python >/dev/null 2>&1" \
+        || { echo "FATAL sanity: credfeto-build-python is missing from PATH" >&2; exit 1; }; \
     echo "== changelog-mcp (development-full's changelog-mcp wrapper starts it by this path) =="; \
     [ -x /home/developer/.dotnet/tools/changelog-mcp ] \
         || { echo "FATAL sanity: /home/developer/.dotnet/tools/changelog-mcp is missing or not executable" >&2; exit 1; }; \

@@ -82,6 +82,9 @@ image requires six:
 - `build-node`, the Node build, test and coverage server (`credfeto-build-node`, a local stdio
   process), working on the repository at `/workspace/repo` (#1970). It is registered for every
   session, whatever the repository's language.
+- `build-python`, the Python build, test and coverage server (`credfeto-build-python`, a local
+  stdio process), working on the repository at `/workspace/repo` (#1812). It is registered for
+  every session, whatever the repository's language.
 - `changelog`, the CHANGELOG.md server (`changelog-mcp`, a local stdio process), working on the
   repository at `/workspace/repo`. It is registered for every session, whatever the repository's
   language.
@@ -94,7 +97,7 @@ image requires six:
   else, and how to roll it back.
 
 The file may list others, such as `rider` and `webstorm`, the JetBrains IDEs' own MCP servers over
-`http` on the loopback address. The image build checks only the seven required servers, so adding
+`http` on the loopback address. The image build checks only the eight required servers, so adding
 another server does not break it (#1850).
 
 ## What the entrypoint checks before the agent ever starts
