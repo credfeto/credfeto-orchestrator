@@ -1482,12 +1482,12 @@
                             },
                             {
                               "__typename": "CheckRun",
-                              "name": "nbsp x",
+                              "name": "nbsp\u00a0x",
                               "isRequired": true
                             },
                             {
                               "__typename": "CheckRun",
-                              "name": "sep x",
+                              "name": "sep\u2028x",
                               "isRequired": true
                             },
                             {
@@ -1574,7 +1574,7 @@
           },
           {
             "kind": "check-run",
-            "name": "nbsp x",
+            "name": "nbsp\u00a0x",
             "status": "COMPLETED",
             "conclusion": "SUCCESS",
             "state": "",
@@ -1582,7 +1582,7 @@
           },
           {
             "kind": "check-run",
-            "name": "sep x",
+            "name": "sep\u2028x",
             "status": "COMPLETED",
             "conclusion": "SUCCESS",
             "state": "",
@@ -1623,7 +1623,7 @@
         ]
       },
       "tool": "answers",
-      "expected": "[\"\",\"\\u0001ctrl\",\"  spaced  \",\"café\",\"del\\u007f\",\"line\\nbreak\",\"nbsp x\",\"quote\\\"back\\\\slash\",\"sep x\",\"tab\\there\",\"！wide\",\"😀 emoji\"]"
+      "expected": "[\"\",\"\\u0001ctrl\",\"  spaced  \",\"café\",\"del\\u007f\",\"line\\nbreak\",\"nbsp\u00a0x\",\"quote\\\"back\\\\slash\",\"sep\u2028x\",\"tab\\there\",\"！wide\",\"😀 emoji\"]"
     },
     {
       "name": "exactly 100 checks fit the one page the shell version reads",
